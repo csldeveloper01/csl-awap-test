@@ -713,3 +713,61 @@ class PdfCodingAssessmentModeTests(TestCase):
             )
             self.assertEqual(res.status_code, 500)
             self.assertIn("could not be retrieved from storage", res.data["detail"])
+    def test_pdf_assessment_finalization_with_sparse_candidate_profile(self):
+        """
+        Candidates with null or omitted department/year_of_study/college fields
+        can finalize PDF assessments without serializer or serialization exceptions.
+        """
+        sparse_cand = Candidate.objects.create(
+            full_name="Sparse Candidate",
+            register_number="SPARSE_CAND_01",
+            email="sparse@apex.edu",
+            college="Apex Institute",
+            department="",
+            year_of_study="",
+            is_active=True,
+        )
+        assessment, _ = self._setup_open_pdf_assessment()
+        attempt = start_assessment_for_candidate(sparse_cand, assessment=assessment)
+        token = generate_candidate_token(sparse_cand.id, attempt_id=attempt.id)
+
+        # Finalize
+        res_fin = self.client.post(
+            f"/api/assessment/attempts/{attempt.id}/finalize/",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(res_fin.status_code, 200)
+        self.assertEqual(res_fin.data["state"], AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION)
+        self.assertEqual(res_fin.data["delivery_mode"], "PDF_CODING")
+        self.assertEqual(res_fin.data["total_questions"], 0)
+        self.assertTrue(res_fin.data["is_manual_evaluation_pending"])
+        self.assertNotIn("total_score", res_fin.data)
+
+        # Retrieve result
+        res_view = self.client.get(
+            f"/api/assessment/attempts/{attempt.id}/result/",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(res_view.status_code, 200)
+        self.assertEqual(res_view.data["state"], AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION)
+        self.assertEqual(res_view.data["delivery_mode"], "PDF_CODING")
+        self.assertEqual(res_view.data["total_questions"], 0)
+        self.assertTrue(res_view.data["is_manual_evaluation_pending"])
+
+    def test_pdf_assessment_heartbeat_atomic_execution(self):
+        """
+        AttemptHeartbeatView executes atomically and returns remaining time
+        without TransactionManagementError or session CSRF issues.
+        """
+        assessment, _ = self._setup_open_pdf_assessment()
+        attempt = start_assessment_for_candidate(self.candidate, assessment=assessment)
+        token = generate_candidate_token(self.candidate.id, attempt_id=attempt.id)
+
+        res_hb = self.client.post(
+            f"/api/assessment/attempts/{attempt.id}/heartbeat/",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(res_hb.status_code, 200)
+        self.assertEqual(res_hb.data["status"], "ok")
+        self.assertGreater(res_hb.data["remaining_seconds"], 0)
+
