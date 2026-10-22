@@ -184,7 +184,7 @@ export function AssessmentExamPage() {
         data.state === 'FLAGGED_FOR_REVIEW' ||
         data.state === 'COMPLETED_PENDING_MANUAL_EVALUATION'
       ) {
-        navigate(`/assessment/results/${data.id}`, { replace: true });
+        navigate(`/assessment/results/${data?.id || attemptId}`, { replace: true });
         return;
       }
       setAttempt(data);
@@ -403,7 +403,7 @@ export function AssessmentExamPage() {
       await flushPendingQueue();
       const res = await finalizeAssessment(attemptId);
       localStorage.removeItem(`csl_pending_answers_${attemptId}`);
-      navigate(`/assessment/results/${res.id}`, { replace: true });
+      navigate(`/assessment/results/${res?.id || attemptId}`, { replace: true });
     } catch {
       navigate(`/assessment/results/${attemptId}`, { replace: true });
     }

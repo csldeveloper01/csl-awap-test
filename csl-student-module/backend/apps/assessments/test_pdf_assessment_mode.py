@@ -1,7 +1,7 @@
 import io
 import uuid
 from datetime import timedelta
-from django.test import TestCase, Client
+from django.test import TestCase, Client, TransactionTestCase
 from django.utils import timezone
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import get_user_model
@@ -770,4 +770,63 @@ class PdfCodingAssessmentModeTests(TestCase):
         self.assertEqual(res_hb.status_code, 200)
         self.assertEqual(res_hb.data["status"], "ok")
         self.assertGreater(res_hb.data["remaining_seconds"], 0)
+
+class HeartbeatTransactionSafetyTests(TransactionTestCase):
+    """
+    Regression tests proving AttemptHeartbeatView establishes its own @transaction.atomic boundary.
+    In TransactionTestCase, tests execute without an ambient transaction wrapper (connection.in_atomic_block is False).
+    Under PostgreSQL transaction semantics, select_for_update() raises TransactionManagementError
+    if called outside an atomic block.
+    """
+    def setUp(self):
+        self.client = Client()
+        self.college = College.objects.create(
+            name="Transaction Safety Tech",
+            code="TX_TECH",
+            is_active=True,
+        )
+        self.candidate = Candidate.objects.create(
+            full_name="Transaction Test Candidate",
+            register_number="TX_CAND_01",
+            college=self.college.name,
+            college_ref=self.college,
+            email="tx_candidate@apex.edu",
+            department="Computer Science",
+            year_of_study="Final Year",
+            is_active=True,
+        )
+        pdf_bytes = make_valid_pdf_bytes("Heartbeat Test Paper")
+        self.assessment = Assessment.objects.create(
+            code="TX-PDF-01",
+            title="Heartbeat Safety Assessment",
+            delivery_mode=Assessment.DeliveryMode.PDF_CODING,
+            duration_minutes=60,
+            total_marks=50,
+            status=Assessment.Status.DRAFT,
+        )
+        self.assessment.eligible_colleges.add(self.college)
+        AssessmentPdfDocument.objects.create(
+            assessment=self.assessment,
+            original_filename="hb_challenge.pdf",
+            file_size=len(pdf_bytes),
+            sha256="sha256_mock_hb",
+            binary_data=pdf_bytes,
+        )
+        open_assessment(self.assessment)
+
+    def test_heartbeat_in_non_atomic_transaction_context(self):
+        """
+        Verify that AttemptHeartbeatView does NOT raise TransactionManagementError
+        when executed in a non-atomic test runner context.
+        """
+        attempt = start_assessment_for_candidate(self.candidate, assessment=self.assessment)
+        token = generate_candidate_token(self.candidate.id, attempt_id=attempt.id)
+
+        res = self.client.post(
+            f"/api/assessment/attempts/{attempt.id}/heartbeat/",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], "ok")
+        self.assertGreater(res.data["remaining_seconds"], 0)
 
