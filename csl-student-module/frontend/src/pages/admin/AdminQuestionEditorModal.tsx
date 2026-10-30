@@ -6,7 +6,7 @@ interface AdminQuestionEditorModalProps {
   question: AdminQuestion | null; // null if creating, populated if editing
   isOpen: boolean;
   onClose: () => void;
-  onSave: (data: Partial<AdminQuestion> & { assessment_id: string }) => Promise<void>;
+  onSave: (data: Partial<AdminQuestion> & { assessment_id?: string }) => Promise<void>;
   saving: boolean;
   assessments?: AdminAssessment[];
   defaultAssessmentId?: string;
@@ -46,6 +46,8 @@ export function AdminQuestionEditorModal({
   const [correctOption, setCorrectOption] = useState<'A' | 'B' | 'C' | 'D'>('A');
   const [explanation, setExplanation] = useState('');
   const [isActive, setIsActive] = useState(true);
+  const [marks, setMarks] = useState<number>(1);
+  const [isArchived, setIsArchived] = useState(false);
 
   // Validation error state
   const [errorMsg, setErrorMsg] = useState('');
@@ -77,6 +79,8 @@ export function AdminQuestionEditorModal({
       setCorrectOption(question.correct_option || 'A');
       setExplanation(question.explanation || '');
       setIsActive(question.is_active ?? true);
+      setMarks(question.marks ?? 1);
+      setIsArchived(question.is_archived ?? false);
 
       initialStateRef.current = JSON.stringify({
         assessmentId: existingAssessmentId,
@@ -108,6 +112,8 @@ export function AdminQuestionEditorModal({
       setCorrectOption('A');
       setExplanation('');
       setIsActive(true);
+      setMarks(1);
+      setIsArchived(false);
 
       initialStateRef.current = JSON.stringify({
         assessmentId: initialNewAssessmentId,
@@ -218,10 +224,7 @@ export function AdminQuestionEditorModal({
     setErrorMsg('');
 
     // Field validations
-    if (!assessmentId || !assessmentId.trim()) {
-      setErrorMsg('Target Assessment / Question Pool is required. Please select an assessment.');
-      return;
-    }
+    // assessmentId is optional in Phase 2.1 independent question bank
     if (!prompt.trim()) {
       setErrorMsg('Question prompt / problem statement is required.');
       return;
@@ -235,8 +238,10 @@ export function AdminQuestionEditorModal({
       return;
     }
 
-    const payload: Partial<AdminQuestion> & { assessment_id: string } = {
-      assessment_id: assessmentId.trim(),
+    const payload: Partial<AdminQuestion> & { assessment_id?: string } = {
+      assessment_id: assessmentId.trim() || undefined,
+      marks: Number(marks) || 1,
+      is_archived: isArchived,
       prompt: prompt.trim(),
       section_type: sectionType,
       difficulty,
@@ -538,7 +543,7 @@ export function AdminQuestionEditorModal({
                       }}
                     >
                       <span>🏛️</span>
-                      <span>Target Assessment / Question Pool *</span>
+                      <span>Target Assessment (Optional - Independent Question Bank)</span>
                     </label>
                     {selectedAssessmentObj && (
                       <span
@@ -575,7 +580,7 @@ export function AdminQuestionEditorModal({
                       outlineColor: '#1455B8',
                     }}
                   >
-                    <option value="">-- Select Target Assessment Pool --</option>
+                    <option value="">-- Standalone Question Bank (No Assessment Assigned) --</option>
                     {assessments && assessments.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.code} — {a.title} ({a.pool_questions_count ?? 0} questions in pool)
@@ -610,7 +615,7 @@ export function AdminQuestionEditorModal({
                     padding: '16px 20px',
                     boxShadow: '0 2px 6px rgba(11, 46, 111, 0.03)',
                     display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
+                    gridTemplateColumns: '1fr 1fr 1fr',
                     gap: '16px',
                   }}
                 >
@@ -705,6 +710,43 @@ export function AdminQuestionEditorModal({
                       <option value="MEDIUM">Medium</option>
                       <option value="HARD">Hard</option>
                     </select>
+                  </div>
+
+                  {/* Marks / Points */}
+                  <div>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        color: '#0B2E6F',
+                        marginBottom: '6px',
+                      }}
+                    >
+                      <span>🎯</span>
+                      <span>Marks / Points *</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={marks}
+                      onChange={(e) => setMarks(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: '1.5px solid #CBD5E1',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        color: '#1E293B',
+                        backgroundColor: '#FFFFFF',
+                        boxSizing: 'border-box',
+                        outlineColor: '#1455B8',
+                      }}
+                    />
                   </div>
                 </div>
 

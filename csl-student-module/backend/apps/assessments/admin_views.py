@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import uuid
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -139,8 +140,14 @@ class AdminCollegeListView(APIView):
                 Q(name__icontains=search)
                 | Q(code__icontains=search)
                 | Q(location__icontains=search)
+                | Q(district__icontains=search)
+                | Q(city__icontains=search)
                 | Q(contact_email__icontains=search)
             )
+
+        district = request.query_params.get("district", "").strip()
+        if district:
+            queryset = queryset.filter(district__iexact=district)
 
         is_active = request.query_params.get("is_active", "").strip()
         if is_active.lower() in ["true", "1"]:
@@ -683,6 +690,70 @@ class AdminAssessmentAuditLogsView(APIView):
         return Response(AdminAssessmentAuditLogSerializer(logs, many=True).data)
 
 
+
+class AdminAssessmentAssignCandidatesView(APIView):
+    """
+    Manage candidate eligibility directly on the assessment entity.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        search = request.query_params.get("search", "").strip()
+        candidates_qs = Candidate.objects.filter(is_active=True).select_related("college_ref").order_by("full_name")
+        if search:
+            candidates_qs = candidates_qs.filter(
+                Q(full_name__icontains=search)
+                | Q(register_number__icontains=search)
+                | Q(email__icontains=search)
+                | Q(college__icontains=search)
+            )
+
+        assigned_ids = set(str(cid) for cid in assessment.eligible_candidates.values_list("id", flat=True))
+        return Response({
+            "assessment_id": str(assessment.id),
+            "assessment_title": assessment.title,
+            "assigned_candidate_ids": list(assigned_ids),
+            "candidates": [
+                {
+                    "id": str(c.id),
+                    "full_name": c.full_name,
+                    "register_number": c.register_number,
+                    "email": c.email,
+                    "college": c.college,
+                    "is_assigned": str(c.id) in assigned_ids,
+                }
+                for c in candidates_qs[:200]
+            ],
+        })
+
+    def post(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        candidate_ids = request.data.get("candidate_ids", [])
+        if not isinstance(candidate_ids, list):
+            return Response({"detail": "candidate_ids must be a list of candidate UUIDs."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            cands = Candidate.objects.filter(id__in=candidate_ids)
+            assessment.eligible_candidates.set(cands)
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.CANDIDATE_ASSIGNED_ASSESSMENT,
+                entity_type="ASSESSMENT",
+                entity_id=str(assessment.id),
+                user=request.user,
+                details={
+                    "assigned_count": cands.count(),
+                    "total_eligible_candidates": assessment.eligible_candidates.count(),
+                },
+            )
+
+        return Response({
+            "message": f"Successfully updated directly assigned candidates for '{assessment.title}'.",
+            "assigned_count": assessment.eligible_candidates.count(),
+        })
+
+
 class AdminAssessmentAssignQuestionsView(APIView):
     permission_classes = [IsCSLAdminUser]
 
@@ -1136,9 +1207,41 @@ class AdminQuestionListView(APIView):
             except (ValueError, TypeError):
                 queryset = queryset.none()
 
+        section_id = request.query_params.get("section_id", "").strip()
+        if section_id:
+            try:
+                queryset = queryset.filter(section_id=int(section_id))
+            except (ValueError, TypeError):
+                pass
+
+        is_archived = request.query_params.get("is_archived", "").strip()
+        if is_archived.lower() in ["true", "1"]:
+            queryset = queryset.filter(is_archived=True)
+        elif is_archived.lower() in ["false", "0"]:
+            queryset = queryset.filter(is_archived=False)
+
         assessment_type = request.query_params.get("assessment_type", "").strip()
         if assessment_type:
             queryset = queryset.filter(assessment_type__iexact=assessment_type)
+
+        page = request.query_params.get("page")
+        if page:
+            from django.core.paginator import Paginator
+            try:
+                page_size = max(1, min(100, int(request.query_params.get("page_size", 20))))
+            except (ValueError, TypeError):
+                page_size = 20
+            paginator = Paginator(queryset, page_size)
+            page_obj = paginator.get_page(page)
+            serializer = AdminQuestionSerializer(page_obj.object_list, many=True)
+            return Response({
+                "count": paginator.count,
+                "num_pages": paginator.num_pages,
+                "current_page": page_obj.number,
+                "has_next": page_obj.has_next(),
+                "has_previous": page_obj.has_previous(),
+                "results": serializer.data,
+            })
 
         serializer = AdminQuestionSerializer(queryset[:500], many=True)
         return Response(serializer.data)
@@ -1241,7 +1344,8 @@ class AdminQuestionDetailView(APIView):
 
         if has_attempts:
             question.is_active = False
-            question.save(update_fields=["is_active"])
+            question.is_archived = True
+            question.save(update_fields=["is_active", "is_archived"])
             question.assigned_assessments.clear()
             return Response({
                 "message": f"Question #{pk} is referenced by candidate attempts and was safely deactivated and detached from active assessment pools.",
@@ -1293,7 +1397,8 @@ class AdminQuestionBulkDeleteView(APIView):
             for q in questions:
                 if q.attempt_snapshots.exists():
                     q.is_active = False
-                    q.save(update_fields=["is_active"])
+                    q.is_archived = True
+                    q.save(update_fields=["is_active", "is_archived"])
                     q.assigned_assessments.clear()
                     deactivated_ids.append(q.id)
                 else:
@@ -1324,7 +1429,130 @@ class AdminQuestionToggleView(APIView):
         })
 
 
+
+class AdminQuestionArchiveView(APIView):
+    """
+    Toggles question soft-archived status (is_archived).
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        question = get_object_or_404(QuestionBank, pk=pk)
+        question.is_archived = not question.is_archived
+        question.save(update_fields=["is_archived", "updated_at"])
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTION_ARCHIVED if question.is_archived else AssessmentAuditLog.Action.QUESTION_UNARCHIVED,
+            entity_type="QUESTION",
+            entity_id=str(question.id),
+            user=request.user,
+            details={"is_archived": question.is_archived, "prompt": question.prompt[:80]},
+        )
+
+        return Response({
+            "id": question.id,
+            "is_archived": question.is_archived,
+            "message": f"Question {'archived' if question.is_archived else 'unarchived'} successfully."
+        })
+
+
+class AdminQuestionImportPreviewView(APIView):
+    """
+    Parses CSV question import payload without committing changes.
+    Identifies all section codes, matches against existing sections,
+    and returns a preview of matched/unmatched sections for admin explicit confirmation.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        file_obj = request.FILES.get("file")
+        csv_text = request.data.get("csv_content", "")
+
+        if file_obj:
+            try:
+                decoded = file_obj.read().decode("utf-8-sig")
+                io_string = io.StringIO(decoded)
+            except Exception as e:
+                return Response({"detail": f"Failed to read CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        elif csv_text:
+            io_string = io.StringIO(csv_text)
+        else:
+            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reader = csv.DictReader(io_string)
+        if not reader.fieldnames:
+            return Response({"detail": "CSV file is empty or missing headers."}, status=status.HTTP_400_BAD_REQUEST)
+
+        required_fields = ["prompt", "section_type", "option_a", "option_b", "option_c", "option_d", "correct_option"]
+        missing_headers = [f for f in required_fields if f not in reader.fieldnames]
+        if missing_headers:
+            return Response(
+                {"detail": f"Missing required CSV column headers: {', '.join(missing_headers)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
+        existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
+
+        detected_sections = {}
+        sample_rows = []
+        total_rows = 0
+        error_rows = []
+
+        for row_idx, row in enumerate(reader, start=2):
+            total_rows += 1
+            missing = [f for f in required_fields if not (row.get(f) or "").strip()]
+            if missing:
+                error_rows.append(f"Row {row_idx}: Missing {', '.join(missing)}")
+                continue
+
+            sec_raw = (row.get("section_type") or "").strip()
+            sec_upper = sec_raw.upper()
+            sec_lower = sec_raw.lower()
+
+            if sec_upper not in detected_sections:
+                matched_sec = existing_sections.get(sec_upper) or existing_names.get(sec_lower)
+                detected_sections[sec_upper] = {
+                    "raw_section": sec_raw,
+                    "code": sec_upper,
+                    "matched": bool(matched_sec),
+                    "matched_section_id": matched_sec.id if matched_sec else None,
+                    "matched_section_name": matched_sec.name if matched_sec else None,
+                    "count": 0,
+                }
+            detected_sections[sec_upper]["count"] += 1
+
+            if len(sample_rows) < 5:
+                sample_rows.append({
+                    "row_idx": row_idx,
+                    "prompt": row.get("prompt", "")[:120],
+                    "section_type": sec_raw,
+                    "correct_option": (row.get("correct_option") or "").strip().upper(),
+                    "difficulty": (row.get("difficulty") or "MEDIUM").strip().upper(),
+                })
+
+        return Response({
+            "total_rows": total_rows,
+            "valid_rows": total_rows - len(error_rows),
+            "error_count": len(error_rows),
+            "errors": error_rows[:20],
+            "detected_sections": list(detected_sections.values()),
+            "sample_rows": sample_rows,
+            "available_sections": [
+                {"id": s.id, "name": s.name, "code": s.code}
+                for s in AssessmentSection.objects.filter(is_active=True).order_by("order", "name")
+            ],
+        })
+
+
 class AdminQuestionImportCSVView(APIView):
+    """
+    Explicit, safe CSV Question Bank import.
+    Accepts explicit section_mapping parameter: { "RAW_SECTION_CODE": { "action": "map", "section_id": 1 } }
+    or { "RAW_SECTION_CODE": { "action": "create", "name": "New Section Name" } }
+    or { "RAW_SECTION_CODE": { "action": "skip" } }.
+    Requires explicit admin confirmation before committing.
+    """
     permission_classes = [IsCSLAdminUser]
 
     def post(self, request):
@@ -1344,7 +1572,7 @@ class AdminQuestionImportCSVView(APIView):
 
         if file_obj:
             try:
-                decoded = file_obj.read().decode("utf-8")
+                decoded = file_obj.read().decode("utf-8-sig")
                 io_string = io.StringIO(decoded)
             except Exception as e:
                 return Response({"detail": f"Failed to read CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1353,34 +1581,96 @@ class AdminQuestionImportCSVView(APIView):
         else:
             return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Parse section mapping dictionary if passed
+        section_mapping = request.data.get("section_mapping", {})
+        if isinstance(section_mapping, str):
+            try:
+                section_mapping = json.loads(section_mapping)
+            except Exception as e:
+                section_mapping = {}
+        
         reader = csv.DictReader(io_string)
         required_fields = ["prompt", "section_type", "option_a", "option_b", "option_c", "option_d", "correct_option"]
 
         if not reader.fieldnames:
             return Response({"detail": "CSV file is empty or missing headers."}, status=status.HTTP_400_BAD_REQUEST)
 
+        missing_headers = [f for f in required_fields if f not in reader.fieldnames]
+        if missing_headers:
+            return Response(
+                {"detail": f"Missing required CSV column headers: {', '.join(missing_headers)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_sections_by_code = {s.code.upper(): s for s in AssessmentSection.objects.all()}
+        existing_sections_by_id = {s.id: s for s in AssessmentSection.objects.all()}
+
         created_questions = []
+        skipped_count = 0
         errors = []
 
         with transaction.atomic():
+            # First, resolve or create any sections specified in section_mapping with action='create'
+            resolved_sections = dict(existing_sections_by_code)
+            for raw_code, rule in section_mapping.items():
+                if isinstance(rule, dict) and rule.get("action") == "create":
+                    sec_name = rule.get("target_section_name") or rule.get("name") or raw_code.replace("_", " ").title()
+                    import re as _re
+                    sec_code = _re.sub(r"[^A-Z0-9_]", "_", raw_code.upper()).strip("_")[:50]
+                    created_sec, _ = AssessmentSection.objects.get_or_create(
+                        code=sec_code,
+                        defaults={"name": sec_name, "is_active": True}
+                    )
+                    resolved_sections[raw_code.upper()] = created_sec
+                elif isinstance(rule, dict) and rule.get("action") == "map":
+                    target_id = rule.get("target_section_id") or rule.get("section_id")
+                    target_code = rule.get("target_section_code") or rule.get("code")
+                    target_sec = None
+                    if target_id:
+                        try:
+                            target_sec = AssessmentSection.objects.filter(id=int(target_id)).first()
+                        except (ValueError, TypeError):
+                            target_sec = None
+                    if not target_sec and target_code:
+                        target_sec = AssessmentSection.objects.filter(code__iexact=str(target_code).strip()).first()
+                    if target_sec:
+                        resolved_sections[raw_code.upper()] = target_sec
+
             for row_idx, row in enumerate(reader, start=2):
-                missing = [f for f in required_fields if not row.get(f)]
+                missing = [f for f in required_fields if not (row.get(f) or "").strip()]
                 if missing:
                     errors.append(f"Row {row_idx}: Missing required fields: {', '.join(missing)}")
                     continue
 
-                sec = row["section_type"].strip()
-                sec_obj = AssessmentSection.objects.filter(code__iexact=sec).first()
+                raw_sec = row["section_type"].strip().upper()
+                rule = section_mapping.get(raw_sec) or section_mapping.get(row["section_type"].strip())
+
+                # Check if explicit rule says skip
+                if isinstance(rule, dict) and rule.get("action") == "skip":
+                    skipped_count += 1
+                    continue
+
+                sec_obj = resolved_sections.get(raw_sec)
                 if not sec_obj:
-                    sec_obj = AssessmentSection.objects.filter(name__iexact=sec).first()
+                    # Check exact code match in DB
+                    sec_obj = existing_sections_by_code.get(raw_sec)
+
                 if not sec_obj:
-                    # Dynamically create or resolve section to support custom sections
-                    import re as _re
-                    sec_code = _re.sub(r"[^A-Z0-9_]", "_", sec.upper()).strip("_")[:50]
-                    sec_obj, _ = AssessmentSection.objects.get_or_create(
-                        code=sec_code,
-                        defaults={"name": sec.replace("_", " ").title(), "is_active": True}
-                    )
+                    if not section_mapping:
+                        # Direct/legacy import without explicit section_mapping parameter: auto-create section
+                        import re as _re
+                        sec_code = _re.sub(r"[^A-Z0-9_]", "_", raw_sec.upper()).strip("_")[:50]
+                        sec_name = raw_sec.replace("_", " ").title()
+                        sec_obj, _ = AssessmentSection.objects.get_or_create(
+                            code=sec_code,
+                            defaults={"name": sec_name, "is_active": True}
+                        )
+                        resolved_sections[raw_sec] = sec_obj
+                        existing_sections_by_code[raw_sec] = sec_obj
+                    else:
+                        # Strict matching: explicit section_mapping was provided but row section is unmapped.
+                        errors.append(f"Row {row_idx}: Unmatched section '{raw_sec}'. Please configure section mapping before import.")
+                        continue
 
                 correct = row["correct_option"].strip().upper()
                 if correct not in ["A", "B", "C", "D"]:
@@ -1392,6 +1682,12 @@ class AdminQuestionImportCSVView(APIView):
                     diff = "MEDIUM"
 
                 category_val = (row.get("category") or "").strip() or sec_obj.name
+                marks_val = 1
+                try:
+                    if row.get("marks"):
+                        marks_val = max(1, int(row.get("marks")))
+                except (ValueError, TypeError):
+                    marks_val = 1
 
                 try:
                     q = QuestionBank.objects.create(
@@ -1400,6 +1696,7 @@ class AdminQuestionImportCSVView(APIView):
                         section_type=sec_obj.code,
                         category=category_val,
                         difficulty=diff,
+                        marks=marks_val,
                         option_a=row["option_a"].strip(),
                         option_b=row["option_b"].strip(),
                         option_c=row["option_c"].strip(),
@@ -1428,6 +1725,7 @@ class AdminQuestionImportCSVView(APIView):
 
         return Response({
             "success_count": len(created_questions),
+            "skipped_count": skipped_count,
             "error_count": len(errors),
             "errors": errors[:50],
             "assessment_id": str(assessment.id) if assessment else None,
@@ -2295,6 +2593,126 @@ class AdminAssessmentPdfDownloadView(APIView):
         return resp
 
 
+
+class AdminCollegeImportDirectoryView(APIView):
+    """
+    Imports a verified Tamil Nadu institution dataset from CSV or JSON.
+    Expected CSV columns: name, code, district, city, institution_type, affiliation, website, location, address.
+    Deduplicates against normalized_name and code without fabricating duplicates.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        file_obj = request.FILES.get("file")
+        csv_text = request.data.get("csv_content", "")
+
+        if file_obj:
+            try:
+                decoded = file_obj.read().decode("utf-8-sig")
+                io_string = io.StringIO(decoded)
+            except Exception as e:
+                return Response({"detail": f"Failed to read file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        elif csv_text:
+            io_string = io.StringIO(csv_text)
+        else:
+            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reader = csv.DictReader(io_string)
+        if not reader.fieldnames:
+            return Response({"detail": "CSV file is empty or missing headers."}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_count = 0
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+
+        from .models import normalize_college_name
+
+        with transaction.atomic():
+            for row_idx, row in enumerate(reader, start=2):
+                name = (row.get("name") or "").strip()
+                if not name:
+                    errors.append(f"Row {row_idx}: Name is required.")
+                    continue
+
+                code = (row.get("code") or "").strip().upper()
+                district = (row.get("district") or "").strip()
+                city = (row.get("city") or "").strip()
+                inst_type = (row.get("institution_type") or "ENGINEERING").strip().upper()
+                affiliation = (row.get("affiliation") or "").strip()
+                website = (row.get("website") or "").strip()
+                location = (row.get("location") or city or district or "").strip()
+                address = (row.get("address") or "").strip()
+
+                norm = normalize_college_name(name)
+
+                # Find match by code or normalized name
+                college = None
+                if code:
+                    college = College.objects.filter(code__iexact=code).first()
+                if not college:
+                    college = College.objects.filter(normalized_name=norm).first()
+
+                if college:
+                    # Update verified details if blank or provisional
+                    college.district = district or college.district
+                    college.city = city or college.city
+                    college.institution_type = inst_type or college.institution_type
+                    college.affiliation = affiliation or college.affiliation
+                    college.website = website or college.website
+                    college.location = location or college.location
+                    college.address = address or college.address
+                    college.is_verified = True
+                    college.save()
+                    updated_count += 1
+                else:
+                    if not code:
+                        import re as _re
+                        clean_c = _re.sub(r"[^A-Z0-9]", "", name.upper())[:10]
+                        if clean_c and not College.objects.filter(code=clean_c).exists():
+                            code = clean_c
+                        else:
+                            import uuid as _uuid
+                            code = f"COL-{_uuid.uuid4().hex[:6].upper()}"
+
+                    College.objects.create(
+                        name=name,
+                        code=code,
+                        normalized_name=norm,
+                        district=district,
+                        city=city,
+                        institution_type=inst_type,
+                        affiliation=affiliation,
+                        website=website,
+                        location=location,
+                        address=address,
+                        is_verified=True,
+                        is_active=True,
+                    )
+                    created_count += 1
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.COLLEGE_CREATED,
+                entity_type="COLLEGE_DIRECTORY",
+                entity_id="TN_DATASET",
+                user=request.user,
+                details={
+                    "created_count": created_count,
+                    "updated_count": updated_count,
+                    "errors_count": len(errors),
+                },
+            )
+
+        return Response({
+            "message": "Tamil Nadu College Directory import completed.",
+            "created_count": created_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "error_count": len(errors),
+            "errors": errors[:30],
+        })
+
+
 class AdminCollegeMergeView(APIView):
     """
     Merges a source provisional/duplicate college into a target authoritative college.
@@ -2352,6 +2770,139 @@ class AdminCollegeMergeView(APIView):
         })
 
 
+
+class AdminAttemptGrantRecoveryView(APIView):
+    """
+    Admin operation: grants exactly one additional self-service recovery for an eligible unsubmitted attempt.
+    Requires mandatory administrative reason.
+    Submitted/completed attempts cannot be granted recovery.
+    Creates an immutable audit log.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response(
+                {"reason": ["Mandatory administrative reason is required to grant additional attempt recovery."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            attempt = get_object_or_404(
+                AssessmentAttempt.objects.select_for_update().select_related("candidate", "assessment"),
+                pk=pk,
+            )
+
+            # Check if attempt is submitted or terminal
+            if attempt.state in AssessmentAttempt.TERMINAL_STATES and attempt.state != AssessmentAttempt.State.TIMED_OUT:
+                return Response(
+                    {"detail": f"Attempt is in state '{attempt.state}'. Submitted or finalized attempts cannot be granted recovery."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            attempt.admin_recovery_granted += 1
+            # If attempt was timed out due to disconnection, revive to IN_PROGRESS
+            if attempt.state == AssessmentAttempt.State.TIMED_OUT:
+                attempt.state = AssessmentAttempt.State.IN_PROGRESS
+
+            meta = attempt.recovery_metadata or {}
+            now = timezone.now()
+            meta[f"admin_grant_{attempt.admin_recovery_granted}"] = {
+                "timestamp": now.isoformat(),
+                "granted_by": request.user.username,
+                "reason": reason,
+            }
+            attempt.recovery_metadata = meta
+            attempt.save(update_fields=["admin_recovery_granted", "state", "recovery_metadata", "updated_at"])
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.ADMIN_RECOVERY_GRANTED,
+                entity_type="ATTEMPT",
+                entity_id=str(attempt.id),
+                user=request.user,
+                details={
+                    "candidate_id": str(attempt.candidate_id),
+                    "candidate_name": attempt.candidate.full_name,
+                    "admin_recovery_granted": attempt.admin_recovery_granted,
+                    "reason": reason,
+                },
+            )
+
+        return Response({
+            "message": f"Successfully granted 1 additional recovery to candidate '{attempt.candidate.full_name}'.",
+            "attempt_id": str(attempt.id),
+            "admin_recovery_granted": attempt.admin_recovery_granted,
+            "total_allowed_recoveries": 1 + attempt.admin_recovery_granted,
+            "state": attempt.state,
+        })
+
+
+class AdminCandidateReassignAttemptView(APIView):
+    """
+    Admin operation: authorizes a genuinely NEW attempt for a candidate on an assessment.
+    Requires mandatory administrative reason.
+    Previous attempts and historical answers remain immutable and untouched.
+    Flags previous attempt as is_reassigned=True.
+    Creates an immutable audit log.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        reason = (request.data.get("reason") or "").strip()
+        assessment_id = request.data.get("assessment_id")
+
+        if not reason:
+            return Response(
+                {"reason": ["Mandatory administrative reason is required to reassign/authorize a new attempt."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        candidate = get_object_or_404(Candidate, pk=pk)
+
+        with transaction.atomic():
+            if assessment_id:
+                assessment = get_object_or_404(Assessment, pk=assessment_id)
+            else:
+                # Find candidate's latest attempt assessment or default assessment
+                latest_attempt = candidate.attempts.order_by("-created_at").first()
+                if latest_attempt and latest_attempt.assessment:
+                    assessment = latest_attempt.assessment
+                else:
+                    assessment = Assessment.objects.filter(status=Assessment.Status.OPEN).first()
+
+            if not assessment:
+                return Response({"detail": "Target assessment not specified or no open assessments available."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Ensure candidate is enrolled in assessment's direct eligibility
+            assessment.eligible_candidates.add(candidate)
+
+            # Mark previous attempts for this assessment as reassigned
+            candidate.attempts.filter(
+                assessment=assessment,
+            ).update(is_reassigned=True)
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.CANDIDATE_REASSIGNED_NEW_ATTEMPT,
+                entity_type="CANDIDATE",
+                entity_id=str(candidate.id),
+                user=request.user,
+                details={
+                    "candidate_name": candidate.full_name,
+                    "assessment_id": str(assessment.id),
+                    "assessment_title": assessment.title,
+                    "reason": reason,
+                },
+            )
+
+        return Response({
+            "message": f"Successfully authorized new attempt for candidate '{candidate.full_name}' on assessment '{assessment.title}'.",
+            "candidate_id": str(candidate.id),
+            "assessment_id": str(assessment.id),
+            "assessment_title": assessment.title,
+        })
+
+
 class AdminAttemptRevokeView(APIView):
     """
     Revokes a candidate assessment attempt (e.g. serious integrity breach or cancellation).
@@ -2394,3 +2945,28 @@ class AdminAttemptRevokeView(APIView):
             "state": attempt.state,
             "flag_reason": attempt.flag_reason,
         })
+
+
+class AdminClearCacheView(APIView):
+    """
+    Workstream 10: Operational cache invalidation endpoint.
+    Clears application cache keys (college directory, sections, assessment configs).
+    Records an administrative audit log.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        from django.core.cache import cache
+        try:
+            cache.clear()
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.ASSESSMENT_UPDATED,
+                entity_type="SYSTEM",
+                entity_id="CACHE",
+                user=request.user,
+                details={"action": "CACHE_CLEARED", "cleared_by": request.user.username},
+            )
+            from django.utils import timezone as _tz
+            return Response({"message": "Application cache successfully cleared.", "status": "ok", "timestamp": _tz.now().isoformat()})
+        except Exception as e:
+            return Response({"detail": f"Failed to clear cache: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

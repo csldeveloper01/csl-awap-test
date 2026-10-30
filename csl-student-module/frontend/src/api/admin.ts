@@ -58,6 +58,11 @@ export interface AdminCollege {
   id: number;
   name: string;
   code: string;
+  district?: string;
+  city?: string;
+  institution_type?: string;
+  affiliation?: string;
+  website?: string;
   address?: string;
   location?: string;
   contact_email?: string;
@@ -190,6 +195,7 @@ export interface AdminQuestion {
   section_name?: string;
   category?: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  marks?: number;
   option_a: string;
   option_b: string;
   option_c: string;
@@ -201,6 +207,8 @@ export interface AdminQuestion {
   assessment_title?: string;
   assigned_assessments?: { id: string; code: string; title: string }[];
   is_active: boolean;
+  is_archived?: boolean;
+  can_be_deleted?: boolean;
   created_at?: string;
 }
 
@@ -661,10 +669,60 @@ export async function bulkDeleteAdminQuestions(
   return res.data;
 }
 
-export async function importAdminQuestionsCSV(
-  assessmentId: string,
+export async function archiveAdminQuestion(
+  id: number,
+  archive: boolean = true
+): Promise<{ message: string; is_archived: boolean }> {
+  const res = await adminApi.post(`/questions/${id}/archive/`, { archive });
+  return res.data;
+}
+
+export interface CSVSectionPreview {
+  code: string;
+  detected_name: string;
+  row_count: number;
+  matched_section_id: number | null;
+  matched_section_name: string | null;
+}
+
+export interface CSVImportPreviewResponse {
+  total_rows: number;
+  detected_sections: CSVSectionPreview[];
+  sample_rows: Record<string, string>[];
+  errors: string[];
+}
+
+export async function previewAdminQuestionsCSV(
   file?: File,
   csvContent?: string
+): Promise<CSVImportPreviewResponse> {
+  if (file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await adminApi.post<CSVImportPreviewResponse>('/questions/import-preview/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  } else {
+    const res = await adminApi.post<CSVImportPreviewResponse>('/questions/import-preview/', {
+      csv_content: csvContent,
+    });
+    return res.data;
+  }
+}
+
+export interface SectionMappingRule {
+  action: 'map' | 'create' | 'skip';
+  target_section_id?: number;
+  target_section_code?: string;
+  target_section_name?: string;
+}
+
+export async function importAdminQuestionsCSV(
+  assessmentId?: string,
+  file?: File,
+  csvContent?: string,
+  sectionMapping?: Record<string, SectionMappingRule>
 ): Promise<{
   success_count: number;
   error_count: number;
@@ -676,15 +734,17 @@ export async function importAdminQuestionsCSV(
   if (file) {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('assessment_id', assessmentId);
+    if (assessmentId) formData.append('assessment_id', assessmentId);
+    if (sectionMapping) formData.append('section_mapping', JSON.stringify(sectionMapping));
     const res = await adminApi.post('/questions/import-csv/', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return res.data;
   } else {
     const res = await adminApi.post('/questions/import-csv/', {
-      assessment_id: assessmentId,
+      assessment_id: assessmentId || undefined,
       csv_content: csvContent,
+      section_mapping: sectionMapping,
     });
     return res.data;
   }
@@ -847,5 +907,105 @@ export async function toggleAdminUserStatus(userId: number): Promise<{ id: numbe
 
 export async function deleteAdminUser(userId: number): Promise<{ message: string; id: number }> {
   const res = await adminApi.delete(`/users/${userId}/`);
+  return res.data;
+}
+
+// ─── ASSESSMENT CANDIDATE ASSIGNMENT (PHASE 2.1) ───────────────────────────
+export async function getAdminAssessmentCandidates(assessmentId: string): Promise<{
+  assessment_id: string;
+  assessment_title: string;
+  eligible_candidates_count: number;
+  candidates: {
+    id: string;
+    full_name: string;
+    register_number: string;
+    college: string;
+    department: string;
+    year_of_study: string;
+    is_active: boolean;
+  }[];
+}> {
+  const res = await adminApi.get(`/assessments/${assessmentId}/assign-candidates/`);
+  return res.data;
+}
+
+export async function assignAdminAssessmentCandidates(
+  assessmentId: string,
+  candidateIds: string[]
+): Promise<{
+  message: string;
+  assessment_id: string;
+  eligible_candidates_count: number;
+  assigned_candidate_ids: string[];
+}> {
+  const res = await adminApi.post(`/assessments/${assessmentId}/assign-candidates/`, {
+    candidate_ids: candidateIds,
+  });
+  return res.data;
+}
+
+// ─── ATTEMPT RECOVERY & REASSIGNMENT (PHASE 2.1) ────────────────────────────
+export async function grantAdminAttemptRecovery(
+  attemptId: string,
+  reason: string
+): Promise<{
+  message: string;
+  attempt_id: string;
+  admin_recovery_granted: boolean;
+  recovery_count: number;
+}> {
+  const res = await adminApi.post(`/attempts/${attemptId}/grant-recovery/`, { reason });
+  return res.data;
+}
+
+export async function reassignAdminCandidateAttempt(
+  candidateId: string,
+  reason: string,
+  assessmentId?: string
+): Promise<{
+  message: string;
+  attempt_id: string;
+  candidate_id: string;
+  state: string;
+}> {
+  const res = await adminApi.post(`/candidates/${candidateId}/reassign/`, {
+    reason,
+    assessment_id: assessmentId,
+  });
+  return res.data;
+}
+
+// ─── COLLEGE DIRECTORY IMPORT (PHASE 2.1) ──────────────────────────────────
+export async function importAdminCollegeDirectory(
+  file?: File,
+  csvContent?: string
+): Promise<{
+  message: string;
+  total_processed: number;
+  created_count: number;
+  updated_count: number;
+  errors: string[];
+}> {
+  if (file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await adminApi.post('/colleges/import-directory/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  } else {
+    const res = await adminApi.post('/colleges/import-directory/', {
+      csv_content: csvContent,
+    });
+    return res.data;
+  }
+}
+
+// ─── SYSTEM CACHE CLEAR (PHASE 2.1 WORKSTREAM 10) ──────────────────────────
+export async function clearAdminSystemCache(): Promise<{
+  message: string;
+  timestamp: string;
+}> {
+  const res = await adminApi.post('/system/clear-cache/');
   return res.data;
 }

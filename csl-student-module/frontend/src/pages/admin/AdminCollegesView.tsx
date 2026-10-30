@@ -8,6 +8,7 @@ import {
   bulkDeleteAdminColleges,
   importAdminCollegeCandidates,
   getAdminCollegeDetail,
+  importAdminCollegeDirectory,
   type AdminCollege,
   type AdminCollegeDetail,
 } from '../../api/admin';
@@ -17,6 +18,17 @@ export function AdminCollegesView() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'true' | 'false'>('all');
+  const [districtFilter, setDistrictFilter] = useState('');
+  const [showDirectoryImportModal, setShowDirectoryImportModal] = useState(false);
+  const [directoryFile, setDirectoryFile] = useState<File | null>(null);
+  const [directoryImporting, setDirectoryImporting] = useState(false);
+  const [directoryImportResult, setDirectoryImportResult] = useState<{
+    message: string;
+    total_processed: number;
+    created_count: number;
+    updated_count: number;
+    errors: string[];
+  } | null>(null);
 
   // Bulk Selection & Deletion State
   const [selectedCollegeIds, setSelectedCollegeIds] = useState<number[]>([]);
@@ -36,6 +48,11 @@ export function AdminCollegesView() {
   const [createForm, setCreateForm] = useState({
     name: '',
     code: '',
+    district: '',
+    city: '',
+    institution_type: 'Engineering',
+    affiliation: 'Anna University',
+    website: '',
     location: '',
     address: '',
     admin_contact_name: '',
@@ -56,6 +73,25 @@ export function AdminCollegesView() {
     errors: string[];
   } | null>(null);
   const [importError, setImportError] = useState('');
+
+  const handleImportDirectory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!directoryFile) {
+      alert('Please select an institution directory CSV file.');
+      return;
+    }
+    setDirectoryImporting(true);
+    setDirectoryImportResult(null);
+    try {
+      const res = await importAdminCollegeDirectory(directoryFile);
+      setDirectoryImportResult(res);
+      fetchColleges();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Directory import failed.');
+    } finally {
+      setDirectoryImporting(false);
+    }
+  };
 
   const fetchColleges = async () => {
     setLoading(true);
@@ -187,6 +223,11 @@ export function AdminCollegesView() {
       setCreateForm({
         name: '',
         code: '',
+        district: '',
+        city: '',
+        institution_type: 'Engineering',
+        affiliation: 'Anna University',
+        website: '',
         location: '',
         address: '',
         admin_contact_name: '',
@@ -338,6 +379,41 @@ export function AdminCollegesView() {
           <option value="all">All Statuses</option>
           <option value="true">Active Only</option>
           <option value="false">Inactive Only</option>
+        </select>
+
+        <select
+          value={districtFilter}
+          onChange={(e) => setDistrictFilter(e.target.value)}
+          style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            border: '1px solid #CBD5E1',
+            fontSize: '14px',
+            backgroundColor: '#FFFFFF',
+            cursor: 'pointer',
+            outline: 'none',
+            fontWeight: 500,
+          }}
+        >
+          <option value="">All TN Districts</option>
+          <option value="Chennai">Chennai</option>
+          <option value="Coimbatore">Coimbatore</option>
+          <option value="Madurai">Madurai</option>
+          <option value="Tiruchirappalli">Tiruchirappalli</option>
+          <option value="Salem">Salem</option>
+          <option value="Kanchipuram">Kanchipuram</option>
+          <option value="Chengalpattu">Chengalpattu</option>
+          <option value="Erode">Erode</option>
+          <option value="Vellore">Vellore</option>
+          <option value="Tirunelveli">Tirunelveli</option>
+          <option value="Thanjavur">Thanjavur</option>
+          <option value="Dindigul">Dindigul</option>
+          <option value="Cuddalore">Cuddalore</option>
+          <option value="Dharmapuri">Dharmapuri</option>
+          <option value="Karur">Karur</option>
+          <option value="Namakkal">Namakkal</option>
+          <option value="Krishnagiri">Krishnagiri</option>
+          <option value="Virudhunagar">Virudhunagar</option>
         </select>
       </div>
 
@@ -1045,6 +1121,135 @@ export function AdminCollegesView() {
           </div>
         </div>
       )}
-    </div>
+          {/* ─── DIRECTORY IMPORT MODAL (PHASE 2.1) ────────────────────── */}
+      {showDirectoryImportModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(11, 46, 111, 0.45)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 100,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '560px',
+              width: '100%',
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              padding: '28px',
+              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.15)',
+              border: '1px solid #E2E8F0',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Import Tamil Nadu Institution Directory
+                </h3>
+                <span style={{ fontSize: '12px', color: '#64748B' }}>
+                  Bulk import verified colleges with districts, type, and affiliations.
+                </span>
+              </div>
+              <button
+                onClick={() => setShowDirectoryImportModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleImportDirectory}>
+              <div
+                style={{
+                  border: '2px dashed #CBD5E1',
+                  borderRadius: '10px',
+                  padding: '24px',
+                  textAlign: 'center',
+                  marginBottom: '16px',
+                  backgroundColor: '#FAF7F3',
+                }}
+              >
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setDirectoryFile(e.target.files?.[0] || null)}
+                  style={{ display: 'block', margin: '0 auto' }}
+                />
+                <div style={{ fontSize: '11px', color: '#64748B', marginTop: '8px' }}>
+                  Accepted CSV columns: <code>code, name, district, city, institution_type, affiliation, website</code>
+                </div>
+              </div>
+
+              {directoryImportResult && (
+                <div
+                  style={{
+                    backgroundColor: directoryImportResult.errors?.length > 0 ? '#FEF2F2' : '#F0FDF4',
+                    border: `1px solid ${directoryImportResult.errors?.length > 0 ? '#FECACA' : '#BBF7D0'}`,
+                    padding: '12px',
+                    borderRadius: '8px',
+                    marginBottom: '16px',
+                    fontSize: '13px',
+                  }}
+                >
+                  <strong style={{ color: directoryImportResult.errors?.length > 0 ? '#DC2626' : '#16A34A' }}>
+                    {directoryImportResult.message}
+                  </strong>
+                  <div style={{ marginTop: '4px', fontSize: '12px', color: '#475569' }}>
+                    Processed: {directoryImportResult.total_processed} | Created: {directoryImportResult.created_count} | Updated: {directoryImportResult.updated_count}
+                  </div>
+                  {directoryImportResult.errors?.length > 0 && (
+                    <ul style={{ margin: '8px 0 0 16px', padding: 0, fontSize: '11.5px', color: '#DC2626' }}>
+                      {directoryImportResult.errors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowDirectoryImportModal(false)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: '1.5px solid #CBD5E1',
+                    backgroundColor: '#FFFFFF',
+                    color: '#475569',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={directoryImporting || !directoryFile}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: directoryImporting || !directoryFile ? '#94A3B8' : '#1455B8',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: directoryImporting ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {directoryImporting ? 'Importing Directory...' : 'Import Directory →'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+</div>
   );
 }

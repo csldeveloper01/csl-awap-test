@@ -294,8 +294,8 @@ def prepare_assessment(assessment: Assessment, user=None):
     else:
         validate_question_bank_sufficiency(assessment=assessment)
 
-    if not assessment.eligible_colleges.exists():
-        raise ValidationError({"detail": "Assessment must have at least one assigned college before preparation."})
+    # Assessment-first: college assignment is optional eligibility/grouping metadata
+    pass
 
     previous_status = assessment.status
     assessment.status = Assessment.Status.READY
@@ -326,8 +326,8 @@ def open_assessment(assessment: Assessment, user=None):
     else:
         validate_question_bank_sufficiency(assessment=assessment)
 
-    if not assessment.eligible_colleges.exists():
-        raise ValidationError({"detail": "Assessment must have at least one assigned college before opening."})
+    # Assessment-first: college assignment is optional eligibility/grouping metadata
+    pass
 
     previous_status = assessment.status
     now = timezone.now()

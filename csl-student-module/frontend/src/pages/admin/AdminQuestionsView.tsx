@@ -7,12 +7,16 @@ import {
   bulkUpdateAdminQuestions,
   deleteAdminQuestion,
   bulkDeleteAdminQuestions,
+  archiveAdminQuestion,
+  previewAdminQuestionsCSV,
   importAdminQuestionsCSV,
   getAdminAssessments,
   getAdminSections,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
+  type CSVImportPreviewResponse,
+  type SectionMappingRule,
 } from '../../api/admin';
 import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 
@@ -116,12 +120,17 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [selectedAssessment, setSelectedAssessment] = useState<AdminAssessment | null>(null);
   const [assessmentSearch, setAssessmentSearch] = useState('');
   const [importAssessmentId, setImportAssessmentId] = useState<string>(initialAssessmentId || '');
-  const [viewAllQuestions, setViewAllQuestions] = useState(false);
+  const [viewAllQuestions, setViewAllQuestions] = useState(true);
   const [assessmentFilterStatus, setAssessmentFilterStatus] = useState<'ALL' | 'SUFFICIENT' | 'INSUFFICIENT'>('ALL');
 
   // Filters
   const [sectionFilter, setSectionFilter] = useState('');
   const [difficultyFilter, setDifficultyFilter] = useState('');
+  const [archiveFilter, setArchiveFilter] = useState<'ALL' | 'ACTIVE_ONLY' | 'ARCHIVED_ONLY'>('ACTIVE_ONLY');
+  const [importStep, setImportStep] = useState<'UPLOAD' | 'MAP' | 'RESULT'>('UPLOAD');
+  const [importPreview, setImportPreview] = useState<CSVImportPreviewResponse | null>(null);
+  const [sectionMapping, setSectionMapping] = useState<Record<string, SectionMappingRule>>({});
+  const [importCsvText, setImportCsvText] = useState('');
   const [activeFilter, setActiveFilter] = useState('');
   const [assessmentFilter, setAssessmentFilter] = useState(initialAssessmentId || '');
   const [search, setSearch] = useState('');
@@ -250,12 +259,17 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     loadQuestions();
   };
 
-  // Pagination computations
-  const totalQuestions = questions.length;
+  // Pagination computations with Archive Filter (Phase 2.1)
+  const questionsFilteredByArchive = questions.filter((q) => {
+    if (archiveFilter === 'ACTIVE_ONLY') return !q.is_archived;
+    if (archiveFilter === 'ARCHIVED_ONLY') return q.is_archived;
+    return true;
+  });
+  const totalQuestions = questionsFilteredByArchive.length;
   const totalPages = Math.max(1, Math.ceil(totalQuestions / pageSize));
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, totalQuestions);
-  const paginatedQuestions = questions.slice(startIndex, endIndex);
+  const paginatedQuestions = questionsFilteredByArchive.slice(startIndex, endIndex);
 
   // Selection handlers
   const handleSelectAllCurrentPage = (checked: boolean) => {
@@ -311,8 +325,36 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     }
   };
 
+  const handleToggleArchive = async (q: AdminQuestion) => {
+    const targetState = !q.is_archived;
+    const confirmMsg = targetState
+      ? `Archive question #${q.id}? It will be hidden from new assessments but preserved for past attempt history.`
+      : `Restore / Unarchive question #${q.id}?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await archiveAdminQuestion(q.id, targetState);
+      alert(res.message);
+      setQuestions((prev) =>
+        prev.map((item) => (item.id === q.id ? { ...item, is_archived: res.is_archived } : item))
+      );
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to update archive status.');
+    }
+  };
+
   const handleDeleteQuestion = async (q: AdminQuestion) => {
-    const confirmMsg = `Are you sure you want to delete question #${q.id}?\n\nIf candidates have already taken assessments referencing this question, it will be safely archived to preserve attempt history.`;
+    if (q.can_be_deleted === false) {
+      const confirmArchive = window.confirm(
+        `Question #${q.id} cannot be permanently deleted because candidates have already answered it in past assessment attempts.\n\nWould you like to ARCHIVE this question instead?\nArchived questions remain preserved for historical attempts but will not be used in future assessments.`
+      );
+      if (confirmArchive) {
+        handleToggleArchive(q);
+      }
+      return;
+    }
+
+    const confirmMsg = `Are you sure you want to permanently delete question #${q.id}?\nThis cannot be undone.`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -417,7 +459,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     setShowEditorModal(true);
   };
 
-  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id: string }) => {
+  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string }) => {
     try {
       setSavingQuestion(true);
       if (editingQuestion) {
@@ -443,34 +485,81 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     }
   };
 
-  // CSV Import handler
-  const handleImportSubmit = async (e: React.FormEvent) => {
+  // Phase 2.1 Two-Step CSV Preview and Explicit Section Mapping Handlers
+  const handlePreviewCSV = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importAssessmentId) {
-      alert('Please select a target assessment before importing questions.');
+    if (!importFile && !importCsvText.trim()) {
+      alert('Please select a CSV file or enter CSV content.');
       return;
     }
-    if (!importFile) {
-      alert('Please select a CSV file.');
-      return;
-    }
+
     setImporting(true);
     setImportResult(null);
     try {
-      const res = await importAdminQuestionsCSV(importAssessmentId, importFile);
-      setImportResult(res);
-      loadQuestions();
-      getAdminAssessments().then(setAssessments).catch(() => {});
-    } catch (err: unknown) {
-      if (typeof err === 'object' && err !== null && 'response' in err) {
-        const axErr = err as { response?: { data?: { detail?: string; assessment_id?: string[] } } };
-        alert(`CSV import error: ${axErr.response?.data?.detail || axErr.response?.data?.assessment_id?.[0] || 'Import failed.'}`);
-      } else {
-        alert('CSV import failed.');
-      }
+      const preview = await previewAdminQuestionsCSV(importFile || undefined, importCsvText || undefined);
+      setImportPreview(preview);
+
+      // Initialize default mappings for detected sections
+      const initialMapping: Record<string, SectionMappingRule> = {};
+      preview.detected_sections.forEach((sec) => {
+        if (sec.matched_section_id) {
+          initialMapping[sec.code] = {
+            action: 'map',
+            target_section_id: sec.matched_section_id,
+            target_section_name: sec.matched_section_name || sec.code,
+          };
+        } else {
+          initialMapping[sec.code] = {
+            action: 'create',
+            target_section_code: sec.code,
+            target_section_name: sec.detected_name || sec.code,
+          };
+        }
+      });
+      setSectionMapping(initialMapping);
+      setImportStep('MAP');
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to parse CSV preview.');
     } finally {
       setImporting(false);
     }
+  };
+
+  const handleConfirmImport = async () => {
+    setImporting(true);
+    try {
+      const res = await importAdminQuestionsCSV(
+        importAssessmentId || undefined,
+        importFile || undefined,
+        importCsvText || undefined,
+        sectionMapping
+      );
+      setImportResult({
+        success_count: res.success_count,
+        error_count: res.error_count,
+        errors: res.errors || [],
+      });
+      setImportStep('RESULT');
+      if (res.success_count > 0) {
+        loadQuestions();
+        const freshAssessments = await getAdminAssessments();
+        setAssessments(freshAssessments);
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Import execution failed.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleResetImportModal = () => {
+    setImportStep('UPLOAD');
+    setImportFile(null);
+    setImportCsvText('');
+    setImportPreview(null);
+    setSectionMapping({});
+    setImportResult(null);
+    setShowImportModal(false);
   };
 
   const filteredAssessments = assessments.filter((a) => {
@@ -1433,6 +1522,26 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           <option value="false">Inactive Only</option>
         </select>
 
+        {/* Phase 2.1 Archive Status Filter */}
+        <select
+          value={archiveFilter}
+          onChange={(e) => setArchiveFilter(e.target.value as any)}
+          style={{
+            padding: '9px 12px',
+            borderRadius: '8px',
+            border: '1px solid #CBD5E1',
+            fontSize: '13px',
+            backgroundColor: '#FFFFFF',
+            fontWeight: 600,
+            color: '#1E293B',
+            outlineColor: '#1455B8',
+          }}
+        >
+          <option value="ACTIVE_ONLY">Active Library (Hide Archived)</option>
+          <option value="ARCHIVED_ONLY">Archived Library Only</option>
+          <option value="ALL">All (Active & Archived)</option>
+        </select>
+
         <select
           value={assessmentFilter}
           onChange={(e) => setAssessmentFilter(e.target.value)}
@@ -1696,20 +1805,21 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               <th style={{ padding: '12px 14px' }}>Question Prompt</th>
               <th style={{ padding: '12px 14px', width: '70px', textAlign: 'center' }}>Correct ↕</th>
               <th style={{ padding: '12px 14px', width: '90px', textAlign: 'center' }}>Difficulty ↕</th>
-              <th style={{ padding: '12px 14px', width: '80px', textAlign: 'center' }}>Active ↕</th>
-              <th style={{ padding: '12px 14px', width: '150px', textAlign: 'right' }}>Actions</th>
+              <th style={{ padding: '12px 14px', width: '60px', textAlign: 'center' }}>Marks</th>
+              <th style={{ padding: '12px 14px', width: '130px', textAlign: 'center' }}>Status</th>
+              <th style={{ padding: '12px 14px', width: '180px', textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} style={{ padding: '36px', textAlign: 'center', color: '#6B7280' }}>
+                <td colSpan={10} style={{ padding: '36px', textAlign: 'center', color: '#6B7280' }}>
                   Loading questions from bank...
                 </td>
               </tr>
             ) : paginatedQuestions.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <td colSpan={10} style={{ padding: '48px 24px', textAlign: 'center' }}>
                   <div style={{ maxWidth: '420px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
                     <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1455B8' }}>
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1887,24 +1997,49 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                         {q.difficulty}
                       </span>
                     </td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      <button
-                        onClick={() => handleToggleActive(q.id)}
-                        style={{
-                          padding: '3px 10px',
-                          borderRadius: '9999px',
-                          border: 'none',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          backgroundColor: q.is_active ? '#DCFCE7' : '#F1F5F9',
-                          color: q.is_active ? '#166534' : '#64748B',
-                          cursor: 'pointer',
-                        }}
-                        title="Click to toggle status"
-                      >
-                        {q.is_active ? 'Active' : 'Inactive'}
-                      </button>
+                    {/* Phase 2.1 Marks */}
+                    <td style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 800, color: '#0B2E6F' }}>
+                      {q.marks ?? 1}
                     </td>
+
+                    {/* Phase 2.1 Status Badges */}
+                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => handleToggleActive(q.id)}
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '9999px',
+                            border: 'none',
+                            fontSize: '10.5px',
+                            fontWeight: 700,
+                            backgroundColor: q.is_active ? '#DCFCE7' : '#F1F5F9',
+                            color: q.is_active ? '#166534' : '#64748B',
+                            cursor: 'pointer',
+                          }}
+                          title="Toggle Active/Inactive"
+                        >
+                          {q.is_active ? 'Active' : 'Inactive'}
+                        </button>
+                        {q.is_archived && (
+                          <span
+                            style={{
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              backgroundColor: '#FEF3C7',
+                              color: '#92400E',
+                              border: '1px solid #FDE68A',
+                            }}
+                          >
+                            Archived
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Phase 2.1 Actions */}
                     <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         onClick={() => openEditModal(q)}
@@ -1912,58 +2047,61 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '4px',
-                          padding: '5px 10px',
+                          padding: '4px 8px',
                           backgroundColor: '#FFFFFF',
-                          border: '1.5px solid #CBD5E1',
-                          borderRadius: '8px',
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '6px',
                           color: '#0B2E6F',
-                          fontSize: '12px',
+                          fontSize: '11.5px',
                           fontWeight: 700,
                           cursor: 'pointer',
-                          transition: 'all 0.15s ease',
                         }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#EFF6FF';
-                          e.currentTarget.style.borderColor = '#BFDBFE';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#FFFFFF';
-                          e.currentTarget.style.borderColor = '#CBD5E1';
-                        }}
-                        title="Edit question details"
+                        title="Edit question"
                       >
-                        <span>✏️</span>
-                        <span>Edit</span>
+                        ✏️ Edit
                       </button>
+
+                      <button
+                        onClick={() => handleToggleArchive(q)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '4px 8px',
+                          backgroundColor: q.is_archived ? '#EFF6FF' : '#FFFBEB',
+                          border: `1px solid ${q.is_archived ? '#BFDBFE' : '#FDE68A'}`,
+                          borderRadius: '6px',
+                          color: q.is_archived ? '#1E40AF' : '#92400E',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          marginLeft: '4px',
+                        }}
+                        title={q.is_archived ? 'Restore / Unarchive question' : 'Archive question'}
+                      >
+                        {q.is_archived ? 'Unarchive' : 'Archive'}
+                      </button>
+
                       <button
                         onClick={() => handleDeleteQuestion(q)}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '4px',
-                          padding: '5px 10px',
+                          padding: '4px 8px',
                           backgroundColor: '#FFFFFF',
-                          border: '1.5px solid #FECACA',
-                          borderRadius: '8px',
+                          border: '1px solid #FECACA',
+                          borderRadius: '6px',
                           color: '#DC2626',
-                          fontSize: '12px',
+                          fontSize: '11.5px',
                           fontWeight: 700,
                           cursor: 'pointer',
-                          marginLeft: '6px',
-                          transition: 'all 0.15s ease',
+                          marginLeft: '4px',
+                          opacity: q.can_be_deleted === false ? 0.7 : 1,
                         }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#FEF2F2';
-                          e.currentTarget.style.borderColor = '#F87171';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#FFFFFF';
-                          e.currentTarget.style.borderColor = '#FECACA';
-                        }}
-                        title="Delete or safely archive question"
+                        title={q.can_be_deleted === false ? 'Locked: used in student attempts. Click to archive instead.' : 'Delete question permanently'}
                       >
-                        <span>🗑️</span>
-                        <span>Delete</span>
+                        🗑️ {q.can_be_deleted === false ? 'Locked' : 'Delete'}
                       </button>
                     </td>
                   </tr>
@@ -2321,7 +2459,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         </div>
       )}
 
-      {/* ─── CSV IMPORT MODAL ──────────────────────────────────────── */}
+      {/* ─── PHASE 2.1 TWO-STEP CSV IMPORT MODAL ───────────────────────── */}
       {showImportModal && (
         <div
           style={{
@@ -2338,142 +2476,360 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         >
           <div
             style={{
-              maxWidth: '540px',
+              maxWidth: importStep === 'MAP' ? '720px' : '560px',
               width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
               backgroundColor: '#FFFFFF',
               borderRadius: '16px',
               padding: '28px',
               boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.15)',
               border: '1.5px solid rgba(245, 184, 61, 0.3)',
+              transition: 'max-width 0.2s ease',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-                Bulk CSV Question Import
-              </h3>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Bulk Question Import (CSV)
+                </h3>
+                <span style={{ fontSize: '12px', color: '#64748B' }}>
+                  {importStep === 'UPLOAD' && 'Step 1 of 2: Upload CSV File & Choose Optional Assessment'}
+                  {importStep === 'MAP' && 'Step 2 of 2: Explicit Section Mapping & Rule Confirmation'}
+                  {importStep === 'RESULT' && 'Import Completed'}
+                </span>
+              </div>
               <button
-                onClick={() => setShowImportModal(false)}
+                onClick={handleResetImportModal}
                 style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
               >
                 ✕
               </button>
             </div>
 
-            <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
-              Upload a valid CSV file with columns:{' '}
-              <code>prompt, section_type, difficulty, option_a, option_b, option_c, option_d, correct_option, explanation</code> (category is optional).
-            </p>
+            {/* ─── STEP 1: UPLOAD & PREVIEW ─── */}
+            {importStep === 'UPLOAD' && (
+              <form onSubmit={handlePreviewCSV}>
+                <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+                  Upload a CSV file containing questions. Section codes will be analyzed so you can explicitly map, auto-create, or skip sections before importing.
+                </p>
 
-            <form onSubmit={handleImportSubmit}>
-              {/* Target Assessment Selector */}
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
-                  Target Assessment *
-                </label>
-                <select
-                  value={importAssessmentId}
-                  onChange={(e) => setImportAssessmentId(e.target.value)}
-                  required
+                {/* Optional Assessment Pool Selector */}
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                    Assign Directly to Assessment Pool (Optional)
+                  </label>
+                  <select
+                    value={importAssessmentId}
+                    onChange={(e) => setImportAssessmentId(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '9px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #CBD5E1',
+                      fontSize: '13px',
+                      color: '#0F172A',
+                      backgroundColor: '#FFFFFF',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <option value="">-- Independent Question Bank (No Specific Assessment) --</option>
+                    {assessments.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title} ({a.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* File Upload Box */}
+                <div
                   style={{
-                    width: '100%',
-                    padding: '9px 12px',
-                    borderRadius: '8px',
-                    border: !importAssessmentId ? '1.5px solid #DC2626' : '1px solid #CBD5E1',
-                    fontSize: '13px',
-                    color: '#0F172A',
-                    backgroundColor: '#FFFFFF',
-                    boxSizing: 'border-box',
-                    outlineColor: '#1455B8',
+                    border: '2px dashed #CBD5E1',
+                    borderRadius: '10px',
+                    padding: '20px',
+                    textAlign: 'center',
+                    marginBottom: '16px',
+                    backgroundColor: '#FAF7F3',
                   }}
                 >
-                  <option value="">-- Choose Target Assessment for Question Pool --</option>
-                  {assessments.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.title} ({a.code}) — Status: {a.status}
-                    </option>
-                  ))}
-                </select>
-                {!importAssessmentId && (
-                  <span style={{ color: '#DC2626', fontSize: '11px', marginTop: '4px', display: 'block' }}>
-                    * Selecting a target assessment is required before importing questions.
-                  </span>
-                )}
-              </div>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                    style={{ display: 'block', margin: '0 auto' }}
+                  />
+                  <div style={{ fontSize: '11px', color: '#64748B', marginTop: '8px' }}>
+                    Columns expected: prompt, section_type, difficulty, option_a, option_b, option_c, option_d, correct_option, marks, explanation
+                  </div>
+                </div>
 
-              {/* Assessment Context Preview */}
-              {(() => {
-                const target = assessments.find((a) => a.id === importAssessmentId);
-                if (!target) return null;
-                return (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={handleResetImportModal}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #CBD5E1',
+                      backgroundColor: '#FFFFFF',
+                      color: '#475569',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={importing || (!importFile && !importCsvText.trim())}
+                    style={{
+                      padding: '8px 20px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      backgroundColor: importing || (!importFile && !importCsvText.trim()) ? '#94A3B8' : '#1455B8',
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: importing ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {importing ? 'Analyzing CSV...' : 'Analyze CSV & Preview Sections →'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* ─── STEP 2: EXPLICIT SECTION MAPPING ─── */}
+            {importStep === 'MAP' && importPreview && (
+              <div>
+                <div
+                  style={{
+                    backgroundColor: '#EFF6FF',
+                    border: '1px solid #BFDBFE',
+                    borderRadius: '8px',
+                    padding: '12px 16px',
+                    marginBottom: '16px',
+                    fontSize: '13px',
+                    color: '#1E40AF',
+                  }}
+                >
+                  <strong>{importPreview.total_rows} total question row(s) detected</strong> across{' '}
+                  <strong>{importPreview.detected_sections.length} section(s)</strong>.
+                  <div style={{ fontSize: '11.5px', color: '#3B82F6', marginTop: '2px' }}>
+                    Confirm or customize how each section code from your CSV maps to platform sections. No automatic or silent creation will occur.
+                  </div>
+                </div>
+
+                {importPreview.errors && importPreview.errors.length > 0 && (
                   <div
                     style={{
-                      backgroundColor: '#EFF6FF',
-                      border: '1px solid #BFDBFE',
+                      backgroundColor: '#FEF2F2',
+                      border: '1px solid #FECACA',
                       borderRadius: '8px',
                       padding: '10px 14px',
                       marginBottom: '16px',
                       fontSize: '12px',
-                      color: '#1E40AF',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                      gap: '8px',
+                      color: '#DC2626',
                     }}
                   >
-                    <div>
-                      <strong>Pool Context:</strong> {target.title} ({target.code})
-                      <div style={{ color: '#3B82F6', marginTop: '2px' }}>
-                        Configured: {target.aptitude_count} Aptitude + {target.coding_count} Coding ({target.total_marks} Marks)
-                      </div>
-                    </div>
-                    <span
-                      style={{
-                        backgroundColor: '#DBEAFE',
-                        color: '#1E40AF',
-                        padding: '3px 8px',
-                        borderRadius: '4px',
-                        fontWeight: 700,
-                        fontSize: '11px',
-                      }}
-                    >
-                      {target.pool_questions_count ?? 0} Questions In Pool
-                    </span>
+                    <strong>Warnings detected in CSV preview:</strong>
+                    <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                      {importPreview.errors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
                   </div>
-                );
-              })()}
+                )}
 
-              <div
-                style={{
-                  border: '2px dashed #CBD5E1',
-                  borderRadius: '10px',
-                  padding: '24px',
-                  textAlign: 'center',
-                  marginBottom: '16px',
-                  backgroundColor: '#FAF7F3',
-                }}
-              >
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                  style={{ display: 'block', margin: '0 auto' }}
-                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+                  {importPreview.detected_sections.map((sec) => {
+                    const rule = sectionMapping[sec.code] || { action: 'create' };
+                    return (
+                      <div
+                        key={sec.code}
+                        style={{
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '8px',
+                          padding: '14px',
+                          backgroundColor: '#F8FAFC',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '10px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0B2E6F', fontSize: '13px' }}>
+                              [{sec.code}]
+                            </span>{' '}
+                            <strong style={{ fontSize: '13px', color: '#1E293B' }}>{sec.detected_name}</strong>
+                          </div>
+                          <span
+                            style={{
+                              backgroundColor: '#E2E8F0',
+                              color: '#334155',
+                              padding: '2px 8px',
+                              borderRadius: '9999px',
+                              fontSize: '11.5px',
+                              fontWeight: 700,
+                            }}
+                          >
+                            {sec.row_count} question(s)
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '10px', alignItems: 'center' }}>
+                          <select
+                            value={rule.action}
+                            onChange={(e) => {
+                              const action = e.target.value as 'map' | 'create' | 'skip';
+                              setSectionMapping((prev) => ({
+                                ...prev,
+                                [sec.code]: {
+                                  ...prev[sec.code],
+                                  action,
+                                  target_section_id: action === 'map' ? (sections[0]?.id || undefined) : undefined,
+                                  target_section_code: action === 'create' ? sec.code : undefined,
+                                  target_section_name: action === 'create' ? sec.detected_name : undefined,
+                                },
+                              }));
+                            }}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              border: '1px solid #CBD5E1',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              backgroundColor: '#FFFFFF',
+                            }}
+                          >
+                            <option value="map">Map to Section</option>
+                            <option value="create">Create New Section</option>
+                            <option value="skip">Skip These Rows</option>
+                          </select>
+
+                          {rule.action === 'map' && (
+                            <select
+                              value={rule.target_section_id || ''}
+                              onChange={(e) => {
+                                const id = parseInt(e.target.value, 10);
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [sec.code]: {
+                                    ...prev[sec.code],
+                                    action: 'map',
+                                    target_section_id: id,
+                                  },
+                                }));
+                              }}
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: '6px',
+                                border: '1px solid #CBD5E1',
+                                fontSize: '12px',
+                                backgroundColor: '#FFFFFF',
+                              }}
+                            >
+                              {sections.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name} ({s.code})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+
+                          {rule.action === 'create' && (
+                            <input
+                              type="text"
+                              value={rule.target_section_name || sec.detected_name}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [sec.code]: {
+                                    ...prev[sec.code],
+                                    action: 'create',
+                                    target_section_code: sec.code,
+                                    target_section_name: val,
+                                  },
+                                }));
+                              }}
+                              placeholder="New Section Name"
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: '6px',
+                                border: '1px solid #CBD5E1',
+                                fontSize: '12px',
+                                backgroundColor: '#FFFFFF',
+                              }}
+                            />
+                          )}
+
+                          {rule.action === 'skip' && (
+                            <span style={{ fontSize: '12px', color: '#64748B', fontStyle: 'italic' }}>
+                              All {sec.row_count} question(s) with section [{sec.code}] will be omitted during import.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setImportStep('UPLOAD')}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #CBD5E1',
+                      backgroundColor: '#FFFFFF',
+                      color: '#475569',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ← Back to File Upload
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmImport}
+                    disabled={importing}
+                    style={{
+                      padding: '8px 22px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      backgroundColor: importing ? '#94A3B8' : '#1455B8',
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: importing ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {importing ? 'Importing Questions...' : 'Confirm & Execute Import →'}
+                  </button>
+                </div>
               </div>
+            )}
 
-              {importResult && (
+            {/* ─── STEP 3: RESULT ─── */}
+            {importStep === 'RESULT' && importResult && (
+              <div>
                 <div
                   style={{
                     backgroundColor: importResult.error_count > 0 ? '#FEF2F2' : '#F0FDF4',
                     border: `1px solid ${importResult.error_count > 0 ? '#FECACA' : '#BBF7D0'}`,
-                    padding: '12px',
+                    padding: '16px',
                     borderRadius: '8px',
                     marginBottom: '16px',
                     fontSize: '13px',
                   }}
                 >
-                  <strong style={{ color: importResult.error_count > 0 ? '#DC2626' : '#16A34A' }}>
-                    Import Complete: {importResult.success_count} questions imported successfully.
+                  <strong style={{ color: importResult.error_count > 0 ? '#DC2626' : '#16A34A', fontSize: '14px' }}>
+                    Import Result: {importResult.success_count} question(s) successfully imported.
                   </strong>
                   {importResult.error_count > 0 && (
                     <div style={{ marginTop: '8px', color: '#991B1B' }}>
@@ -2486,42 +2842,27 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                     </div>
                   )}
                 </div>
-              )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowImportModal(false)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    border: '1.5px solid #CBD5E1',
-                    backgroundColor: '#FFFFFF',
-                    color: '#475569',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  disabled={importing || !importFile || !importAssessmentId}
-                  style={{
-                    padding: '8px 20px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: importing || !importFile || !importAssessmentId ? '#94A3B8' : '#1455B8',
-                    color: '#FFFFFF',
-                    fontSize: '13px',
-                    fontWeight: 700,
-                    cursor: importing ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {importing ? 'Importing CSV...' : 'Start Import'}
-                </button>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={handleResetImportModal}
+                    style={{
+                      padding: '8px 22px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      backgroundColor: '#0B2E6F',
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
-            </form>
+            )}
           </div>
         </div>
       )}

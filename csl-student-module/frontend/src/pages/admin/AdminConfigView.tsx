@@ -8,6 +8,7 @@ import {
   updateAdminSection,
   deleteAdminSection,
   bulkDeleteAdminSections,
+  clearAdminSystemCache,
   type AdminAssessmentConfig,
   type AdminSection,
 } from '../../api/admin';
@@ -36,6 +37,24 @@ export function AdminConfigView() {
   const [sectionSaving, setSectionSaving] = useState(false);
   const [sectionError, setSectionError] = useState('');
   const [sectionSuccess, setSectionSuccess] = useState('');
+  const [cacheClearing, setCacheClearing] = useState(false);
+  const [cacheStatusMessage, setCacheStatusMessage] = useState('');
+
+  const handleClearCache = async () => {
+    if (!window.confirm('Are you sure you want to purge the platform cache?\n\nThis will invalidate in-memory cached statistics, college lists, and assessment summaries across all nodes.')) {
+      return;
+    }
+    setCacheClearing(true);
+    setCacheStatusMessage('');
+    try {
+      const res = await clearAdminSystemCache();
+      setCacheStatusMessage(`✓ Cache cleared successfully at ${new Date(res.timestamp).toLocaleTimeString()}`);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to clear cache.');
+    } finally {
+      setCacheClearing(false);
+    }
+  };
 
   const loadConfig = async () => {
     try {
@@ -293,7 +312,89 @@ export function AdminConfigView() {
           </p>
         </div>
 
-        {/* Action & Dirty Indicator */}
+        {/* ─── WORKSTREAM 10: CACHE ENGINE MANAGEMENT PANEL ───────────────── */}
+      <div
+        style={{
+          backgroundColor: '#FFFFFF',
+          borderRadius: '14px',
+          border: '1.5px solid #E2E8F0',
+          padding: '18px 22px',
+          marginBottom: '24px',
+          boxShadow: '0 2px 8px rgba(11, 46, 111, 0.04)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '16px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div
+            style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '10px',
+              backgroundColor: '#EFF6FF',
+              color: '#1D4ED8',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '20px',
+            }}
+          >
+            ⚡
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong style={{ fontSize: '15px', color: '#0B2E6F' }}>Platform Cache Engine</strong>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  backgroundColor: '#DCFCE7',
+                  color: '#166534',
+                  padding: '2px 8px',
+                  borderRadius: '9999px',
+                }}
+              >
+                Redis / LocMem Active
+              </span>
+            </div>
+            <p style={{ margin: '3px 0 0 0', fontSize: '12.5px', color: '#64748B' }}>
+              High-throughput caching for college directory, question summaries, and admin analytics.
+            </p>
+            {cacheStatusMessage && (
+              <span style={{ fontSize: '12px', color: '#16A34A', fontWeight: 700, display: 'block', marginTop: '4px' }}>
+                {cacheStatusMessage}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleClearCache}
+          disabled={cacheClearing}
+          style={{
+            padding: '9px 18px',
+            backgroundColor: '#F8FAFC',
+            color: '#0B2E6F',
+            border: '1.5px solid #CBD5E1',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 700,
+            cursor: cacheClearing ? 'not-allowed' : 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <span>🔄</span>
+          <span>{cacheClearing ? 'Purging Cache...' : 'Clear Platform Cache'}</span>
+        </button>
+      </div>
+
+      {/* Action & Dirty Indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {isDirty ? (
             <span

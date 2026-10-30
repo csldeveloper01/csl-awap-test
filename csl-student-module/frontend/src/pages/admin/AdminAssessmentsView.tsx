@@ -17,6 +17,9 @@ import {
   createAdminSection,
   uploadAdminAssessmentPdf,
   fetchAdminAssessmentPdfBlob,
+  getAdminAssessmentCandidates,
+  assignAdminAssessmentCandidates,
+  getAdminCandidates,
   type AdminAssessment,
   type AdminAssessmentDetail,
   type AdminCollege,
@@ -77,7 +80,12 @@ export function AdminAssessmentsView({
   const [closing, setClosing] = useState(false);
 
   // Detail tab state
-  const [detailTab, setDetailTab] = useState<'overview' | 'colleges' | 'audit'>('overview');
+  const [detailTab, setDetailTab] = useState<'overview' | 'colleges' | 'candidates' | 'audit'>('overview');
+    const [allCandidates, setAllCandidates] = useState<any[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [savingCandidates, setSavingCandidates] = useState(false);
+  const [candidateSearchQuery, setCandidateSearchQuery] = useState('');
+  const [selectedCandidateIdsForAssign, setSelectedCandidateIdsForAssign] = useState<string[]>([]);
   const [selectedCollegeIdsForAssign, setSelectedCollegeIdsForAssign] = useState<number[]>([]);
   const [savingColleges, setSavingColleges] = useState(false);
   const [collegeAssignError, setCollegeAssignError] = useState<string | null>(null);
@@ -225,6 +233,7 @@ export function AdminAssessmentsView({
         ? detail.eligible_colleges.map((c) => c.id)
         : [];
       setSelectedCollegeIdsForAssign(colIds);
+      fetchCandidatesForAssessment(assessmentId);
     } catch (err: any) {
       console.error('Failed to fetch assessment detail:', err);
       const status = err?.response?.status;
@@ -382,6 +391,36 @@ export function AdminAssessmentsView({
       fetchAssessments();
     } catch (err: any) {
       setActionMessage({ text: formatApiError(err, 'Failed to archive assessment.'), type: 'error' });
+    }
+  };
+
+  const fetchCandidatesForAssessment = async (assessmentId: string) => {
+    try {
+      setLoadingCandidates(true);
+      const [assignedRes, candidatesRes] = await Promise.all([
+        getAdminAssessmentCandidates(assessmentId),
+        getAdminCandidates(),
+      ]);
+            setSelectedCandidateIdsForAssign((assignedRes.candidates || []).map((c: any) => c.id));
+      setAllCandidates(candidatesRes || []);
+    } catch (err) {
+      console.error('Failed to load candidate assignments:', err);
+    } finally {
+      setLoadingCandidates(false);
+    }
+  };
+
+  const handleSaveCandidates = async () => {
+    if (!assessmentDetail) return;
+    setSavingCandidates(true);
+    try {
+      const res = await assignAdminAssessmentCandidates(assessmentDetail.id, selectedCandidateIdsForAssign);
+      setActionMessage({ text: res.message || 'Direct candidate eligibility updated successfully.', type: 'success' });
+      fetchCandidatesForAssessment(assessmentDetail.id);
+    } catch (err: any) {
+      setActionMessage({ text: formatApiError(err, 'Failed to update candidate assignments.'), type: 'error' });
+    } finally {
+      setSavingCandidates(false);
     }
   };
 
@@ -2590,6 +2629,24 @@ export function AdminAssessmentsView({
                 Assigned Colleges ({selectedCollegeIdsForAssign.length})
               </button>
               <button
+                onClick={() => {
+                  setDetailTab('candidates');
+                  if (assessmentDetail) fetchCandidatesForAssessment(assessmentDetail.id);
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  border: 'none',
+                  borderBottom: detailTab === 'candidates' ? '2px solid #0B2E6F' : '2px solid transparent',
+                  color: detailTab === 'candidates' ? '#0B2E6F' : '#64748B',
+                  background: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                Direct Candidates ({selectedCandidateIdsForAssign.length})
+              </button>
+              <button
                 onClick={() => setDetailTab('audit')}
                 style={{
                   padding: '8px 16px',
@@ -3194,6 +3251,180 @@ export function AdminAssessmentsView({
                 })()}
 
                 {/* 3. AUDIT TRAIL TAB */}
+                {detailTab === 'candidates' && (() => {
+                  const filteredCandidates = allCandidates.filter((cand) => {
+                    if (!candidateSearchQuery.trim()) return true;
+                    const q = candidateSearchQuery.toLowerCase();
+                    return (
+                      cand.full_name?.toLowerCase().includes(q) ||
+                      cand.register_number?.toLowerCase().includes(q) ||
+                      cand.email?.toLowerCase().includes(q) ||
+                      cand.college?.toLowerCase().includes(q)
+                    );
+                  });
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '12px',
+                          backgroundColor: '#F8FAFC',
+                          padding: '12px 16px',
+                          borderRadius: '10px',
+                          border: '1px solid #E2E8F0',
+                        }}
+                      >
+                        <div>
+                          <strong style={{ fontSize: '13.5px', color: '#0B2E6F' }}>
+                            Assessment-First Direct Candidate Eligibility (Phase 2.1)
+                          </strong>
+                          <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748B' }}>
+                            Select specific candidates directly eligible to take this assessment, independent of college affiliation.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveCandidates}
+                          disabled={savingCandidates}
+                          style={{
+                            padding: '8px 18px',
+                            backgroundColor: '#1455B8',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontWeight: 700,
+                            fontSize: '12.5px',
+                            cursor: savingCandidates ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {savingCandidates ? 'Saving...' : `Save Direct Candidates (${selectedCandidateIdsForAssign.length})`}
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          value={candidateSearchQuery}
+                          onChange={(e) => setCandidateSearchQuery(e.target.value)}
+                          placeholder="Search candidates by name, roll number, email, or institution..."
+                          style={{
+                            flex: 1,
+                            padding: '9px 14px',
+                            borderRadius: '8px',
+                            border: '1px solid #CBD5E1',
+                            fontSize: '13px',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const ids = filteredCandidates.map((c) => c.id);
+                            setSelectedCandidateIdsForAssign(Array.from(new Set([...selectedCandidateIdsForAssign, ...ids])));
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid #CBD5E1',
+                            backgroundColor: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Select All Visible
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCandidateIdsForAssign([])}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid #CBD5E1',
+                            backgroundColor: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Clear All
+                        </button>
+                      </div>
+
+                      {loadingCandidates ? (
+                        <div style={{ padding: '32px', textAlign: 'center', color: '#64748B' }}>
+                          Loading eligible candidate directory...
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            maxHeight: '380px',
+                            overflowY: 'auto',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: '8px',
+                          }}
+                        >
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
+                            <thead style={{ backgroundColor: '#F8FAFC', position: 'sticky', top: 0 }}>
+                              <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#475569' }}>
+                                <th style={{ padding: '10px 14px', width: '36px' }}></th>
+                                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Candidate</th>
+                                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Roll Number</th>
+                                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Institution</th>
+                                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Department</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredCandidates.map((cand) => {
+                                const isChecked = selectedCandidateIdsForAssign.includes(cand.id);
+                                return (
+                                  <tr
+                                    key={cand.id}
+                                    style={{
+                                      borderBottom: '1px solid #F1F5F9',
+                                      backgroundColor: isChecked ? '#EFF6FF' : 'transparent',
+                                    }}
+                                  >
+                                    <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                          setSelectedCandidateIdsForAssign((prev) =>
+                                            prev.includes(cand.id)
+                                              ? prev.filter((id) => id !== cand.id)
+                                              : [...prev, cand.id]
+                                          );
+                                        }}
+                                        style={{ cursor: 'pointer', accentColor: '#1455B8' }}
+                                      />
+                                    </td>
+                                    <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0B2E6F' }}>
+                                      {cand.full_name}
+                                    </td>
+                                    <td style={{ padding: '10px 14px', fontFamily: 'monospace' }}>
+                                      {cand.register_number}
+                                    </td>
+                                    <td style={{ padding: '10px 14px', color: '#475569' }}>
+                                      {cand.college}
+                                    </td>
+                                    <td style={{ padding: '10px 14px', color: '#64748B' }}>
+                                      {cand.department} ({cand.year_of_study || 'N/A'})
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {detailTab === 'audit' && (
                   <div>
                     {Array.isArray(assessmentDetail.audit_logs) && assessmentDetail.audit_logs.length > 0 ? (

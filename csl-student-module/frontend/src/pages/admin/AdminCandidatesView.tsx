@@ -6,6 +6,8 @@ import {
   toggleAdminCandidateStatus,
   deleteAdminCandidate,
   bulkDeleteAdminCandidates,
+  grantAdminAttemptRecovery,
+  reassignAdminCandidateAttempt,
   exportAdminCandidatesCSV,
   type AdminCandidate,
   type AdminCollege,
@@ -23,6 +25,17 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
   const [loading, setLoading] = useState(true);
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null);
   const [exportingCSV, setExportingCSV] = useState(false);
+  // Admin Recovery & Reassignment Dialog States (Phase 2.1)
+  const [showGrantRecoveryModal, setShowGrantRecoveryModal] = useState(false);
+  const [targetAttemptId, setTargetAttemptId] = useState('');
+  const [recoveryReason, setRecoveryReason] = useState('');
+  const [grantingRecovery, setGrantingRecovery] = useState(false);
+
+  const [showReassignModal, setShowReassignModal] = useState(false);
+  const [reassignReason, setReassignReason] = useState('');
+  const [reassignAssessmentId, setReassignAssessmentId] = useState('');
+  const [reassigning, setReassigning] = useState(false);
+
 
   // Bulk Selection & Deletion State
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -73,6 +86,54 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
       alert(message);
     } finally {
       setExportingCSV(false);
+    }
+  };
+
+  const handleGrantRecovery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoveryReason.trim()) {
+      alert('Mandatory reason is required to grant an emergency session recovery.');
+      return;
+    }
+    setGrantingRecovery(true);
+    try {
+      const res = await grantAdminAttemptRecovery(targetAttemptId, recoveryReason.trim());
+      alert(res.message);
+      setShowGrantRecoveryModal(false);
+      setRecoveryReason('');
+      if (selectedCandidate) {
+        handleSelectCandidate(selectedCandidate.id);
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to grant recovery.');
+    } finally {
+      setGrantingRecovery(false);
+    }
+  };
+
+  const handleReassignAttempt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCandidate) return;
+    if (!reassignReason.trim()) {
+      alert('Mandatory reason is required to authorize a candidate reassignment.');
+      return;
+    }
+    setReassigning(true);
+    try {
+      const res = await reassignAdminCandidateAttempt(
+        selectedCandidate.id,
+        reassignReason.trim(),
+        reassignAssessmentId || undefined
+      );
+      alert(res.message);
+      setShowReassignModal(false);
+      setReassignReason('');
+      handleSelectCandidate(selectedCandidate.id);
+      loadCandidates();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to authorize reassignment.');
+    } finally {
+      setReassigning(false);
     }
   };
 
@@ -680,9 +741,31 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 >
                   Candidate Profile
                 </span>
-                <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: '6px 0 2px 0' }}>
-                  {selectedCandidate.full_name}
-                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: '6px 0 2px 0' }}>
+                    {selectedCandidate.full_name}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReassignReason('');
+                      setShowReassignModal(true);
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      backgroundColor: '#EFF6FF',
+                      color: '#1D4ED8',
+                      border: '1px solid #BFDBFE',
+                      fontSize: '11.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                    title="Authorize a genuinely new attempt for this student (Phase 2.1)"
+                  >
+                    + Authorize New Attempt
+                  </button>
+                </div>
                 <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
                   {selectedCandidate.email} • {selectedCandidate.register_number}
                 </p>
@@ -796,33 +879,61 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                       </div>
                       <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>
                         Total Marks: {att.total_score} • Percentage: {att.percentage}% • Tab Switches: {att.tab_switch_count}
+                        {att.recovery_count > 0 && <span style={{ marginLeft: '8px', color: '#D97706', fontWeight: 700 }}>• Recoveries: {att.recovery_count}</span>}
+                        {att.admin_recovery_granted && <span style={{ marginLeft: '8px', color: '#16A34A', fontWeight: 700 }}>• Admin Recovery Granted</span>}
+                        {att.is_reassigned && <span style={{ marginLeft: '8px', color: '#6B7280', fontStyle: 'italic' }}>• (Reassigned)</span>}
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => {
-                        setSelectedCandidate(null);
-                        onReviewAttempt(att.id);
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '6px 14px',
-                        backgroundColor: '#1455B8',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span>Inspect Review</span>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 18 15 12 9 6"></polyline>
-                      </svg>
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      {att.state !== 'SUBMITTED' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetAttemptId(att.id);
+                            setRecoveryReason('');
+                            setShowGrantRecoveryModal(true);
+                          }}
+                          style={{
+                            padding: '6px 12px',
+                            backgroundColor: '#FEF3C7',
+                            color: '#92400E',
+                            border: '1px solid #FDE68A',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                          title="Grant 1 extra session recovery on this in-flight attempt"
+                        >
+                          Grant Recovery (+1)
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          setSelectedCandidate(null);
+                          onReviewAttempt(att.id);
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '6px 14px',
+                          backgroundColor: '#1455B8',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span>Inspect Review</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -852,6 +963,202 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
           </div>
         </div>
       )}
-    </div>
+          {/* ─── GRANT RECOVERY MODAL (PHASE 2.1) ────────────────────── */}
+      {showGrantRecoveryModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(11, 46, 111, 0.45)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 120,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '480px',
+              width: '100%',
+              backgroundColor: '#FFFFFF',
+              borderRadius: '14px',
+              padding: '24px',
+              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.2)',
+            }}
+          >
+            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+              Grant Emergency Recovery Allowance
+            </h3>
+            <p style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+              Authorizes +1 session recovery on this active attempt. The student can resume their current exam with preserved timer and responses. Mandatory audit reason required.
+            </p>
+            <form onSubmit={handleGrantRecovery}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                  Reason for Granting Recovery *
+                </label>
+                <textarea
+                  value={recoveryReason}
+                  onChange={(e) => setRecoveryReason(e.target.value)}
+                  required
+                  placeholder="e.g. Campus power disruption, network reconnect approved by lab proctor..."
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '13px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowGrantRecoveryModal(false)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    backgroundColor: '#FFFFFF',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={grantingRecovery || !recoveryReason.trim()}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: '#D97706',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: grantingRecovery ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {grantingRecovery ? 'Granting...' : 'Grant Recovery'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── REASSIGN CANDIDATE ATTEMPT MODAL (PHASE 2.1) ────────────── */}
+      {showReassignModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(11, 46, 111, 0.45)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 120,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '480px',
+              width: '100%',
+              backgroundColor: '#FFFFFF',
+              borderRadius: '14px',
+              padding: '24px',
+              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.2)',
+            }}
+          >
+            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+              Authorize Reassignment / New Attempt
+            </h3>
+            <p style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+              Creates a genuinely new assessment attempt for candidate <strong>{selectedCandidate?.full_name}</strong>. Previous attempts are preserved for audit records and marked as reassigned.
+            </p>
+                        <form onSubmit={handleReassignAttempt}>
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                  Target Assessment (Optional - Leave blank for default active)
+                </label>
+                <input
+                  type="text"
+                  value={reassignAssessmentId}
+                  onChange={(e) => setReassignAssessmentId(e.target.value)}
+                  placeholder="Optional Assessment UUID..."
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '13px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                  Mandatory Reassignment Reason *
+                </label>
+                <textarea
+                  value={reassignReason}
+                  onChange={(e) => setReassignReason(e.target.value)}
+                  required
+                  placeholder="e.g. Device hardware crash verified by proctor, sanctioned retake..."
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '13px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowReassignModal(false)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    backgroundColor: '#FFFFFF',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reassigning || !reassignReason.trim()}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: '#1D4ED8',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: reassigning ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {reassigning ? 'Authorizing...' : 'Authorize New Attempt'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+</div>
   );
 }

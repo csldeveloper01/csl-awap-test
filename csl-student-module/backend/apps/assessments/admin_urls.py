@@ -4,6 +4,7 @@ from .admin_views import (
     AdminStatsView,
     AdminCollegeListView,
     AdminCollegeMergeView,
+    AdminCollegeImportDirectoryView,
     AdminCollegeDetailView,
     AdminCollegeToggleStatusView,
     AdminCollegeBulkDeleteView,
@@ -16,6 +17,7 @@ from .admin_views import (
     AdminAssessmentCloseView,
     AdminAssessmentArchiveView,
     AdminAssessmentAssignCollegesView,
+    AdminAssessmentAssignCandidatesView,
     AdminAssessmentAssignQuestionsView,
     AdminAssessmentReleaseResultsView,
     AdminAssessmentAuditLogsView,
@@ -30,6 +32,8 @@ from .admin_views import (
     AdminQuestionDetailView,
     AdminQuestionToggleView,
     AdminQuestionImportCSVView,
+    AdminQuestionArchiveView,
+    AdminQuestionImportPreviewView,
     AdminQuestionBulkUpdateView,
     AdminQuestionBulkDeleteView,
     AdminSectionListCreateView,
@@ -39,6 +43,8 @@ from .admin_views import (
     AdminLiveAttemptsView,
     AdminAttemptReviewView,
     AdminAttemptRevokeView,
+    AdminAttemptGrantRecoveryView,
+    AdminCandidateReassignAttemptView,
     AdminAttemptBulkDeleteView,
     AdminResultsView,
     AdminIntegrityEventsView,
@@ -47,6 +53,7 @@ from .admin_views import (
     AdminGlobalAuditLogsView,
     AdminUserManagementView,
     AdminUserDetailView,
+    AdminClearCacheView,
 )
 
 urlpatterns = [
@@ -54,6 +61,7 @@ urlpatterns = [
     path("stats/", AdminStatsView.as_view(), name="admin-stats"),
     path("users/", AdminUserManagementView.as_view(), name="admin-users"),
     path("users/<int:user_id>/", AdminUserDetailView.as_view(), name="admin-user-detail"),
+    path("system/clear-cache/", AdminClearCacheView.as_view(), name="admin-system-clear-cache"),
     
     # Colleges
     path("colleges/", AdminCollegeListView.as_view(), name="admin-colleges"),
@@ -62,6 +70,7 @@ urlpatterns = [
     path("colleges/<int:pk>/toggle-status/", AdminCollegeToggleStatusView.as_view(), name="admin-college-toggle-status"),
     path("colleges/<int:pk>/import-candidates/", AdminCollegeImportCandidatesView.as_view(), name="admin-college-import-candidates"),
     path("colleges/<int:pk>/merge/", AdminCollegeMergeView.as_view(), name="admin-college-merge"),
+    path("colleges/import-directory/", AdminCollegeImportDirectoryView.as_view(), name="admin-college-import-directory"),
 
     # Assessments
     path("assessments/", AdminAssessmentListView.as_view(), name="admin-assessments"),
@@ -72,6 +81,7 @@ urlpatterns = [
     path("assessments/<uuid:pk>/close/", AdminAssessmentCloseView.as_view(), name="admin-assessment-close"),
     path("assessments/<uuid:pk>/archive/", AdminAssessmentArchiveView.as_view(), name="admin-assessment-archive"),
     path("assessments/<uuid:pk>/assign-colleges/", AdminAssessmentAssignCollegesView.as_view(), name="admin-assessment-assign-colleges"),
+    path("assessments/<uuid:pk>/assign-candidates/", AdminAssessmentAssignCandidatesView.as_view(), name="admin-assessment-assign-candidates"),
     path("assessments/<uuid:pk>/assign-questions/", AdminAssessmentAssignQuestionsView.as_view(), name="admin-assessment-assign-questions"),
     path("assessments/<uuid:pk>/release-results/", AdminAssessmentReleaseResultsView.as_view(), name="admin-assessment-release-results"),
     path("assessments/<uuid:pk>/audit-logs/", AdminAssessmentAuditLogsView.as_view(), name="admin-assessment-audit-logs"),
@@ -83,12 +93,15 @@ urlpatterns = [
     path("candidates/export-csv/", AdminCandidateExportCSVView.as_view(), name="admin-candidates-export-csv"),
     path("candidates/bulk-delete/", AdminCandidateBulkDeleteView.as_view(), name="admin-candidates-bulk-delete"),
     path("candidates/<uuid:candidate_id>/", AdminCandidateDetailView.as_view(), name="admin-candidate-detail"),
+    path("candidates/<uuid:pk>/reassign/", AdminCandidateReassignAttemptView.as_view(), name="admin-candidate-reassign"),
     path("candidates/<uuid:candidate_id>/toggle-status/", AdminCandidateToggleStatusView.as_view(), name="admin-candidate-toggle-status"),
 
     # Questions
     path("questions/", AdminQuestionListView.as_view(), name="admin-questions"),
     path("questions/<int:pk>/", AdminQuestionDetailView.as_view(), name="admin-question-detail"),
     path("questions/<int:pk>/toggle/", AdminQuestionToggleView.as_view(), name="admin-question-toggle"),
+    path("questions/<int:pk>/archive/", AdminQuestionArchiveView.as_view(), name="admin-question-archive"),
+    path("questions/import-preview/", AdminQuestionImportPreviewView.as_view(), name="admin-question-import-preview"),
     path("questions/bulk-update/", AdminQuestionBulkUpdateView.as_view(), name="admin-questions-bulk-update"),
     path("questions/bulk-delete/", AdminQuestionBulkDeleteView.as_view(), name="admin-questions-bulk-delete"),
     path("questions/import-csv/", AdminQuestionImportCSVView.as_view(), name="admin-question-import-csv"),
@@ -106,6 +119,7 @@ urlpatterns = [
     path("attempts/bulk-delete/", AdminAttemptBulkDeleteView.as_view(), name="admin-attempts-bulk-delete"),
     path("attempts/<uuid:attempt_id>/review/", AdminAttemptReviewView.as_view(), name="admin-attempt-review"),
     path("attempts/<uuid:pk>/revoke/", AdminAttemptRevokeView.as_view(), name="admin-attempt-revoke"),
+    path("attempts/<uuid:pk>/grant-recovery/", AdminAttemptGrantRecoveryView.as_view(), name="admin-attempt-grant-recovery"),
     path("results/", AdminResultsView.as_view(), name="admin-results"),
     path("integrity-events/", AdminIntegrityEventsView.as_view(), name="admin-integrity-events"),
     path("integrity-events/bulk-delete/", AdminIntegrityEventBulkDeleteView.as_view(), name="admin-integrity-events-bulk-delete"),

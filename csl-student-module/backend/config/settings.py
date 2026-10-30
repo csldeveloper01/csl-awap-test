@@ -313,3 +313,27 @@ LOGGING = {
 # Legacy Django Admin HTTP routing is permanently retired.
 # The active administration portal is the React CSL Admin Portal (/csl-admin backed by /api/csl-admin/).
 DJANGO_ADMIN_ENABLED = False
+
+
+# ---------------------------------------------------------------------------
+# Caching Configuration (Workstream 10)
+# Supports Redis if REDIS_URL is configured; gracefully falls back to LocMemCache.
+# ---------------------------------------------------------------------------
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "TIMEOUT": 300,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "csl-locmem-cache",
+            "TIMEOUT": 300,
+        }
+    }

@@ -100,6 +100,8 @@ class QuestionBank(models.Model):
         help_text="The single correct option key (A, B, C, or D)",
     )
     explanation = models.TextField(blank=True, default="", help_text="Optional explanation for admin review")
+    marks = models.PositiveIntegerField(default=1, help_text="Default marks awarded for this question")
+    is_archived = models.BooleanField(default=False, db_index=True, help_text="Soft-archived from active selection pools")
     
     is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -113,6 +115,11 @@ class QuestionBank(models.Model):
             models.Index(fields=["section", "is_active"]),
             models.Index(fields=["section", "difficulty", "is_active"]),
         ]
+
+    @property
+    def can_be_deleted(self) -> bool:
+        """Safe dependency rule: cannot be deleted if referenced in historical attempts."""
+        return not self.attempt_snapshots.exists()
 
     def __str__(self):
         return f"[{self.section_type}] ({self.difficulty}): {self.prompt[:60]}"
@@ -179,6 +186,11 @@ class College(models.Model):
     contact_email = models.EmailField(blank=True, default="", help_text="Official institutional contact email")
     contact_phone = models.CharField(max_length=30, blank=True, default="", help_text="Contact phone number")
     admin_contact_name = models.CharField(max_length=150, blank=True, default="", help_text="TPO or faculty representative name")
+    district = models.CharField(max_length=100, blank=True, default="", db_index=True, help_text="District, e.g. Coimbatore, Chennai")
+    city = models.CharField(max_length=100, blank=True, default="", help_text="City or Town")
+    institution_type = models.CharField(max_length=50, blank=True, default="ENGINEERING", help_text="e.g. ENGINEERING, ARTS_SCIENCE, POLYTECHNIC, UNIVERSITY")
+    affiliation = models.CharField(max_length=150, blank=True, default="", help_text="Affiliated university or body, e.g. Anna University")
+    website = models.URLField(max_length=255, blank=True, default="", help_text="Official institutional website")
     normalized_name = models.CharField(max_length=200, blank=True, default="", db_index=True, help_text="Canonical normalized name for deduplication")
     aliases = models.JSONField(blank=True, default=list, help_text="List of alternate names or abbreviations")
     is_verified = models.BooleanField(default=True, db_index=True, help_text="Verified institutional record vs student/provisional entry")
@@ -260,6 +272,14 @@ class Assessment(models.Model):
     # Proctoring thresholds
     max_tab_switches_warning = models.PositiveIntegerField(default=2, help_text="Permitted tab switch warnings (3rd switch auto-submits)")
     auto_submit_on_tab_limit = models.BooleanField(default=True, help_text="Auto-submit attempt when tab limit is breached")
+
+    # Candidate eligibility (independent of colleges)
+    eligible_candidates = models.ManyToManyField(
+        "Candidate",
+        blank=True,
+        related_name="directly_assigned_assessments",
+        help_text="Candidates directly eligible for this assessment",
+    )
 
     # Scheduling & Timing
     scheduled_start_time = models.DateTimeField(null=True, blank=True, help_text="Optional scheduled opening time")
@@ -570,6 +590,13 @@ class AssessmentAttempt(models.Model):
         help_text="Maximum cumulative grace extension allowed for genuine network outages",
     )
 
+    # Student Recovery & Admin Overrides
+    recovery_count = models.PositiveIntegerField(default=0, help_text="Count of successful accidental-exit recoveries used by student (max 1 self-service)")
+    admin_recovery_granted = models.PositiveIntegerField(default=0, help_text="Count of additional recoveries granted by an administrator")
+    last_recovery_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp of most recent recovery execution")
+    recovery_metadata = models.JSONField(default=dict, blank=True, help_text="Session/device recovery audit metadata")
+    is_reassigned = models.BooleanField(default=False, help_text="True if candidate was granted a separate new attempt by an admin")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -805,6 +832,13 @@ class AssessmentAuditLog(models.Model):
         PDF_DELETED = "PDF_DELETED", "Assessment PDF Deleted"
         ATTEMPT_REVOKED = "ATTEMPT_REVOKED", "Attempt Revoked"
         COLLEGE_MERGED = "COLLEGE_MERGED", "College Merged"
+        STUDENT_RECOVERY_USED = "STUDENT_RECOVERY_USED", "Student Self-Service Recovery Used"
+        ADMIN_RECOVERY_GRANTED = "ADMIN_RECOVERY_GRANTED", "Admin Granted Additional Attempt Recovery"
+        CANDIDATE_REASSIGNED_NEW_ATTEMPT = "CANDIDATE_REASSIGNED_NEW_ATTEMPT", "Admin Authorized New Candidate Attempt"
+        CANDIDATE_ASSIGNED_ASSESSMENT = "CANDIDATE_ASSIGNED_ASSESSMENT", "Candidate Assigned to Assessment"
+        QUESTION_ARCHIVED = "QUESTION_ARCHIVED", "Question Bank Item Archived"
+        QUESTION_UNARCHIVED = "QUESTION_UNARCHIVED", "Question Bank Item Unarchived"
+        QUESTION_DELETED = "QUESTION_DELETED", "Question Bank Item Deleted"
 
     action = models.CharField(max_length=40, choices=Action.choices, db_index=True)
     entity_type = models.CharField(max_length=30, db_index=True, help_text="ASSESSMENT, COLLEGE, CANDIDATE")

@@ -108,6 +108,135 @@ class CandidateEligibleAssessmentsView(APIView):
         })
 
 
+
+class StudentAttemptRecoveryView(APIView):
+    """
+    Step 4.5: Student Self-Service One-Time Accidental-Exit Recovery.
+    Requires registration number + additional verification factor (email or phone).
+    Enforces atomic recovery:
+    - Attempt must be IN_PROGRESS or CREATED.
+    - Attempt must not be expired past disconnection grace.
+    - Attempt must not be in a TERMINAL_STATE (SUBMITTED, TIMED_OUT, REVOKED, etc.).
+    - self-service recovery_count < (1 + admin_recovery_granted).
+    - Increments recovery_count atomically and updates session metadata.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        reg_no = (request.data.get("register_number") or "").strip().upper()
+        verification_val = (request.data.get("verification_factor") or request.data.get("email") or request.data.get("phone_number") or "").strip().lower()
+        attempt_id = request.data.get("attempt_id")
+
+        if not reg_no or not verification_val:
+            return Response(
+                {"detail": "Register number and verification factor (email or phone) are both required for recovery."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Match candidate
+        from django.db.models import Q
+        candidate = Candidate.objects.filter(
+            register_number__iexact=reg_no
+        ).filter(
+            Q(email__iexact=verification_val) | Q(phone_number__iexact=verification_val)
+        ).first()
+
+        if not candidate:
+            return Response(
+                {"detail": "Invalid candidate verification credentials. Please check your registration number and email/phone."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        with transaction.atomic():
+            attempts_qs = AssessmentAttempt.objects.select_for_update().filter(candidate=candidate)
+            if attempt_id:
+                try:
+                    attempt = attempts_qs.filter(id=attempt_id).first()
+                except Exception:
+                    attempt = None
+            else:
+                # Find latest active or recoverable attempt
+                attempt = attempts_qs.filter(
+                    state__in=[AssessmentAttempt.State.IN_PROGRESS, AssessmentAttempt.State.CREATED]
+                ).order_by("-created_at").first()
+
+            if not attempt:
+                return Response(
+                    {"detail": "No recoverable active attempt found for this candidate. Completed or submitted attempts cannot be recovered."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Check terminal state
+            if attempt.state in AssessmentAttempt.TERMINAL_STATES:
+                return Response(
+                    {"detail": f"Attempt is in terminal state '{attempt.state}' and cannot be resumed or reopened."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Check expiration
+            if attempt.is_expired():
+                attempt.transition_to(AssessmentAttempt.State.TIMED_OUT, save=True, reason="Expired prior to recovery.")
+                return Response(
+                    {"detail": "Attempt duration and disconnection grace period have expired."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Check limit: exactly 1 self-service recovery, plus any admin_recovery_granted
+            allowed_recoveries = 1 + attempt.admin_recovery_granted
+            if attempt.recovery_count >= allowed_recoveries:
+                return Response(
+                    {
+                        "detail": f"Maximum self-service recoveries ({allowed_recoveries}) exhausted for this attempt. Please contact test administrator.",
+                        "recovery_exhausted": True,
+                        "recovery_count": attempt.recovery_count,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            now = timezone.now()
+            attempt.recovery_count += 1
+            attempt.last_recovery_at = now
+            meta = attempt.recovery_metadata or {}
+            meta[f"recovery_{attempt.recovery_count}"] = {
+                "timestamp": now.isoformat(),
+                "ip": request.META.get("REMOTE_ADDR"),
+                "user_agent": request.META.get("HTTP_USER_AGENT", "")[:150],
+                "type": "STUDENT_SELF_SERVICE",
+            }
+            attempt.recovery_metadata = meta
+
+            # Resume if paused
+            if attempt.is_paused:
+                attempt.resume_attempt(at_time=now)
+            else:
+                attempt.last_heartbeat = now
+                attempt.save(update_fields=["recovery_count", "last_recovery_at", "recovery_metadata", "last_heartbeat", "updated_at"])
+
+            # Create integrity telemetry event
+            IntegrityEvent.objects.create(
+                attempt=attempt,
+                event_type=IntegrityEvent.EventType.RECONNECTED,
+                metadata={"recovery_number": attempt.recovery_count, "channel": "SELF_SERVICE_RECOVERY"},
+            )
+
+            token = generate_candidate_token(str(candidate.id), str(attempt.id))
+
+        return Response({
+            "message": "Attempt successfully recovered.",
+            "attempt_id": str(attempt.id),
+            "state": attempt.state,
+            "recovery_count": attempt.recovery_count,
+            "remaining_recoveries": max(0, allowed_recoveries - attempt.recovery_count),
+            "token": token,
+            "assessment": {
+                "id": str(attempt.assessment.id) if attempt.assessment else None,
+                "title": attempt.assessment.title if attempt.assessment else (attempt.config.title if attempt.config else ""),
+                "delivery_mode": attempt.assessment.delivery_mode if attempt.assessment else "MCQ",
+                "remaining_seconds": attempt.get_remaining_seconds(),
+            },
+        })
+
+
 class CandidateRegisterView(APIView):
     """
     Step 1: Student opens assessment portal, enters academic & identity details.

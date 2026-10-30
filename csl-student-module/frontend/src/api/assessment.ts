@@ -350,3 +350,45 @@ export const fetchAttemptPdfBlob = async (attemptId: string): Promise<Blob> => {
   });
   return res.data;
 };
+
+export interface RecoverAttemptPayload {
+  register_number: string;
+  verification_factor: string;
+  attempt_id?: string;
+}
+
+export interface RecoverAttemptResponse {
+  message: string;
+  attempt_id: string;
+  token: string;
+  remaining_seconds: number;
+  candidate: {
+    id: string;
+    full_name: string;
+    register_number: string;
+    college: string;
+    department: string;
+    year_of_study: string;
+  };
+  assessment: {
+    id: string;
+    code: string;
+    title: string;
+    duration_minutes: number;
+    total_marks: number;
+    delivery_mode: string;
+  };
+  recovery_count: number;
+  max_self_recoveries: number;
+}
+
+export const recoverStudentAttempt = async (
+  payload: RecoverAttemptPayload
+): Promise<RecoverAttemptResponse> => {
+  const res = await assessmentApi.post<RecoverAttemptResponse>('/recover/', payload);
+  if (res.data.token) {
+    sessionStorage.setItem('csl_assessment_token', res.data.token);
+    localStorage.setItem('csl_assessment_token', res.data.token);
+  }
+  return res.data;
+};

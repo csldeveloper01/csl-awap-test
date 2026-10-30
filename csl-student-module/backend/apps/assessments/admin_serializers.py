@@ -103,9 +103,17 @@ class AdminCollegeListSerializer(serializers.ModelSerializer):
             "code",
             "address",
             "location",
+            "district",
+            "city",
+            "institution_type",
+            "affiliation",
+            "website",
             "contact_email",
             "contact_phone",
             "admin_contact_name",
+            "is_verified",
+            "normalized_name",
+            "aliases",
             "is_active",
             "created_at",
             "updated_at",
@@ -136,9 +144,16 @@ class AdminCollegeCreateUpdateSerializer(serializers.ModelSerializer):
             "code",
             "address",
             "location",
+            "district",
+            "city",
+            "institution_type",
+            "affiliation",
+            "website",
             "contact_email",
             "contact_phone",
             "admin_contact_name",
+            "is_verified",
+            "aliases",
             "is_active",
         ]
 
@@ -215,6 +230,7 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
             "updated_at",
             "eligible_colleges",
             "eligible_colleges_count",
+            "eligible_candidates_count",
             "attempts_count",
             "in_progress_count",
             "submitted_count",
@@ -232,6 +248,7 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
     pdf_filename = serializers.SerializerMethodField()
     pdf_file_size = serializers.SerializerMethodField()
     pdf_uploaded_at = serializers.SerializerMethodField()
+    eligible_candidates_count = serializers.SerializerMethodField()
 
     def get_pdf_filename(self, obj):
         try:
@@ -307,6 +324,9 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
     def get_eligible_colleges_count(self, obj):
         return obj.eligible_colleges.count()
 
+    def get_eligible_candidates_count(self, obj):
+        return obj.eligible_candidates.count()
+
     def get_attempts_count(self, obj):
         return obj.attempts.count()
 
@@ -327,6 +347,11 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
 class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
     eligible_college_ids = serializers.ListField(
         child=serializers.IntegerField(),
+        required=False,
+        write_only=True,
+    )
+    eligible_candidate_ids = serializers.ListField(
+        child=serializers.CharField(),
         required=False,
         write_only=True,
     )
@@ -367,6 +392,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "scheduled_end_time",
             "close_policy",
             "eligible_college_ids",
+            "eligible_candidate_ids",
             "sections",
         ]
 
@@ -560,6 +586,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         from .services import log_assessment_audit
 
         college_ids = validated_data.pop("eligible_college_ids", None)
+        candidate_ids = validated_data.pop("eligible_candidate_ids", None)
         sections_data = self.initial_data.get("sections", None)
         validated_data.pop("sections", None)
         pdf_file = validated_data.pop("pdf_file", None)
@@ -568,6 +595,9 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         if college_ids is not None:
             colleges = College.objects.filter(id__in=college_ids)
             assessment.eligible_colleges.set(colleges)
+        if candidate_ids is not None:
+            cands = Candidate.objects.filter(id__in=candidate_ids)
+            assessment.eligible_candidates.set(cands)
         if sections_data and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
             self._sync_sections(assessment, sections_data)
 
@@ -627,6 +657,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         from .services import log_assessment_audit
 
         college_ids = validated_data.pop("eligible_college_ids", None)
+        candidate_ids = validated_data.pop("eligible_candidate_ids", None)
         sections_data = self.initial_data.get("sections", None)
         validated_data.pop("sections", None)
         pdf_file = validated_data.pop("pdf_file", None)
@@ -635,6 +666,9 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         if college_ids is not None:
             colleges = College.objects.filter(id__in=college_ids)
             assessment.eligible_colleges.set(colleges)
+        if candidate_ids is not None:
+            cands = Candidate.objects.filter(id__in=candidate_ids)
+            assessment.eligible_candidates.set(cands)
         if sections_data is not None and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
             self._sync_sections(assessment, sections_data)
 
@@ -874,6 +908,10 @@ class AdminCandidateAttemptItemSerializer(serializers.ModelSerializer):
             "fullscreen_exit_count",
             "is_flagged",
             "flag_reason",
+            "recovery_count",
+            "admin_recovery_granted",
+            "last_recovery_at",
+            "is_reassigned",
             "created_at",
         ]
 
@@ -927,10 +965,12 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "prompt",
+            "section_id",
             "section_type",
             "section_name",
             "category",
             "difficulty",
+            "marks",
             "assessment_type",
             "option_a",
             "option_b",
@@ -939,12 +979,17 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             "correct_option",
             "explanation",
             "is_active",
+            "is_archived",
+            "can_be_deleted",
             "created_at",
             "updated_at",
             "assigned_assessments",
             "assessment_id",
             "assessment_title",
         ]
+
+    section_id = serializers.IntegerField(source="section.id", read_only=True)
+    can_be_deleted = serializers.BooleanField(read_only=True)
 
     def _get_assessments(self, obj):
         if not hasattr(obj, "_cached_assigned_assessments"):

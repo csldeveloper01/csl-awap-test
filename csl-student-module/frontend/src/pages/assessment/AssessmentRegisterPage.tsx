@@ -5,6 +5,7 @@ import {
   registerCandidate,
   getStudentColleges,
   getCandidateAssessments,
+  recoverStudentAttempt,
   type RegistrationPayload,
   type CollegeOption,
   type CandidateAssessmentItem,
@@ -117,7 +118,11 @@ export function AssessmentRegisterPage() {
   const [loading, setLoading] = useState<boolean>(false);
 
   // Flow steps: 'register' | 'select_assessment' | 'resume_attempt' | 'already_completed'
-  const [step, setStep] = useState<'register' | 'select_assessment' | 'resume_attempt' | 'already_completed'>('register');
+  const [step, setStep] = useState<'register' | 'select_assessment' | 'resume_attempt' | 'already_completed' | 'recover'>('register');
+  const [recoveryRegNumber, setRecoveryRegNumber] = useState('');
+  const [recoveryVerification, setRecoveryVerification] = useState('');
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   const [resumableAttempt, setResumableAttempt] = useState<RegisterResponse | null>(null);
   const [candidateInfo, setCandidateInfo] = useState<{
     id: string;
@@ -334,10 +339,206 @@ export function AssessmentRegisterPage() {
     }
   };
 
+  const handleRecoverySubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setRecoveryError('');
+    if (!recoveryRegNumber.trim() || !recoveryVerification.trim()) {
+      setRecoveryError('Both your Register Number and Verification Factor (Email or Mobile Phone) are required.');
+      return;
+    }
+    setRecoveryLoading(true);
+    try {
+      const res = await recoverStudentAttempt({
+        register_number: recoveryRegNumber.trim(),
+        verification_factor: recoveryVerification.trim(),
+      });
+      sessionStorage.setItem('csl_assessment_token', res.token);
+      localStorage.setItem('csl_assessment_token', res.token);
+      sessionStorage.setItem('csl_attempt_id', res.attempt_id);
+      navigate(`/assessment/exam?attempt_id=${res.attempt_id}`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Recovery failed. Please check your credentials or contact the assessment proctor.';
+      setRecoveryError(msg);
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
   const handleSelectAssessment = (assessment: CandidateAssessmentItem) => {
     sessionStorage.setItem('csl_assessment_id', assessment.id);
     navigate('/assessment/instructions');
   };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PHASE 2.1 STUDENT EMERGENCY RECOVERY VIEW (WORKSTREAM 4)
+  // ─────────────────────────────────────────────────────────────────────────────
+  if (step === 'recover') {
+    return (
+      <div
+        style={{
+          width: '100%',
+          minHeight: '100vh',
+          backgroundImage: `url(${backgroundImage})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          boxSizing: 'border-box',
+          padding: '24px 16px',
+          fontFamily: "'Manrope', 'Plus Jakarta Sans', system-ui, sans-serif",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '500px',
+            width: '100%',
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            borderRadius: '20px',
+            boxShadow: '0 25px 60px -15px rgba(11, 46, 111, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.85)',
+            padding: '36px 36px 32px',
+            margin: '16px 48px',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '20px' }}>
+            <img src={cslTypographyLogo} alt="CSL Creator Space Lab" style={{ height: '30px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+
+          <div style={{ marginBottom: '14px' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: '#FEF3C7',
+                border: '1px solid #FCD34D',
+                color: '#92400E',
+                padding: '4px 12px',
+                borderRadius: '12px',
+                fontSize: '11.5px',
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+              }}
+            >
+              Emergency Session Recovery
+            </span>
+          </div>
+
+          <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+            Recover In-Flight Attempt
+          </h2>
+          <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5, margin: '0 0 20px 0' }}>
+            If your exam was interrupted by network loss, power outage, or accidental closure, verify your identity to restore your active attempt and saved answers.
+          </p>
+
+          {recoveryError && (
+            <div
+              style={{
+                backgroundColor: '#FEE2E2',
+                border: '1px solid #FECACA',
+                color: '#991B1B',
+                padding: '12px',
+                borderRadius: '8px',
+                fontSize: '12.5px',
+                marginBottom: '16px',
+              }}
+            >
+              <strong>Recovery Notice:</strong> {recoveryError}
+            </div>
+          )}
+
+          <form onSubmit={handleRecoverySubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                Register / Roll Number *
+              </label>
+              <input
+                type="text"
+                value={recoveryRegNumber}
+                onChange={(e) => setRecoveryRegNumber(e.target.value)}
+                placeholder="e.g. 910021104001"
+                required
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #CBD5E1',
+                  fontSize: '13.5px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                Verification Factor (Email or Mobile Phone) *
+              </label>
+              <input
+                type="text"
+                value={recoveryVerification}
+                onChange={(e) => setRecoveryVerification(e.target.value)}
+                placeholder="Enter registered college email or 10-digit mobile phone"
+                required
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #CBD5E1',
+                  fontSize: '13.5px',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+                Self-service recovery is limited to 1 time per attempt. Additional recoveries require admin approval.
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              disabled={recoveryLoading}
+              style={{
+                marginTop: '8px',
+                padding: '12px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: recoveryLoading ? '#94A3B8' : '#1455B8',
+                color: '#FFFFFF',
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: recoveryLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {recoveryLoading ? 'Verifying & Restoring Session...' : 'Restore Examination Session →'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setRecoveryError('');
+                setStep('register');
+              }}
+              style={{
+                padding: '8px',
+                background: 'none',
+                border: 'none',
+                color: '#64748B',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              ← Back to Registration
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // RESUME ASSESSMENT CONFIRMATION VIEW
@@ -1132,6 +1333,44 @@ export function AssessmentRegisterPage() {
             <strong>⚠️ Registration Notice:</strong> {error}
           </div>
         )}
+
+        {/* Emergency Session Recovery Banner (Phase 2.1) */}
+        <div
+          style={{
+            backgroundColor: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: '10px',
+            padding: '10px 14px',
+            marginBottom: '16px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '12.5px',
+          }}
+        >
+          <div style={{ color: '#1E40AF' }}>
+            <strong>Accidentally closed or lost connection?</strong>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setRecoveryError('');
+              setStep('recover');
+            }}
+            style={{
+              padding: '4px 10px',
+              backgroundColor: '#1D4ED8',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '11.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Recover Session →
+          </button>
+        </div>
 
         <form onSubmit={handleSubmit} noValidate style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px' }}>
           <div>
