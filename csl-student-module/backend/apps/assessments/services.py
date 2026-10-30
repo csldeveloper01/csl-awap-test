@@ -731,23 +731,33 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
             "detail": f"Assessment '{assessment.title}' is currently {assessment.status.lower()} and not accepting new attempts."
         })
 
-    # 4. College eligibility check
-    if locked_candidate.college_ref:
-        if (
-            hasattr(assessment, "_prefetched_objects_cache")
-            and "eligible_colleges" in assessment._prefetched_objects_cache
-        ):
-            is_enrolled = any(c.id == locked_candidate.college_ref_id for c in assessment.eligible_colleges.all())
-        else:
-            is_enrolled = assessment.eligible_colleges.filter(id=locked_candidate.college_ref_id).exists()
+    # 4. Assessment Eligibility Check:
+    # Supports direct candidate assignment, college assignment, or unrestricted open-to-all
+    has_restricted_colleges = assessment.eligible_colleges.exists()
+    has_restricted_candidates = assessment.eligible_candidates.exists()
 
-        if not is_enrolled:
-            if assessment.code == "CSL-INITIAL-01":
-                assessment.eligible_colleges.add(locked_candidate.college_ref)
-            else:
-                raise ValidationError({
-                    "detail": f"Your institution ({locked_candidate.college_ref.name}) is not enrolled in '{assessment.title}'."
-                })
+    is_directly_eligible = (
+        assessment.eligible_candidates.filter(id=locked_candidate.id).exists()
+        if has_restricted_candidates
+        else False
+    )
+    is_college_eligible = (
+        bool(locked_candidate.college_ref and assessment.eligible_colleges.filter(id=locked_candidate.college_ref_id).exists())
+        if has_restricted_colleges
+        else False
+    )
+    is_open_to_all = (not has_restricted_colleges) and (not has_restricted_candidates)
+
+    if not (is_directly_eligible or is_college_eligible or is_open_to_all):
+        if has_restricted_colleges and not has_restricted_candidates:
+            inst_name = locked_candidate.college_ref.name if locked_candidate.college_ref else "Your institution"
+            raise ValidationError({
+                "detail": f"{inst_name} is not enrolled in '{assessment.title}'."
+            })
+        else:
+            raise ValidationError({
+                "detail": f"You are not eligible to attempt '{assessment.title}'."
+            })
 
     # 5 & 6. Attempt checks: fetch existing attempts for this candidate & assessment in 1 query
     attempts = list(

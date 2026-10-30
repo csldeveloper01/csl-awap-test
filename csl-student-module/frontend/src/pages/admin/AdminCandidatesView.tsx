@@ -886,7 +886,7 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                     </div>
 
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      {att.state !== 'SUBMITTED' && (
+                      {(att.state === 'IN_PROGRESS' || att.state === 'CREATED') && (
                         <button
                           type="button"
                           onClick={() => {

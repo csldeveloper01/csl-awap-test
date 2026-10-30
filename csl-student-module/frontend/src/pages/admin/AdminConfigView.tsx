@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
+import { queryClient } from '../../main';
 import {
   getAdminConfig,
   updateAdminConfig,
@@ -48,6 +49,7 @@ export function AdminConfigView() {
     setCacheStatusMessage('');
     try {
       const res = await clearAdminSystemCache();
+      queryClient.invalidateQueries();
       setCacheStatusMessage(`✓ Cache cleared successfully at ${new Date(res.timestamp).toLocaleTimeString()}`);
     } catch (err: any) {
       alert(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to clear cache.');

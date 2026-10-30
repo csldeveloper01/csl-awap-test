@@ -68,6 +68,8 @@ export interface AdminCollege {
   contact_email?: string;
   contact_phone?: string;
   admin_contact_name?: string;
+  is_verified?: boolean;
+  aliases?: string[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -113,6 +115,8 @@ export interface AdminSection {
   created_at?: string;
   updated_at?: string;
 }
+
+export type AdminAssessmentSectionAllocation = AdminSectionAllocation;
 
 export interface AdminSectionAllocation {
   id?: number;
@@ -358,7 +362,7 @@ export async function getAdminStats(): Promise<AdminStats> {
 }
 
 // ─── COLLEGES MODULE ────────────────────────────────────────────────────────
-export async function getAdminColleges(params?: { search?: string; is_active?: string }): Promise<AdminCollege[]> {
+export async function getAdminColleges(params?: { search?: string; is_active?: string; district?: string }): Promise<AdminCollege[]> {
   const res = await adminApi.get<AdminCollege[]>('/colleges/', { params });
   return res.data;
 }
@@ -380,6 +384,16 @@ export async function updateAdminCollege(id: number, data: Partial<AdminCollege>
 
 export async function toggleAdminCollegeStatus(id: number): Promise<{ id: number; is_active: boolean; message: string }> {
   const res = await adminApi.post(`/colleges/${id}/toggle-status/`);
+  return res.data;
+}
+
+export async function mergeAdminCollege(
+  sourceId: number,
+  targetCollegeId: number
+): Promise<{ message: string; reassigned_candidates_count: number; target_college: AdminCollege }> {
+  const res = await adminApi.post(`/colleges/${sourceId}/merge/`, {
+    target_college_id: targetCollegeId,
+  });
   return res.data;
 }
 
@@ -504,6 +518,45 @@ export async function assignAdminAssessmentColleges(
   return res.data;
 }
 
+
+export async function removeAdminAssessmentQuestion(
+  assessmentId: string,
+  questionId: number
+): Promise<{ message: string; total_questions: number; is_sufficient: boolean }> {
+  const res = await adminApi.post(`/assessments/${assessmentId}/assign-questions/`, {
+    action: 'remove',
+    question_ids: [questionId],
+  });
+  return res.data;
+}
+
+export async function addAdminAssessmentQuestions(
+  assessmentId: string,
+  questionIds: number[]
+): Promise<{ message: string; total_questions: number; is_sufficient: boolean }> {
+  const res = await adminApi.post(`/assessments/${assessmentId}/assign-questions/`, {
+    action: 'add',
+    question_ids: questionIds,
+  });
+  return res.data;
+}
+
+export async function replaceAdminAssessmentQuestion(
+  assessmentId: string,
+  oldQuestionId: number,
+  newQuestionId: number
+): Promise<{ message: string; total_questions: number; is_sufficient: boolean }> {
+  await adminApi.post(`/assessments/${assessmentId}/assign-questions/`, {
+    action: 'remove',
+    question_ids: [oldQuestionId],
+  });
+  const res = await adminApi.post(`/assessments/${assessmentId}/assign-questions/`, {
+    action: 'add',
+    question_ids: [newQuestionId],
+  });
+  return res.data;
+}
+
 export async function assignAdminAssessmentQuestions(
   id: string,
   data: { question_ids?: number[]; action?: 'assign' | 'remove' | 'set'; assessment_type?: string }
@@ -611,6 +664,7 @@ export async function exportAdminCandidatesCSV(params?: {
 // ─── QUESTION BANK MODULE ───────────────────────────────────────────────────
 export async function getAdminQuestions(params?: {
   section_type?: string;
+  section_id?: number | string;
   category?: string;
   difficulty?: string;
   is_active?: string;

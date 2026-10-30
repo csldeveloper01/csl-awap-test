@@ -1,3 +1,4 @@
+import { queryClient } from './main';
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Register } from './Register';
@@ -55,6 +56,7 @@ export default function App() {
   }, []);
 
   const handleLogout = () => {
+    queryClient.clear();
     setUser(null);
   };
 

@@ -14,6 +14,7 @@ from apps.assessments.models import (
     QuestionBank,
     AssessmentAttempt,
     AttemptQuestionSnapshot,
+    AssessmentSectionAllocation,
 )
 
 User = get_user_model()
@@ -67,6 +68,21 @@ class Phase21WorkflowTests(TestCase):
                 "year_of_study": "3rd Year",
             },
         )
+
+        for i in range(5):
+            QuestionBank.objects.get_or_create(
+                prompt=f"Aptitude Test Question {i+1}",
+                defaults={
+                    "section": self.section_apt,
+                    "section_type": self.section_apt.code,
+                    "option_a": "A",
+                    "option_b": "B",
+                    "option_c": "C",
+                    "option_d": "D",
+                    "correct_option": "A",
+                    "is_active": True,
+                }
+            )
 
     # =========================================================================
     # Workstream 1: Independent Question Bank
@@ -204,6 +220,98 @@ class Phase21WorkflowTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["assigned_count"], 1)
         self.assertTrue(assessment.eligible_candidates.filter(id=self.candidate.id).exists())
+
+    def test_candidate_eligibility_enforcement_and_attempt_start(self):
+        """Test that student attempt creation strictly recognizes direct assignment, college assignment, and rejects ineligibles."""
+        # Create restricted assessment for a specific college and a specific direct candidate
+        assessment = Assessment.objects.create(
+            code="RESTRICTED-ASSESS",
+            title="Restricted Assessment",
+            duration_minutes=30,
+            status=Assessment.Status.OPEN,
+        )
+        alloc = AssessmentSectionAllocation.objects.create(
+            assessment=assessment,
+            section=self.section_apt,
+            question_count=2,
+            marks_per_question=1,
+            order=1,
+        )
+        assessment.questions.set(QuestionBank.objects.filter(section=self.section_apt))
+
+        college_b = College.objects.create(code="COLLEGEB", name="College B", is_active=True)
+        college_ineligible = College.objects.create(code="INELIGIBLE", name="Ineligible College", is_active=True)
+
+        assessment.eligible_colleges.add(college_b)
+
+        # Candidate 1: directly assigned
+        cand_direct = Candidate.objects.create(
+            register_number="DIRECT001",
+            full_name="Direct Candidate",
+            college_ref=college_ineligible,
+            college=college_ineligible.name,
+            email="direct@ineligible.edu",
+            phone_number="9876543201",
+            is_active=True,
+        )
+        assessment.eligible_candidates.add(cand_direct)
+
+        # Candidate 2: eligible via college_b
+        cand_college = Candidate.objects.create(
+            register_number="COLLEGE001",
+            full_name="College Candidate",
+            college_ref=college_b,
+            college=college_b.name,
+            email="college@collegeb.edu",
+            phone_number="9876543202",
+            is_active=True,
+        )
+
+        # Candidate 3: outsider (ineligible)
+        cand_outsider = Candidate.objects.create(
+            register_number="OUTSIDER001",
+            full_name="Outsider Candidate",
+            college_ref=college_ineligible,
+            college=college_ineligible.name,
+            email="outsider@ineligible.edu",
+            phone_number="9876543203",
+            is_active=True,
+        )
+
+        # 1. Outsider candidate is rejected
+        from apps.assessments.services import start_assessment_for_candidate
+        from rest_framework.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            start_assessment_for_candidate(cand_outsider, assessment=assessment, config=self.config)
+
+        # 2. Directly assigned candidate succeeds
+        att_direct = start_assessment_for_candidate(cand_direct, assessment=assessment, config=self.config)
+        self.assertIsNotNone(att_direct)
+        self.assertEqual(att_direct.candidate, cand_direct)
+
+        # 3. College assigned candidate succeeds
+        att_college = start_assessment_for_candidate(cand_college, assessment=assessment, config=self.config)
+        self.assertIsNotNone(att_college)
+        self.assertEqual(att_college.candidate, cand_college)
+
+        # 4. Open-to-all assessment (no college or candidate restrictions) can be attempted by outsider
+        assessment_open = Assessment.objects.create(
+            code="OPEN-ASSESS",
+            title="Open Assessment",
+            duration_minutes=30,
+            status=Assessment.Status.OPEN,
+        )
+        AssessmentSectionAllocation.objects.create(
+            assessment=assessment_open,
+            section=self.section_apt,
+            question_count=2,
+            marks_per_question=1,
+            order=1,
+        )
+        assessment_open.questions.set(QuestionBank.objects.filter(section=self.section_apt))
+        att_open = start_assessment_for_candidate(cand_outsider, assessment=assessment_open, config=self.config)
+        self.assertIsNotNone(att_open)
+        self.assertEqual(att_open.candidate, cand_outsider)
 
     # =========================================================================
     # Workstream 3: Two-Step Explicit Section Mapping

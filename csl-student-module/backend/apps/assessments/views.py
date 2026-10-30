@@ -74,19 +74,26 @@ class CandidateEligibleAssessmentsView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        colleges = [candidate.college_ref] if candidate.college_ref else []
+        from django.db.models import Q
+        q_filter = Q(eligible_candidates=candidate)
         if candidate.college_ref:
-            assessments = candidate.college_ref.assigned_assessments.filter(
+            q_filter |= Q(eligible_colleges=candidate.college_ref)
+        # Assessments with neither restricted colleges nor restricted candidates are open to all
+        q_filter |= Q(eligible_colleges__isnull=True, eligible_candidates__isnull=True)
+
+        assessments = (
+            Assessment.objects.filter(
                 status__in=[
                     Assessment.Status.OPEN,
                     Assessment.Status.SCHEDULED,
                     Assessment.Status.READY,
                     Assessment.Status.CLOSED,
                 ]
-            ).order_by("status", "-created_at")
-        else:
-            # Fallback to all open assessments
-            assessments = Assessment.objects.filter(status=Assessment.Status.OPEN).order_by("-created_at")
+            )
+            .filter(q_filter)
+            .distinct()
+            .order_by("status", "-created_at")
+        )
 
         serializer = StudentCandidateAssessmentSerializer(
             assessments,
@@ -319,11 +326,24 @@ class CandidateRegisterView(APIView):
                 target_assessment_id = data.get("assessment_id")
                 if target_assessment_id:
                     target_assessment = Assessment.objects.filter(id=target_assessment_id).first()
-                    if target_assessment and college_obj:
-                        if not target_assessment.eligible_colleges.filter(id=college_obj.id).exists():
+                    if target_assessment:
+                        has_colleges = target_assessment.eligible_colleges.exists()
+                        has_candidates = target_assessment.eligible_candidates.exists()
+                        is_directly_eligible = (
+                            target_assessment.eligible_candidates.filter(id=existing_candidate.id).exists()
+                            if has_candidates
+                            else False
+                        )
+                        is_college_eligible = (
+                            bool(college_obj and target_assessment.eligible_colleges.filter(id=college_obj.id).exists())
+                            if has_colleges
+                            else False
+                        )
+                        is_open_to_all = (not has_colleges) and (not has_candidates)
+                        if not (is_directly_eligible or is_college_eligible or is_open_to_all):
                             return Response(
-                                {"detail": f"Your institution ({college_obj.name}) is not eligible for '{target_assessment.title}'."},
-                                status=status.HTTP_400_BAD_REQUEST,
+                                {"detail": f"You are not eligible for '{target_assessment.title}'."},
+                                status=status.HTTP_403_FORBIDDEN,
                             )
                 if not target_assessment and college_obj:
                     open_assigned = college_obj.assigned_assessments.filter(status=Assessment.Status.OPEN)
@@ -434,13 +454,30 @@ class CandidateRegisterView(APIView):
                 )
             else:
                 target_assessment_id = data.get("assessment_id")
-                if target_assessment_id and college_obj:
+                if target_assessment_id:
                     target_assessment = Assessment.objects.filter(id=target_assessment_id).first()
-                    if target_assessment and not target_assessment.eligible_colleges.filter(id=college_obj.id).exists():
-                        return Response(
-                            {"detail": f"Your institution ({college_obj.name}) is not eligible for '{target_assessment.title}'."},
-                            status=status.HTTP_400_BAD_REQUEST,
+                    if target_assessment:
+                        has_colleges = target_assessment.eligible_colleges.exists()
+                        has_candidates = target_assessment.eligible_candidates.exists()
+                        is_college_eligible = (
+                            bool(college_obj and target_assessment.eligible_colleges.filter(id=college_obj.id).exists())
+                            if has_colleges
+                            else False
                         )
+                        is_open_to_all = (not has_colleges) and (not has_candidates)
+                        # Check direct eligibility by reg_no or email for pre-assigned candidate
+                        is_directly_eligible = (
+                            target_assessment.eligible_candidates.filter(
+                                models.Q(register_number=reg_no) | models.Q(email=email)
+                            ).exists()
+                            if has_candidates
+                            else False
+                        )
+                        if not (is_directly_eligible or is_college_eligible or is_open_to_all):
+                            return Response(
+                                {"detail": f"You are not eligible for '{target_assessment.title}'."},
+                                status=status.HTTP_403_FORBIDDEN,
+                            )
 
                 candidate = Candidate.objects.create(
                     full_name=data["full_name"],

@@ -3,6 +3,8 @@ import { formatApiError } from '../../utils/errorFormatter';
 import {
   getAdminColleges,
   createAdminCollege,
+  updateAdminCollege,
+  mergeAdminCollege,
   toggleAdminCollegeStatus,
   deleteAdminCollege,
   bulkDeleteAdminColleges,
@@ -43,6 +45,34 @@ export function AdminCollegesView() {
   const [selectedCollege, setSelectedCollege] = useState<AdminCollege | null>(null);
   const [collegeDetail, setCollegeDetail] = useState<AdminCollegeDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // Edit Form State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingCollege, setEditingCollege] = useState<AdminCollege | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    code: '',
+    district: '',
+    city: '',
+    institution_type: 'Engineering',
+    affiliation: 'Anna University',
+    website: '',
+    location: '',
+    address: '',
+    admin_contact_name: '',
+    contact_email: '',
+    contact_phone: '',
+    is_verified: true,
+  });
+  const [editError, setEditError] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  // Duplicate Merge State
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSourceCollege, setMergeSourceCollege] = useState<AdminCollege | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState('');
 
   // Create Form State
   const [createForm, setCreateForm] = useState({
@@ -93,11 +123,82 @@ export function AdminCollegesView() {
     }
   };
 
+  const handleOpenEdit = (college: AdminCollege) => {
+    setEditingCollege(college);
+    setEditForm({
+      name: college.name || '',
+      code: college.code || '',
+      district: college.district || '',
+      city: college.city || '',
+      institution_type: college.institution_type || 'Engineering',
+      affiliation: college.affiliation || 'Anna University',
+      website: college.website || '',
+      location: college.location || '',
+      address: college.address || '',
+      admin_contact_name: college.admin_contact_name || '',
+      contact_email: college.contact_email || '',
+      contact_phone: college.contact_phone || '',
+      is_verified: college.is_verified ?? true,
+    });
+    setEditError('');
+    setShowEditModal(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCollege) return;
+    setEditSubmitting(true);
+    setEditError('');
+    try {
+      const updated = await updateAdminCollege(editingCollege.id, editForm);
+      setColleges((prev) => prev.map((c) => (c.id === editingCollege.id ? { ...c, ...updated } : c)));
+      setShowEditModal(false);
+      setEditingCollege(null);
+    } catch (err: any) {
+      setEditError(formatApiError(err, 'Failed to update institution details.'));
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const handleOpenMerge = (college: AdminCollege) => {
+    setMergeSourceCollege(college);
+    setMergeTargetId('');
+    setMergeError('');
+    setShowMergeModal(true);
+  };
+
+  const handleMergeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mergeSourceCollege || !mergeTargetId) {
+      setMergeError('Please select a target authoritative college.');
+      return;
+    }
+    const targetCol = colleges.find((c) => String(c.id) === String(mergeTargetId));
+    const confirmText = `Are you sure you want to merge '${mergeSourceCollege.name}' (${mergeSourceCollege.code}) into '${targetCol?.name || mergeTargetId}'?\n\nThis will transfer all registered candidates, update assigned assessments, add aliases to the target college, and permanently delete the duplicate entry.`;
+    if (!window.confirm(confirmText)) return;
+
+    setMerging(true);
+    setMergeError('');
+    try {
+      const res = await mergeAdminCollege(mergeSourceCollege.id, Number(mergeTargetId));
+      alert(res.message);
+      setShowMergeModal(false);
+      setMergeSourceCollege(null);
+      fetchColleges();
+    } catch (err: any) {
+      setMergeError(formatApiError(err, 'Failed to merge institution.'));
+    } finally {
+      setMerging(false);
+    }
+  };
+
   const fetchColleges = async () => {
     setLoading(true);
     try {
       const data = await getAdminColleges({
         search: search.trim() || undefined,
+        district: districtFilter || undefined,
         is_active: statusFilter === 'all' ? undefined : statusFilter,
       });
       setColleges(data);
@@ -110,7 +211,7 @@ export function AdminCollegesView() {
 
   useEffect(() => {
     fetchColleges();
-  }, [search, statusFilter]);
+  }, [search, statusFilter, districtFilter]);
 
   const handleToggleStatus = async (college: AdminCollege) => {
     try {
@@ -575,12 +676,68 @@ export function AdminCollegesView() {
                   </td>
                   <td style={{ padding: '14px 16px' }}>
                     <div style={{ fontWeight: 700, color: '#0F172A' }}>{col.name}</div>
+                    <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      {col.is_verified ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            backgroundColor: '#ECFDF5',
+                            color: '#047857',
+                            border: '1px solid #A7F3D0',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          ✓ Verified Institution
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            backgroundColor: '#FFFBEB',
+                            color: '#B45309',
+                            border: '1px solid #FDE68A',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          ⚠ Unverified / Student Entry
+                        </span>
+                      )}
+                      <span style={{ fontSize: '12px', color: '#64748B' }}>
+                        {col.institution_type || 'Engineering'} • {col.affiliation || 'Anna University'}
+                      </span>
+                    </div>
+                    {col.website && (
+                      <div style={{ fontSize: '11.5px', marginTop: '3px' }}>
+                        <a
+                          href={col.website.startsWith('http') ? col.website : `https://${col.website}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#1D4ED8', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                        >
+                          <span>🌐</span>
+                          <span style={{ textDecoration: 'underline' }}>{col.website}</span>
+                        </a>
+                      </div>
+                    )}
                     {col.contact_email && (
                       <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>{col.contact_email}</div>
                     )}
                   </td>
                   <td style={{ padding: '14px 16px', color: '#475569' }}>
-                    {col.location || '—'}
+                    <div style={{ fontWeight: 600, color: '#0F172A' }}>{col.city || col.location || '—'}</div>
+                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                      District: <strong>{col.district || '—'}</strong>
+                    </div>
                   </td>
                   <td style={{ padding: '14px 16px', color: '#475569' }}>
                     <div>{col.admin_contact_name || 'TPO Representative'}</div>
@@ -611,6 +768,38 @@ export function AdminCollegesView() {
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button
+                        onClick={() => handleOpenEdit(col)}
+                        title="Edit institution details"
+                        style={{
+                          backgroundColor: '#F8FAFC',
+                          color: '#0B2E6F',
+                          border: '1px solid #CBD5E1',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleOpenMerge(col)}
+                        title="Merge duplicate provisional entry into verified institution"
+                        style={{
+                          backgroundColor: '#FEF3C7',
+                          color: '#92400E',
+                          border: '1px solid #FCD34D',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Merge
+                      </button>
                       <button
                         onClick={() => handleOpenImport(col)}
                         title="Bulk Import Candidates CSV"
@@ -1122,6 +1311,312 @@ export function AdminCollegesView() {
         </div>
       )}
           {/* ─── DIRECTORY IMPORT MODAL (PHASE 2.1) ────────────────────── */}
+      {/* ─── EDIT COLLEGE MODAL ─────────────────────────────────────── */}
+      {showEditModal && editingCollege && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '560px',
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                Edit Institution Details
+              </h3>
+              <button
+                onClick={() => setShowEditModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit}>
+              {editError && (
+                <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px', borderRadius: '6px', marginBottom: '12px', fontSize: '12px' }}>
+                  {editError}
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Institution Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                    required
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    College Code *
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.code}
+                    onChange={(e) => setEditForm({ ...editForm, code: e.target.value.toUpperCase() })}
+                    required
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', textTransform: 'uppercase' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    District *
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.district}
+                    onChange={(e) => setEditForm({ ...editForm, district: e.target.value })}
+                    required
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    City / Town
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.city}
+                    onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Institution Type
+                  </label>
+                  <select
+                    value={editForm.institution_type}
+                    onChange={(e) => setEditForm({ ...editForm, institution_type: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  >
+                    <option value="Engineering">Engineering</option>
+                    <option value="Arts and Science">Arts and Science</option>
+                    <option value="Polytechnic">Polytechnic</option>
+                    <option value="University">University</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Affiliation
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.affiliation}
+                    onChange={(e) => setEditForm({ ...editForm, affiliation: e.target.value })}
+                    placeholder="e.g. Anna University, Autonomous"
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Official Website
+                </label>
+                <input
+                  type="text"
+                  value={editForm.website}
+                  onChange={(e) => setEditForm({ ...editForm, website: e.target.value })}
+                  placeholder="e.g. www.institution.edu.in"
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Contact Email
+                  </label>
+                  <input
+                    type="email"
+                    value={editForm.contact_email}
+                    onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Contact Phone / TPO
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.contact_phone}
+                    onChange={(e) => setEditForm({ ...editForm, contact_phone: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="is_verified_check"
+                  checked={editForm.is_verified}
+                  onChange={(e) => setEditForm({ ...editForm, is_verified: e.target.checked })}
+                  style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#059669' }}
+                />
+                <label htmlFor="is_verified_check" style={{ fontSize: '13px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+                  Mark as Verified Institution
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSubmitting}
+                  style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', background: '#0B2E6F', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: editSubmitting ? 'not-allowed' : 'pointer' }}
+                >
+                  {editSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MERGE DUPLICATE COLLEGE MODAL ─────────────────────────── */}
+      {showMergeModal && mergeSourceCollege && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '540px',
+              maxWidth: '90vw',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '20px' }}>🔀</span>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Merge Institution Entry
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowMergeModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ backgroundColor: '#FEF3C7', border: '1px solid #FDE68A', padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '12.5px', color: '#92400E', lineHeight: 1.5 }}>
+              <strong>Caution:</strong> You are about to merge the provisional / duplicate entry:
+              <div style={{ fontWeight: 800, marginTop: '4px', color: '#78350F' }}>
+                {mergeSourceCollege.name} ({mergeSourceCollege.code})
+              </div>
+              <div style={{ marginTop: '6px' }}>
+                All registered candidates and assessment allocations will be transferred to the target institution. The source name and code will be recorded as aliases on the target for future candidate auto-resolution.
+              </div>
+            </div>
+
+            <form onSubmit={handleMergeSubmit}>
+              {mergeError && (
+                <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px', borderRadius: '6px', marginBottom: '12px', fontSize: '12px' }}>
+                  {mergeError}
+                </div>
+              )}
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Target Authoritative Institution *
+                </label>
+                <select
+                  value={mergeTargetId}
+                  onChange={(e) => setMergeTargetId(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                >
+                  <option value="">Select Target Authoritative College...</option>
+                  {colleges
+                    .filter((c) => c.id !== mergeSourceCollege.id)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.is_verified ? '✓ ' : ''}{c.name} ({c.code}) - {c.district || c.location || 'TN'}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowMergeModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={merging || !mergeTargetId}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: merging || !mergeTargetId ? '#94A3B8' : '#D97706',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: merging || !mergeTargetId ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {merging ? 'Merging...' : 'Confirm & Merge →'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      
       {showDirectoryImportModal && (
         <div
           style={{

@@ -13,6 +13,12 @@ import {
   archiveAdminAssessment,
   assignAdminAssessmentColleges,
   getAdminColleges,
+  getAdminQuestions,
+  removeAdminAssessmentQuestion,
+  addAdminAssessmentQuestions,
+  replaceAdminAssessmentQuestion,
+  type AdminQuestion,
+  type AdminAssessmentSectionAllocation,
   getAdminSections,
   createAdminSection,
   uploadAdminAssessmentPdf,
@@ -91,6 +97,28 @@ export function AdminAssessmentsView({
   const [collegeAssignError, setCollegeAssignError] = useState<string | null>(null);
   const [collegeSearchQuery, setCollegeSearchQuery] = useState('');
 
+  // Dynamic Section Pool Questions Management State (Phase 2.1)
+  const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
+  const [sectionQuestions, setSectionQuestions] = useState<Record<number, AdminQuestion[]>>({});
+  const [loadingSectionQuestions, setLoadingSectionQuestions] = useState<Record<number, boolean>>({});
+  const [previewQuestion, setPreviewQuestion] = useState<AdminQuestion | null>(null);
+
+  // Add questions to section modal state
+  const [showAddQuestionsModal, setShowAddQuestionsModal] = useState(false);
+  const [targetSectionForAdd, setTargetSectionForAdd] = useState<AdminAssessmentSectionAllocation | null>(null);
+  const [bankQuestionsForAdd, setBankQuestionsForAdd] = useState<AdminQuestion[]>([]);
+  const [selectedBankQuestionIds, setSelectedBankQuestionIds] = useState<number[]>([]);
+  const [loadingBankQuestions, setLoadingBankQuestions] = useState(false);
+  const [addingBankQuestions, setAddingBankQuestions] = useState(false);
+
+  // Replace question modal state
+  const [showReplaceQuestionModal, setShowReplaceQuestionModal] = useState(false);
+  const [replacingQuestion, setReplacingQuestion] = useState<AdminQuestion | null>(null);
+  const [targetSectionForReplace, setTargetSectionForReplace] = useState<AdminAssessmentSectionAllocation | null>(null);
+  const [replacementOptions, setReplacementOptions] = useState<AdminQuestion[]>([]);
+  const [selectedReplacementId, setSelectedReplacementId] = useState<number | null>(null);
+  const [replacingAction, setReplacingAction] = useState(false);
+
   // Dynamic Section Allocation states for Create & Edit
   const [createSections, setCreateSections] = useState<AssessmentSectionDraft[]>([]);
   const [editSections, setEditSections] = useState<AssessmentSectionDraft[]>([]);
@@ -132,7 +160,6 @@ export function AdminAssessmentsView({
   const [editDeliveryMode, setEditDeliveryMode] = useState<'MCQ' | 'PDF_CODING'>('MCQ');
   const [editPdfFile, setEditPdfFile] = useState<File | null>(null);
   const [editPdfFilename, setEditPdfFilename] = useState<string | null>(null);
-  const [editPdfFileSize, setEditPdfFileSize] = useState<number | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   const handleDownloadPdf = async (assessmentId: string, filename?: string) => {
@@ -451,6 +478,117 @@ export function AdminAssessmentsView({
     }
   };
 
+  // Section Pool Questions Handlers
+  const handleToggleExpandSection = async (sec: AdminAssessmentSectionAllocation) => {
+    if (expandedSectionId === sec.section_id) {
+      setExpandedSectionId(null);
+      return;
+    }
+    setExpandedSectionId(sec.section_id);
+    if (!sectionQuestions[sec.section_id] && assessmentDetail) {
+      setLoadingSectionQuestions((prev) => ({ ...prev, [sec.section_id]: true }));
+      try {
+        const qs = await getAdminQuestions({ assessment_id: assessmentDetail.id, section_id: sec.section_id });
+        setSectionQuestions((prev) => ({ ...prev, [sec.section_id]: qs }));
+      } catch (err) {
+        console.error('Failed to load section questions:', err);
+      } finally {
+        setLoadingSectionQuestions((prev) => ({ ...prev, [sec.section_id]: false }));
+      }
+    }
+  };
+
+  const handleRemoveQuestionFromSection = async (sec: AdminAssessmentSectionAllocation, questionId: number) => {
+    if (!assessmentDetail) return;
+    if (!window.confirm(`Remove question #${questionId} from this assessment pool?\n\nThe question will remain safely in the Question Bank.`)) return;
+    try {
+      await removeAdminAssessmentQuestion(assessmentDetail.id, questionId);
+      const freshDetail = await getAdminAssessmentDetail(assessmentDetail.id);
+      setAssessmentDetail(freshDetail);
+      setSelectedAssessment(freshDetail);
+      const qs = await getAdminQuestions({ assessment_id: assessmentDetail.id, section_id: sec.section_id });
+      setSectionQuestions((prev) => ({ ...prev, [sec.section_id]: qs }));
+    } catch (err: any) {
+      alert(formatApiError(err, 'Failed to remove question from assessment pool.'));
+    }
+  };
+
+  const handleOpenAddQuestions = async (sec: AdminAssessmentSectionAllocation) => {
+    if (!assessmentDetail) return;
+    setTargetSectionForAdd(sec);
+    setSelectedBankQuestionIds([]);
+    setShowAddQuestionsModal(true);
+    setLoadingBankQuestions(true);
+    try {
+      const allSecQuestions = await getAdminQuestions({ section_id: sec.section_id, is_active: 'true' });
+      const currentAssignedIds = (sectionQuestions[sec.section_id] || []).map((q) => q.id);
+      const available = allSecQuestions.filter((q) => !currentAssignedIds.includes(q.id));
+      setBankQuestionsForAdd(available);
+    } catch (err) {
+      console.error('Failed to load bank questions for add:', err);
+    } finally {
+      setLoadingBankQuestions(false);
+    }
+  };
+
+  const handleAddQuestionsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assessmentDetail || !targetSectionForAdd || selectedBankQuestionIds.length === 0) return;
+    setAddingBankQuestions(true);
+    try {
+      await addAdminAssessmentQuestions(assessmentDetail.id, selectedBankQuestionIds);
+      const freshDetail = await getAdminAssessmentDetail(assessmentDetail.id);
+      setAssessmentDetail(freshDetail);
+      setSelectedAssessment(freshDetail);
+      const qs = await getAdminQuestions({ assessment_id: assessmentDetail.id, section_id: targetSectionForAdd.section_id });
+      setSectionQuestions((prev) => ({ ...prev, [targetSectionForAdd.section_id]: qs }));
+      setShowAddQuestionsModal(false);
+      setTargetSectionForAdd(null);
+    } catch (err: any) {
+      alert(formatApiError(err, 'Failed to add questions to pool.'));
+    } finally {
+      setAddingBankQuestions(false);
+    }
+  };
+
+  const handleOpenReplaceQuestion = async (sec: AdminAssessmentSectionAllocation, q: AdminQuestion) => {
+    if (!assessmentDetail) return;
+    setTargetSectionForReplace(sec);
+    setReplacingQuestion(q);
+    setSelectedReplacementId(null);
+    setShowReplaceQuestionModal(true);
+    try {
+      const allSecQuestions = await getAdminQuestions({ section_id: sec.section_id, is_active: 'true' });
+      const currentAssignedIds = (sectionQuestions[sec.section_id] || []).map((item) => item.id);
+      const available = allSecQuestions.filter((item) => !currentAssignedIds.includes(item.id) && item.id !== q.id);
+      setReplacementOptions(available);
+    } catch (err) {
+      console.error('Failed to load replacement options:', err);
+    }
+  };
+
+  const handleReplaceQuestionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assessmentDetail || !replacingQuestion || !selectedReplacementId) return;
+    setReplacingAction(true);
+    try {
+      await replaceAdminAssessmentQuestion(assessmentDetail.id, replacingQuestion.id, selectedReplacementId);
+      const freshDetail = await getAdminAssessmentDetail(assessmentDetail.id);
+      setAssessmentDetail(freshDetail);
+      setSelectedAssessment(freshDetail);
+      if (targetSectionForReplace) {
+        const qs = await getAdminQuestions({ assessment_id: assessmentDetail.id, section_id: targetSectionForReplace.section_id });
+        setSectionQuestions((prev) => ({ ...prev, [targetSectionForReplace.section_id]: qs }));
+      }
+      setShowReplaceQuestionModal(false);
+      setReplacingQuestion(null);
+    } catch (err: any) {
+      alert(formatApiError(err, 'Failed to replace question.'));
+    } finally {
+      setReplacingAction(false);
+    }
+  };
+
   // Section Allocation Helpers
   const handleOpenCreateModal = () => {
     setCreateError('');
@@ -468,19 +606,8 @@ export function AdminAssessmentsView({
       eligible_college_ids: [],
     });
 
-    // Initialize with available sections or default Aptitude + Coding
-    if (availableSections.length > 0) {
-      const defaultAllocations: AssessmentSectionDraft[] = availableSections.slice(0, 2).map((s) => ({
-        section_id: s.id,
-        name: s.name,
-        code: s.code,
-        question_count: 25,
-        marks_per_question: 1,
-      }));
-      setCreateSections(defaultAllocations);
-    } else {
-      setCreateSections([]);
-    }
+    // Phase 2.1: Start with empty sections - require explicit admin configuration
+    setCreateSections([]);
     setShowCreateModal(true);
   };
 
@@ -586,7 +713,6 @@ export function AdminAssessmentsView({
     setEditDeliveryMode(assessment.delivery_mode || 'MCQ');
     setEditPdfFile(null);
     setEditPdfFilename(assessment.pdf_filename || null);
-    setEditPdfFileSize(assessment.pdf_file_size || null);
     setEditForm({
       id: assessment.id,
       code: assessment.code,
@@ -1506,112 +1632,8 @@ export function AdminAssessmentsView({
                 </div>
               </div>
 
-              {/* ─── ASSESSMENT DELIVERY MODE SELECTOR ─── */}
-              <div
-                style={{
-                  backgroundColor: createDeliveryMode === 'PDF_CODING' ? '#F5F3FF' : '#F8FAFC',
-                  borderRadius: '10px',
-                  border: createDeliveryMode === 'PDF_CODING' ? '1.5px solid #8B5CF6' : '1px solid #CBD5E1',
-                  padding: '16px',
-                  marginBottom: '16px',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
-                  <div>
-                    <label style={{ fontSize: '13px', fontWeight: 800, color: '#0B2E6F' }}>
-                      Delivery Mode
-                    </label>
-                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                      Choose between standard online MCQ questions or physical paper coding with on-screen PDF.
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setCreateDeliveryMode('MCQ')}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '6px',
-                        border: createDeliveryMode === 'MCQ' ? '2px solid #1455B8' : '1px solid #CBD5E1',
-                        backgroundColor: createDeliveryMode === 'MCQ' ? '#EFF6FF' : '#FFFFFF',
-                        color: createDeliveryMode === 'MCQ' ? '#1D4ED8' : '#64748B',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Online MCQ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCreateDeliveryMode('PDF_CODING')}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '6px',
-                        border: createDeliveryMode === 'PDF_CODING' ? '2px solid #7C3AED' : '1px solid #CBD5E1',
-                        backgroundColor: createDeliveryMode === 'PDF_CODING' ? '#EDE9FE' : '#FFFFFF',
-                        color: createDeliveryMode === 'PDF_CODING' ? '#6D28D9' : '#64748B',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      📄 PDF Assessment Mode
-                    </button>
-                  </div>
-                </div>
-
-                {createDeliveryMode === 'PDF_CODING' && (
-                  <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #DDD6FE' }}>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#4C1D95', marginBottom: '4px' }}>
-                      Upload Question Paper PDF *
-                    </label>
-                    <input
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      required={createDeliveryMode === 'PDF_CODING'}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        if (file) {
-                          if (!file.name.toLowerCase().endsWith('.pdf')) {
-                            setCreateError('Only PDF files (.pdf) are allowed.');
-                            setCreatePdfFile(null);
-                            return;
-                          }
-                          if (file.size > 10 * 1024 * 1024) {
-                            setCreateError('PDF file size must not exceed 10 MB.');
-                            setCreatePdfFile(null);
-                            return;
-                          }
-                          setCreateError('');
-                          setCreatePdfFile(file);
-                        }
-                      }}
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        fontSize: '13px',
-                        padding: '8px',
-                        borderRadius: '6px',
-                        border: '1px solid #C4B5FD',
-                        backgroundColor: '#FFFFFF',
-                      }}
-                    />
-                    <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
-                      Accepted format: PDF only. Maximum size: 10MB. Candidates read this PDF on-screen and write their answers on paper.
-                    </div>
-                    {createPdfFile && (
-                      <div style={{ marginTop: '8px', fontSize: '12px', color: '#059669', fontWeight: 600 }}>
-                        ✓ Selected: {createPdfFile.name} ({(createPdfFile.size / 1024).toFixed(1)} KB)
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* ─── DYNAMIC SECTION ALLOCATION CARD (MCQ MODE ONLY) ─── */}
-              {createDeliveryMode === 'MCQ' && (
+              {/* ─── DYNAMIC SECTION ALLOCATION CARD ─── */}
+              {true && (
               <div
                 style={{
                   backgroundColor: '#F8FAFC',
@@ -1982,145 +2004,8 @@ export function AdminAssessmentsView({
                 </div>
               </div>
 
-              {/* ─── ASSESSMENT DELIVERY MODE SELECTOR (EDIT) ─── */}
-              <div
-                style={{
-                  backgroundColor: editDeliveryMode === 'PDF_CODING' ? '#F5F3FF' : '#F8FAFC',
-                  borderRadius: '10px',
-                  border: editDeliveryMode === 'PDF_CODING' ? '1.5px solid #8B5CF6' : '1px solid #CBD5E1',
-                  padding: '16px',
-                  marginBottom: '16px',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
-                  <div>
-                    <label style={{ fontSize: '13px', fontWeight: 800, color: '#0B2E6F' }}>
-                      Delivery Mode
-                    </label>
-                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                      Choose between standard online MCQ questions or physical paper coding with on-screen PDF.
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setEditDeliveryMode('MCQ')}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '6px',
-                        border: editDeliveryMode === 'MCQ' ? '2px solid #1455B8' : '1px solid #CBD5E1',
-                        backgroundColor: editDeliveryMode === 'MCQ' ? '#EFF6FF' : '#FFFFFF',
-                        color: editDeliveryMode === 'MCQ' ? '#1D4ED8' : '#64748B',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Online MCQ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditDeliveryMode('PDF_CODING')}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '6px',
-                        border: editDeliveryMode === 'PDF_CODING' ? '2px solid #7C3AED' : '1px solid #CBD5E1',
-                        backgroundColor: editDeliveryMode === 'PDF_CODING' ? '#EDE9FE' : '#FFFFFF',
-                        color: editDeliveryMode === 'PDF_CODING' ? '#6D28D9' : '#64748B',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      📄 PDF Assessment Mode
-                    </button>
-                  </div>
-                </div>
-
-                {editDeliveryMode === 'PDF_CODING' && (
-                  <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #DDD6FE' }}>
-                    {editPdfFilename ? (
-                      <div style={{ marginBottom: '12px', padding: '10px 14px', backgroundColor: '#EDE9FE', borderRadius: '8px', border: '1px solid #DDD6FE', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                        <div>
-                          <div style={{ fontSize: '12px', color: '#5B21B6', fontWeight: 700 }}>
-                            Current Attached Paper:
-                          </div>
-                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#4C1D95', fontFamily: 'monospace' }}>
-                            {editPdfFilename} {editPdfFileSize ? `(${((editPdfFileSize) / 1024).toFixed(1)} KB)` : ''}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadPdf(editForm.id, editPdfFilename || undefined)}
-                          disabled={downloadingPdf}
-                          style={{
-                            padding: '4px 10px',
-                            borderRadius: '6px',
-                            border: '1px solid #7C3AED',
-                            backgroundColor: '#FFFFFF',
-                            color: '#7C3AED',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {downloadingPdf ? 'Downloading...' : '⬇ Preview Current PDF'}
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ marginBottom: '12px', color: '#DC2626', fontSize: '12px', fontWeight: 600 }}>
-                        ⚠ No PDF question paper attached yet. Please upload one below.
-                      </div>
-                    )}
-
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#4C1D95', marginBottom: '4px' }}>
-                      {editPdfFilename ? 'Replace Question Paper PDF' : 'Upload Question Paper PDF *'}
-                    </label>
-                    <input
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        if (file) {
-                          if (!file.name.toLowerCase().endsWith('.pdf')) {
-                            setEditError('Only PDF files (.pdf) are allowed.');
-                            setEditPdfFile(null);
-                            return;
-                          }
-                          if (file.size > 10 * 1024 * 1024) {
-                            setEditError('PDF file size must not exceed 10 MB.');
-                            setEditPdfFile(null);
-                            return;
-                          }
-                          setEditError('');
-                          setEditPdfFile(file);
-                        }
-                      }}
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        fontSize: '13px',
-                        padding: '8px',
-                        borderRadius: '6px',
-                        border: '1px solid #C4B5FD',
-                        backgroundColor: '#FFFFFF',
-                      }}
-                    />
-                    <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
-                      Accepted format: PDF only. Maximum size: 10MB.
-                    </div>
-                    {editPdfFile && (
-                      <div style={{ marginTop: '8px', fontSize: '12px', color: '#059669', fontWeight: 600 }}>
-                        ✓ New file selected: {editPdfFile.name} ({(editPdfFile.size / 1024).toFixed(1)} KB) — will replace current paper upon save.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* ─── DYNAMIC SECTION ALLOCATION CARD (EDIT - MCQ MODE ONLY) ─── */}
-              {editDeliveryMode === 'MCQ' && (
+              {/* ─── DYNAMIC SECTION ALLOCATION CARD (EDIT) ─── */}
+              {true && (
               <div
                 style={{
                   backgroundColor: '#F8FAFC',
@@ -2906,33 +2791,252 @@ export function AdminAssessmentsView({
                       )}
                     </div>
 
-                    {/* Section Breakdown Card */}
-                    {Array.isArray(assessmentDetail.sections) && assessmentDetail.sections.length > 0 ? (
-                      <div style={{ backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '13px' }}>
-                        <div style={{ fontWeight: 700, color: '#334155', marginBottom: '8px' }}>Configured Sections</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {/* Section Questions & Question Pool Management (Phase 2.1) */}
+                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '16px', marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                            Curriculum Sections & Assessment Question Pool
+                          </h4>
+                          <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                            Inspect actual assigned questions, preview items, replace questions, or assign more from the independent Question Bank.
+                          </div>
+                        </div>
+                      </div>
+
+                      {Array.isArray(assessmentDetail.sections) && assessmentDetail.sections.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                           {assessmentDetail.sections.map((s, idx) => {
-                            const qCount = Number(s.question_count || 0);
-                            const marksPerQ = Number(s.marks_per_question || 1);
-                            const totalSecMarks = qCount * marksPerQ;
+                            const isExpanded = expandedSectionId === s.section_id;
+                            const questionsInSec = sectionQuestions[s.section_id] || [];
+                            const isLoadingSec = loadingSectionQuestions[s.section_id] || false;
+                            const assignedCount = s.available_questions_count !== undefined ? s.available_questions_count : questionsInSec.length;
+                            const isSufficient = assignedCount >= s.question_count;
+
                             return (
-                              <div key={s.id || idx} style={{ display: 'flex', justifyContent: 'space-between', background: '#FFFFFF', padding: '6px 12px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
-                                <span style={{ fontWeight: 600, color: '#0B2E6F' }}>
-                                  [{s.section_code || 'SEC'}] {s.section_name || 'Section'}
-                                </span>
-                                <span style={{ color: '#475569' }}>
-                                  {qCount} Questions ({marksPerQ} mark/Q = {totalSecMarks} marks)
-                                </span>
+                              <div
+                                key={s.id || idx}
+                                style={{
+                                  border: isExpanded ? '1.5px solid #1455B8' : '1px solid #CBD5E1',
+                                  borderRadius: '8px',
+                                  overflow: 'hidden',
+                                  backgroundColor: '#FFFFFF',
+                                  boxShadow: isExpanded ? '0 2px 8px rgba(20, 85, 184, 0.08)' : 'none',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    padding: '12px 16px',
+                                    backgroundColor: isExpanded ? '#F0F7FF' : '#F8FAFC',
+                                    flexWrap: 'wrap',
+                                    gap: '10px',
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 800, fontSize: '12px', padding: '3px 8px', borderRadius: '4px' }}>
+                                      {s.section_code}
+                                    </span>
+                                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#0F172A' }}>
+                                      {s.section_name}
+                                    </span>
+                                    <span
+                                      style={{
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        backgroundColor: isSufficient ? '#DCFCE7' : '#FEF3C7',
+                                        color: isSufficient ? '#166534' : '#92400E',
+                                        border: `1px solid ${isSufficient ? '#BBF7D0' : '#FDE68A'}`,
+                                      }}
+                                    >
+                                      {isSufficient ? `✓ Pool Sufficient (${assignedCount}/${s.question_count})` : `⚠ Shortage (${assignedCount}/${s.question_count} assigned)`}
+                                    </span>
+                                  </div>
+
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '12px', color: '#64748B', marginRight: '6px' }}>
+                                      Allocated: <strong>{s.question_count} Qs</strong> ({s.marks_per_question} m/Q = {s.question_count * s.marks_per_question} marks)
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenAddQuestions(s)}
+                                      style={{
+                                        padding: '5px 10px',
+                                        backgroundColor: '#FFFFFF',
+                                        border: '1px solid #CBD5E1',
+                                        borderRadius: '6px',
+                                        fontSize: '12px',
+                                        fontWeight: 700,
+                                        color: '#0B2E6F',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      + Add from Bank
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleExpandSection(s)}
+                                      style={{
+                                        padding: '5px 12px',
+                                        backgroundColor: isExpanded ? '#1455B8' : '#FFFFFF',
+                                        color: isExpanded ? '#FFFFFF' : '#1455B8',
+                                        border: '1px solid #1455B8',
+                                        borderRadius: '6px',
+                                        fontSize: '12px',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      {isExpanded ? '▲ Hide Questions' : `▼ View Questions (${assignedCount})`}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {isExpanded && (
+                                  <div style={{ padding: '16px', borderTop: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
+                                    {isLoadingSec ? (
+                                      <div style={{ textAlign: 'center', padding: '24px', color: '#64748B', fontSize: '13px' }}>
+                                        Loading questions for {s.section_name}...
+                                      </div>
+                                    ) : questionsInSec.length === 0 ? (
+                                      <div style={{ textAlign: 'center', padding: '24px', color: '#94A3B8', fontSize: '13px' }}>
+                                        No questions currently assigned to this section pool. Click <strong>"+ Add from Bank"</strong> above to assign questions.
+                                      </div>
+                                    ) : (
+                                      <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                          <thead>
+                                            <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left' }}>
+                                              <th style={{ padding: '8px 12px', width: '60px', color: '#64748B', fontWeight: 700 }}>ID</th>
+                                              <th style={{ padding: '8px 12px', color: '#64748B', fontWeight: 700 }}>QUESTION PROMPT</th>
+                                              <th style={{ padding: '8px 12px', width: '90px', color: '#64748B', fontWeight: 700 }}>DIFFICULTY</th>
+                                              <th style={{ padding: '8px 12px', width: '70px', color: '#64748B', fontWeight: 700, textAlign: 'center' }}>MARKS</th>
+                                              <th style={{ padding: '8px 12px', width: '80px', color: '#64748B', fontWeight: 700, textAlign: 'center' }}>STATUS</th>
+                                              <th style={{ padding: '8px 12px', width: '180px', color: '#64748B', fontWeight: 700, textAlign: 'right' }}>ACTIONS</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {questionsInSec.map((q) => (
+                                              <tr key={q.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                                <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#64748B', fontWeight: 600 }}>
+                                                  #{q.id}
+                                                </td>
+                                                <td style={{ padding: '10px 12px' }}>
+                                                  <div style={{ color: '#0F172A', fontWeight: 600, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                                    {q.prompt}
+                                                  </div>
+                                                  {q.category && (
+                                                    <span style={{ fontSize: '11px', color: '#64748B', marginTop: '2px', display: 'inline-block' }}>
+                                                      Category: {q.category}
+                                                    </span>
+                                                  )}
+                                                </td>
+                                                <td style={{ padding: '10px 12px' }}>
+                                                  <span
+                                                    style={{
+                                                      display: 'inline-block',
+                                                      padding: '2px 8px',
+                                                      borderRadius: '4px',
+                                                      fontSize: '11px',
+                                                      fontWeight: 700,
+                                                      backgroundColor: q.difficulty === 'EASY' ? '#DCFCE7' : q.difficulty === 'MEDIUM' ? '#FEF3C7' : '#FEE2E2',
+                                                      color: q.difficulty === 'EASY' ? '#166534' : q.difficulty === 'MEDIUM' ? '#92400E' : '#991B1B',
+                                                    }}
+                                                  >
+                                                    {q.difficulty}
+                                                  </span>
+                                                </td>
+                                                <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#0B2E6F' }}>
+                                                  {q.marks || 1}
+                                                </td>
+                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                                  <span
+                                                    style={{
+                                                      fontSize: '11px',
+                                                      fontWeight: 600,
+                                                      color: q.is_archived ? '#94A3B8' : q.is_active ? '#16A34A' : '#DC2626',
+                                                    }}
+                                                  >
+                                                    {q.is_archived ? 'Archived' : q.is_active ? 'Active' : 'Inactive'}
+                                                  </span>
+                                                </td>
+                                                <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                                                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setPreviewQuestion(q)}
+                                                      title="Preview full question prompt, options, and explanation"
+                                                      style={{
+                                                        padding: '4px 8px',
+                                                        backgroundColor: '#F8FAFC',
+                                                        border: '1px solid #CBD5E1',
+                                                        borderRadius: '4px',
+                                                        fontSize: '11.5px',
+                                                        fontWeight: 600,
+                                                        color: '#0B2E6F',
+                                                        cursor: 'pointer',
+                                                      }}
+                                                    >
+                                                      Preview
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleOpenReplaceQuestion(s, q)}
+                                                      title="Replace this question with another item from the Question Bank"
+                                                      style={{
+                                                        padding: '4px 8px',
+                                                        backgroundColor: '#EFF6FF',
+                                                        border: '1px solid #BFDBFE',
+                                                        borderRadius: '4px',
+                                                        fontSize: '11.5px',
+                                                        fontWeight: 600,
+                                                        color: '#1D4ED8',
+                                                        cursor: 'pointer',
+                                                      }}
+                                                    >
+                                                      Replace
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleRemoveQuestionFromSection(s, q.id)}
+                                                      title="Remove question from this assessment pool (retains in Question Bank)"
+                                                      style={{
+                                                        padding: '4px 8px',
+                                                        backgroundColor: '#FFF1F2',
+                                                        border: '1px solid #FECDD3',
+                                                        borderRadius: '4px',
+                                                        fontSize: '11.5px',
+                                                        fontWeight: 600,
+                                                        color: '#BE123C',
+                                                        cursor: 'pointer',
+                                                      }}
+                                                    >
+                                                      Remove
+                                                    </button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
                         </div>
-                      </div>
-                    ) : (
-                      <div style={{ backgroundColor: '#F8FAFC', padding: '12px 14px', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '13px', color: '#475569' }}>
-                        <strong>Curriculum Allocation:</strong> {assessmentDetail.aptitude_count ?? 25} Aptitude + {assessmentDetail.coding_count ?? 25} Coding Questions (1 mark/Q)
-                      </div>
-                    )}
+                      ) : (
+                        <div style={{ padding: '12px 14px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '13px', color: '#475569' }}>
+                          <strong>Legacy Allocation:</strong> {assessmentDetail.aptitude_count ?? 25} Aptitude + {assessmentDetail.coding_count ?? 25} Coding Questions
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -3250,7 +3354,348 @@ export function AdminAssessmentsView({
                   );
                 })()}
 
-                {/* 3. AUDIT TRAIL TAB */}
+                {/* ─── QUESTION PREVIEW MODAL (PHASE 2.1) ────────────────────── */}
+      {previewQuestion && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '640px',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 800, fontSize: '12px', padding: '2px 8px', borderRadius: '4px' }}>
+                    #{previewQuestion.id}
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748B' }}>
+                    Section: <strong>{previewQuestion.section_name || previewQuestion.section_type}</strong>
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
+                    • {previewQuestion.marks || 1} Marks
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewQuestion(null)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A', marginBottom: '16px', lineHeight: 1.5, backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              {previewQuestion.prompt}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              {[
+                { key: 'A', text: previewQuestion.option_a },
+                { key: 'B', text: previewQuestion.option_b },
+                { key: 'C', text: previewQuestion.option_c },
+                { key: 'D', text: previewQuestion.option_d },
+              ].map(({ key, text }) => {
+                const isCorrect = (previewQuestion.correct_option || '').toUpperCase() === key;
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: isCorrect ? '2px solid #16A34A' : '1px solid #E2E8F0',
+                      backgroundColor: isCorrect ? '#F0FDF4' : '#FFFFFF',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '50%',
+                        backgroundColor: isCorrect ? '#16A34A' : '#E2E8F0',
+                        color: isCorrect ? '#FFFFFF' : '#475569',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 800,
+                        fontSize: '12px',
+                      }}
+                    >
+                      {isCorrect ? '✓' : key}
+                    </span>
+                    <span style={{ fontSize: '13.5px', color: isCorrect ? '#14532D' : '#334155', fontWeight: isCorrect ? 700 : 500 }}>
+                      {text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {previewQuestion.explanation && (
+              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
+                <strong style={{ color: '#1D4ED8' }}>Explanation:</strong>
+                <div style={{ color: '#1E3A8A', marginTop: '4px', lineHeight: 1.4 }}>{previewQuestion.explanation}</div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setPreviewQuestion(null)}
+                style={{ padding: '8px 18px', backgroundColor: '#0B2E6F', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── ADD QUESTIONS FROM BANK MODAL (PHASE 2.1) ───────────────── */}
+      {showAddQuestionsModal && targetSectionForAdd && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '720px',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Add Questions to {targetSectionForAdd.section_name} Pool
+                </h3>
+                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                  Select questions from the independent Question Bank to include in this assessment round.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddQuestionsModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAddQuestionsSubmit}>
+              {loadingBankQuestions ? (
+                <div style={{ padding: '36px', textAlign: 'center', color: '#64748B' }}>
+                  Searching available Question Bank items...
+                </div>
+              ) : bankQuestionsForAdd.length === 0 ? (
+                <div style={{ padding: '36px', textAlign: 'center', color: '#94A3B8', fontSize: '13px' }}>
+                  All bank questions for this section are already assigned to this assessment!
+                </div>
+              ) : (
+                <div style={{ maxHeight: '380px', overflowY: 'auto', border: '1px solid #E2E8F0', borderRadius: '8px', marginBottom: '16px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left' }}>
+                        <th style={{ padding: '10px 14px', width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            checked={bankQuestionsForAdd.length > 0 && selectedBankQuestionIds.length === bankQuestionsForAdd.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedBankQuestionIds(bankQuestionsForAdd.map((q) => q.id));
+                              } else {
+                                setSelectedBankQuestionIds([]);
+                              }
+                            }}
+                          />
+                        </th>
+                        <th style={{ padding: '10px 14px', color: '#64748B', fontWeight: 700 }}>PROMPT</th>
+                        <th style={{ padding: '10px 14px', width: '90px', color: '#64748B', fontWeight: 700 }}>DIFFICULTY</th>
+                        <th style={{ padding: '10px 14px', width: '70px', color: '#64748B', fontWeight: 700 }}>MARKS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bankQuestionsForAdd.map((q) => {
+                        const isSelected = selectedBankQuestionIds.includes(q.id);
+                        return (
+                          <tr
+                            key={q.id}
+                            style={{
+                              borderBottom: '1px solid #F1F5F9',
+                              backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => {
+                              setSelectedBankQuestionIds((prev) =>
+                                prev.includes(q.id) ? prev.filter((id) => id !== q.id) : [...prev, q.id]
+                              );
+                            }}
+                          >
+                            <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                style={{ pointerEvents: 'none' }}
+                              />
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <div style={{ fontWeight: 600, color: '#0F172A' }}>{q.prompt}</div>
+                              {q.category && <div style={{ fontSize: '11px', color: '#64748B' }}>{q.category}</div>}
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{ fontSize: '11px', fontWeight: 700, color: '#475569' }}>{q.difficulty}</span>
+                            </td>
+                            <td style={{ padding: '10px 14px', fontWeight: 700, color: '#0B2E6F' }}>{q.marks || 1}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#0B2E6F' }}>
+                  {selectedBankQuestionIds.length} Question{selectedBankQuestionIds.length === 1 ? '' : 's'} Selected
+                </span>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddQuestionsModal(false)}
+                    style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={addingBankQuestions || selectedBankQuestionIds.length === 0}
+                    style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', background: addingBankQuestions || selectedBankQuestionIds.length === 0 ? '#94A3B8' : '#1455B8', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: addingBankQuestions || selectedBankQuestionIds.length === 0 ? 'not-allowed' : 'pointer' }}
+                  >
+                    {addingBankQuestions ? 'Adding...' : `Add Selected (${selectedBankQuestionIds.length}) →`}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── REPLACE QUESTION MODAL (PHASE 2.1) ───────────────────────── */}
+      {showReplaceQuestionModal && replacingQuestion && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '640px',
+              maxWidth: '92vw',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                Replace Question #{replacingQuestion.id}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowReplaceQuestionModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ backgroundColor: '#F8FAFC', padding: '12px', borderRadius: '8px', border: '1px solid #E2E8F0', marginBottom: '16px', fontSize: '13px' }}>
+              <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Question to be replaced:</div>
+              <div style={{ fontWeight: 600, color: '#0F172A', marginTop: '4px' }}>{replacingQuestion.prompt}</div>
+            </div>
+
+            <form onSubmit={handleReplaceQuestionSubmit}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Select Replacement Question from Bank *
+                </label>
+                <select
+                  value={selectedReplacementId || ''}
+                  onChange={(e) => setSelectedReplacementId(Number(e.target.value) || null)}
+                  required
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                >
+                  <option value="">Choose a replacement question...</option>
+                  {replacementOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      #{opt.id} [{opt.difficulty}] - {opt.prompt.slice(0, 70)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowReplaceQuestionModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={replacingAction || !selectedReplacementId}
+                  style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', background: replacingAction || !selectedReplacementId ? '#94A3B8' : '#1455B8', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: replacingAction || !selectedReplacementId ? 'not-allowed' : 'pointer' }}
+                >
+                  {replacingAction ? 'Replacing...' : 'Confirm Replacement →'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. AUDIT TRAIL TAB */}
                 {detailTab === 'candidates' && (() => {
                   const filteredCandidates = allCandidates.filter((cand) => {
                     if (!candidateSearchQuery.trim()) return true;

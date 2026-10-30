@@ -12,6 +12,8 @@ import {
   importAdminQuestionsCSV,
   getAdminAssessments,
   getAdminSections,
+  createAdminSection,
+  assignAdminAssessmentQuestions,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
@@ -116,12 +118,23 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Hierarchy Navigation: Question Bank -> Assessment Selection -> Questions
+  // Phase 2.1 Question Bank modals state
+  const [previewQuestion, setPreviewQuestion] = useState<AdminQuestion | null>(null);
+  const [showCreateSectionModal, setShowCreateSectionModal] = useState(false);
+  const [createSectionForm, setCreateSectionForm] = useState({ name: '', code: '', description: '' });
+  const [creatingSection, setCreatingSection] = useState(false);
+  const [createSectionError, setCreateSectionError] = useState('');
+
+  // Pool Assignment Modal state
+  const [showPoolAssignModal, setShowPoolAssignModal] = useState(false);
+  const [targetQuestionIdsForPool, setTargetQuestionIdsForPool] = useState<number[]>([]);
+  const [selectedAssessmentIdsForPool, setSelectedAssessmentIdsForPool] = useState<string[]>([]);
+  const [assigningToPool, setAssigningToPool] = useState(false);
+  const [poolAssignError, setPoolAssignError] = useState('');
+
+  // Selected assessment state
   const [selectedAssessment, setSelectedAssessment] = useState<AdminAssessment | null>(null);
-  const [assessmentSearch, setAssessmentSearch] = useState('');
   const [importAssessmentId, setImportAssessmentId] = useState<string>(initialAssessmentId || '');
-  const [viewAllQuestions, setViewAllQuestions] = useState(true);
-  const [assessmentFilterStatus, setAssessmentFilterStatus] = useState<'ALL' | 'SUFFICIENT' | 'INSUFFICIENT'>('ALL');
 
   // Filters
   const [sectionFilter, setSectionFilter] = useState('');
@@ -226,32 +239,82 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         }
       }
     }).catch(() => {});
-    getAdminSections().then(setSections).catch(() => {});
+    loadSections();
   }, [initialAssessmentId]);
+
+  const loadSections = async () => {
+    try {
+      const data = await getAdminSections();
+      setSections(data);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     loadQuestions();
   }, [sectionFilter, difficultyFilter, activeFilter, assessmentFilter]);
 
-  const handleSelectAssessment = (a: AdminAssessment) => {
-    setSelectedAssessment(a);
-    setViewAllQuestions(false);
-    setAssessmentFilter(a.id);
-    setImportAssessmentId(a.id);
+  const handleOpenCreateSection = () => {
+    setCreateSectionForm({ name: '', code: '', description: '' });
+    setCreateSectionError('');
+    setShowCreateSectionModal(true);
   };
 
-  const handleClearAssessment = () => {
-    setSelectedAssessment(null);
-    setViewAllQuestions(false);
-    setAssessmentFilter('');
-    setImportAssessmentId('');
+  const handleCreateSectionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!createSectionForm.name.trim() || !createSectionForm.code.trim()) {
+      setCreateSectionError('Section name and code are required.');
+      return;
+    }
+    setCreatingSection(true);
+    setCreateSectionError('');
+    try {
+      await createAdminSection({
+        name: createSectionForm.name.trim(),
+        code: createSectionForm.code.trim().toUpperCase(),
+        description: createSectionForm.description.trim(),
+        is_active: true,
+      });
+      setShowCreateSectionModal(false);
+      loadSections();
+    } catch (err: any) {
+      setCreateSectionError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to create reusable section.');
+    } finally {
+      setCreatingSection(false);
+    }
   };
 
-  const handleViewAllQuestions = () => {
-    setSelectedAssessment(null);
-    setViewAllQuestions(true);
-    setAssessmentFilter('');
-    setImportAssessmentId('');
+  const handleOpenPoolAssign = (questionIds: number[]) => {
+    setTargetQuestionIdsForPool(questionIds);
+    setSelectedAssessmentIdsForPool([]);
+    setPoolAssignError('');
+    setShowPoolAssignModal(true);
+  };
+
+  const handlePoolAssignSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedAssessmentIdsForPool.length === 0 || targetQuestionIdsForPool.length === 0) {
+      setPoolAssignError('Please select at least one assessment pool.');
+      return;
+    }
+    setAssigningToPool(true);
+    setPoolAssignError('');
+    try {
+      for (const assId of selectedAssessmentIdsForPool) {
+        await assignAdminAssessmentQuestions(assId, {
+          question_ids: targetQuestionIdsForPool,
+          action: 'assign',
+        });
+      }
+      alert(`Successfully assigned ${targetQuestionIdsForPool.length} question(s) to ${selectedAssessmentIdsForPool.length} assessment pool(s).`);
+      setShowPoolAssignModal(false);
+      loadQuestions();
+    } catch (err: any) {
+      setPoolAssignError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to assign questions to assessment pools.');
+    } finally {
+      setAssigningToPool(false);
+    }
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -562,837 +625,287 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     setShowImportModal(false);
   };
 
-  const filteredAssessments = assessments.filter((a) => {
-    const matchesSearch =
-      !assessmentSearch ||
-      a.title.toLowerCase().includes(assessmentSearch.toLowerCase()) ||
-      a.code.toLowerCase().includes(assessmentSearch.toLowerCase());
-    const matchesStatus =
-      assessmentFilterStatus === 'ALL'
-        ? true
-        : assessmentFilterStatus === 'SUFFICIENT'
-        ? a.pool_sufficient
-        : !a.pool_sufficient;
-    return matchesSearch && matchesStatus;
-  });
-
-  const totalAssessmentsCount = assessments.length;
-  const sufficientAssessmentsCount = assessments.filter((a) => a.pool_sufficient).length;
-  const actionRequiredAssessmentsCount = assessments.filter((a) => !a.pool_sufficient).length;
-  const totalPoolQuestionsCount = assessments.reduce((sum, a) => sum + (a.pool_questions_count || 0), 0);
-
   return (
     <div>
-      {!selectedAssessment && !viewAllQuestions ? (
-        /* ─── LEVEL 1: QUESTION BANK LANDING & ASSESSMENT SELECTION ── */
-        <div>
-          {/* Banner Header */}
+      {/* ─── PHASE 2.1 INDEPENDENT QUESTION BANK HEADER ─────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '20px',
+          flexWrap: 'wrap',
+          gap: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
             style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '20px',
-              flexWrap: 'wrap',
-              gap: '12px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-              <div
-                style={{
-                  width: '44px',
-                  height: '44px',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                  border: '1px solid rgba(20, 85, 184, 0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#1455B8',
-                }}
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                </svg>
-              </div>
-              <div>
-                <h2
-                  style={{
-                    fontSize: '22px',
-                    fontWeight: 800,
-                    color: '#0B2E6F',
-                    margin: '0 0 2px 0',
-                    letterSpacing: '-0.02em',
-                  }}
-                >
-                  Question Bank Repository
-                </h2>
-                <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-                  Select an assessment below to manage its question pool, author curriculum items, or import questions via CSV.
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => {
-                  setImportResult(null);
-                  setShowImportModal(true);
-                }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '9px 18px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '8px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  color: '#0B2E6F',
-                  cursor: 'pointer',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
-                <span>Import CSV</span>
-              </button>
-
-              <button
-                onClick={openCreateModal}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '9px 20px',
-                  backgroundColor: '#1455B8',
-                  color: '#FFFFFF',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(20, 85, 184, 0.25)',
-                  transition: 'background-color 0.15s ease',
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                <span>Create New Question</span>
-              </button>
-            </div>
-          </div>
-
-          {/* ─── METRICS CARDS ────────────────────────────────────────── */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-              gap: '14px',
-              marginBottom: '20px',
-            }}
-          >
-            <div
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                padding: '16px 18px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total Assessments
-              </div>
-              <div style={{ fontSize: '26px', fontWeight: 800, color: '#0B2E6F', marginTop: '4px' }}>
-                {totalAssessmentsCount}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '2px' }}>
-                Configured curriculum tracks
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                padding: '16px 18px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Sufficient Pools
-              </div>
-              <div style={{ fontSize: '26px', fontWeight: 800, color: '#16A34A', marginTop: '4px' }}>
-                {sufficientAssessmentsCount}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
-                Ready for exam compilation
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                padding: '16px 18px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Action Required
-              </div>
-              <div style={{ fontSize: '26px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>
-                {actionRequiredAssessmentsCount}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
-                Pool below required count
-              </div>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                padding: '16px 18px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total Questions in Pools
-              </div>
-              <div style={{ fontSize: '26px', fontWeight: 800, color: '#1455B8', marginTop: '4px' }}>
-                {totalPoolQuestionsCount}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
-                Assigned across all tracks
-              </div>
-            </div>
-          </div>
-
-          {/* ─── ASSESSMENT SELECTION TOOLBAR ─────────────────────────── */}
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
+              width: '44px',
+              height: '44px',
               borderRadius: '12px',
-              border: '1px solid #E2E8F0',
-              padding: '12px 18px',
-              marginBottom: '18px',
+              backgroundColor: 'rgba(20, 85, 184, 0.08)',
+              border: '1px solid rgba(20, 85, 184, 0.2)',
               display: 'flex',
-              justifyContent: 'space-between',
               alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '12px',
+              justifyContent: 'center',
+              color: '#1455B8',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '280px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '360px' }}>
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#94A3B8"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
-                >
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                <input
-                  type="text"
-                  value={assessmentSearch}
-                  onChange={(e) => setAssessmentSearch(e.target.value)}
-                  placeholder="Search assessments by code or title..."
-                  style={{
-                    padding: '9px 12px 9px 36px',
-                    borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
-                    fontSize: '13px',
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    outlineColor: '#1455B8',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  onClick={() => setAssessmentFilterStatus('ALL')}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    border: assessmentFilterStatus === 'ALL' ? '1px solid #1455B8' : '1px solid #E2E8F0',
-                    backgroundColor: assessmentFilterStatus === 'ALL' ? 'rgba(20, 85, 184, 0.08)' : '#FFFFFF',
-                    color: assessmentFilterStatus === 'ALL' ? '#1455B8' : '#64748B',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  All ({totalAssessmentsCount})
-                </button>
-                <button
-                  onClick={() => setAssessmentFilterStatus('SUFFICIENT')}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    border: assessmentFilterStatus === 'SUFFICIENT' ? '1px solid #16A34A' : '1px solid #E2E8F0',
-                    backgroundColor: assessmentFilterStatus === 'SUFFICIENT' ? 'rgba(22, 163, 74, 0.08)' : '#FFFFFF',
-                    color: assessmentFilterStatus === 'SUFFICIENT' ? '#166534' : '#64748B',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Sufficient ({sufficientAssessmentsCount})
-                </button>
-                <button
-                  onClick={() => setAssessmentFilterStatus('INSUFFICIENT')}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    border: assessmentFilterStatus === 'INSUFFICIENT' ? '1px solid #D97706' : '1px solid #E2E8F0',
-                    backgroundColor: assessmentFilterStatus === 'INSUFFICIENT' ? 'rgba(217, 119, 6, 0.08)' : '#FFFFFF',
-                    color: assessmentFilterStatus === 'INSUFFICIENT' ? '#B45309' : '#64748B',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Action Required ({actionRequiredAssessmentsCount})
-                </button>
-              </div>
-            </div>
-
-            <button
-              onClick={handleViewAllQuestions}
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '8px 14px',
-                backgroundColor: '#F8FAFC',
-                border: '1px solid #CBD5E1',
-                borderRadius: '8px',
-                fontSize: '12px',
-                fontWeight: 700,
+                fontSize: '22px',
+                fontWeight: 800,
                 color: '#0B2E6F',
-                cursor: 'pointer',
-                transition: 'background-color 0.15s',
+                margin: '0 0 2px 0',
+                letterSpacing: '-0.02em',
               }}
             >
-              <span>Browse Global Pool (All Questions) →</span>
-            </button>
+              Independent Question Bank
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
+              Central repository of reusable curriculum items across dynamic sections. Questions can be assigned to multiple assessment pools.
+            </p>
           </div>
-
-          {/* ─── ASSESSMENT CARDS GRID ─────────────────────────────────── */}
-          {filteredAssessments.length === 0 ? (
-            <div
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                padding: '48px 24px',
-                textAlign: 'center',
-                color: '#64748B',
-              }}
-            >
-              <div style={{ fontSize: '15px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                No assessments found
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                No assessments match your current search and filter criteria.
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-                gap: '18px',
-              }}
-            >
-              {filteredAssessments.map((a) => (
-                <div
-                  key={a.id}
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    borderRadius: '14px',
-                    border: '1.5px solid #E2E8F0',
-                    padding: '20px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    boxShadow: '0 2px 6px rgba(11, 46, 111, 0.03)',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = '#1455B8';
-                    e.currentTarget.style.boxShadow = '0 6px 18px rgba(20, 85, 184, 0.08)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = '#E2E8F0';
-                    e.currentTarget.style.boxShadow = '0 2px 6px rgba(11, 46, 111, 0.03)';
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                      <span
-                        style={{
-                          fontFamily: 'monospace',
-                          fontWeight: 800,
-                          fontSize: '13px',
-                          color: '#0B2E6F',
-                          backgroundColor: '#EEF2FF',
-                          border: '1px solid #C7D2FE',
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                        }}
-                      >
-                        {a.code}
-                      </span>
-
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <span
-                          style={{
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            backgroundColor:
-                              a.status === 'OPEN'
-                                ? '#DCFCE7'
-                                : a.status === 'READY'
-                                ? '#DBEAFE'
-                                : a.status === 'CLOSED'
-                                ? '#F1F5F9'
-                                : '#FEF3C7',
-                            color:
-                              a.status === 'OPEN'
-                                ? '#166534'
-                                : a.status === 'READY'
-                                ? '#1E40AF'
-                                : a.status === 'CLOSED'
-                                ? '#475569'
-                                : '#92400E',
-                          }}
-                        >
-                          {a.status}
-                        </span>
-                      </div>
-                    </div>
-
-                    <h3
-                      style={{
-                        fontSize: '16px',
-                        fontWeight: 800,
-                        color: '#0B2E6F',
-                        margin: '0 0 6px 0',
-                        letterSpacing: '-0.01em',
-                      }}
-                    >
-                      {a.title}
-                    </h3>
-
-                    <p
-                      style={{
-                        fontSize: '12.5px',
-                        color: '#64748B',
-                        margin: '0 0 16px 0',
-                        lineHeight: '1.45',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {a.description || 'No detailed assessment curriculum description provided.'}
-                    </p>
-
-                    {/* Pool & Requirement Box */}
-                    <div
-                      style={{
-                        backgroundColor: '#FAF7F3',
-                        border: '1px solid #E2E8F0',
-                        borderRadius: '10px',
-                        padding: '12px 14px',
-                        marginBottom: '16px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
-                        <span style={{ color: '#64748B', fontWeight: 600 }}>Test Requirement:</span>
-                        <span style={{ color: '#0B2E6F', fontWeight: 700 }}>
-                          {a.aptitude_count} Aptitude + {a.coding_count} Coding ({a.aptitude_count + a.coding_count} Total)
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '8px' }}>
-                        <span style={{ color: '#64748B', fontWeight: 600 }}>Assigned Pool:</span>
-                        <span style={{ color: '#1455B8', fontWeight: 700 }}>
-                          {a.pool_questions_count ?? 0} Questions ({a.pool_aptitude_count ?? 0} Apt / {a.pool_coding_count ?? 0} Cod)
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '8px', borderTop: '1px dashed #CBD5E1' }}>
-                        <span style={{ fontSize: '11.5px', color: '#64748B' }}>Pool Status:</span>
-                        {a.pool_sufficient ? (
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              padding: '2px 8px',
-                              borderRadius: '12px',
-                              backgroundColor: '#DCFCE7',
-                              color: '#166534',
-                            }}
-                          >
-                            ✓ Sufficient Pool
-                          </span>
-                        ) : (
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              padding: '2px 8px',
-                              borderRadius: '12px',
-                              backgroundColor: '#FEF3C7',
-                              color: '#92400E',
-                            }}
-                          >
-                            ⚠ Needs Questions
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleSelectAssessment(a)}
-                    style={{
-                      width: '100%',
-                      padding: '10px 16px',
-                      backgroundColor: '#1455B8',
-                      color: '#FFFFFF',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      transition: 'background-color 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0B2E6F')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#1455B8')}
-                  >
-                    <span>Manage Question Pool</span>
-                    <span>→</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      ) : (
-        /* ─── LEVEL 2: ASSESSMENT SCOPED QUESTIONS VIEW ─────────────── */
-        <div>
-          {/* Breadcrumb & Assessment Context Bar */}
-          <div
+
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleOpenCreateSection}
             style={{
-              display: 'flex',
-              justifyContent: 'space-between',
+              display: 'inline-flex',
               alignItems: 'center',
-              marginBottom: '18px',
-              padding: '12px 18px',
+              gap: '6px',
+              padding: '9px 16px',
               backgroundColor: '#FFFFFF',
-              borderRadius: '12px',
-              border: '1px solid #E2E8F0',
-              flexWrap: 'wrap',
-              gap: '12px',
+              border: '1px solid #CBD5E1',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#0B2E6F',
+              cursor: 'pointer',
               boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-              <button
-                onClick={handleClearAssessment}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
-                  backgroundColor: '#F8FAFC',
-                  color: '#0B2E6F',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EEF2FF')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#F8FAFC')}
-              >
-                <span>← Back to Assessments</span>
-              </button>
+            <span>+ Create Reusable Section</span>
+          </button>
 
-              <span style={{ color: '#CBD5E1', fontSize: '16px' }}>/</span>
+          <button
+            type="button"
+            onClick={() => {
+              setImportResult(null);
+              setShowImportModal(true);
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '9px 16px',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #CBD5E1',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#0B2E6F',
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Import CSV</span>
+          </button>
 
-              {selectedAssessment ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <span
-                    style={{
-                      fontFamily: 'monospace',
-                      fontWeight: 800,
-                      fontSize: '13px',
-                      color: '#0B2E6F',
-                      backgroundColor: '#EEF2FF',
-                      border: '1px solid #C7D2FE',
-                      padding: '3px 8px',
-                      borderRadius: '6px',
-                    }}
-                  >
-                    {selectedAssessment.code}
-                  </span>
-                  <span style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F' }}>
-                    {selectedAssessment.title}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      padding: '2px 8px',
-                      borderRadius: '12px',
-                      backgroundColor: selectedAssessment.pool_sufficient ? '#DCFCE7' : '#FEF3C7',
-                      color: selectedAssessment.pool_sufficient ? '#166534' : '#92400E',
-                    }}
-                  >
-                    {selectedAssessment.pool_sufficient ? '✓ Sufficient Pool' : '⚠ Pool Needs Questions'}
-                  </span>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F' }}>
-                    Global Question Bank (All Assessments)
-                  </span>
-                </div>
-              )}
-            </div>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '9px 20px',
+              backgroundColor: '#1455B8',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(20, 85, 184, 0.25)',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>+ Create Question</span>
+          </button>
+        </div>
+      </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>Switch Assessment:</span>
-                <select
-                  value={selectedAssessment?.id || ''}
-                  onChange={(e) => {
-                    if (!e.target.value) {
-                      handleViewAllQuestions();
-                    } else {
-                      const found = assessments.find((a) => a.id === e.target.value);
-                      if (found) handleSelectAssessment(found);
-                    }
-                  }}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid #CBD5E1',
-                    fontSize: '12.5px',
-                    backgroundColor: '#FFFFFF',
-                    fontWeight: 600,
-                    color: '#1E293B',
-                  }}
-                >
-                  <option value="">-- All Assessments (Global) --</option>
-                  {assessments.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.code} — {a.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                onClick={() => {
-                  setImportResult(null);
-                  setShowImportModal(true);
-                }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '8px',
-                  fontSize: '12.5px',
-                  fontWeight: 700,
-                  color: '#0B2E6F',
-                  cursor: 'pointer',
-                }}
-              >
-                <span>Import CSV</span>
-              </button>
-
-              <button
-                onClick={openCreateModal}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 16px',
-                  backgroundColor: '#1455B8',
-                  color: '#FFFFFF',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '12.5px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                <span>+ Add Question</span>
-              </button>
-            </div>
+      {/* ─── METRICS CARDS ────────────────────────────────────────── */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+          gap: '14px',
+          marginBottom: '20px',
+        }}
+      >
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            border: '1px solid #E2E8F0',
+            padding: '16px 18px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Total Bank Questions
           </div>
+          <div style={{ fontSize: '26px', fontWeight: 800, color: '#0B2E6F', marginTop: '4px' }}>
+            {questions.length}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '2px' }}>
+            Available across all curriculum tracks
+          </div>
+        </div>
 
-          {/* Assessment Pool Summary Card (if selectedAssessment) */}
-          {selectedAssessment && (
-            <div
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            border: '1px solid #E2E8F0',
+            padding: '16px 18px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Active Questions
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 800, color: '#16A34A', marginTop: '4px' }}>
+            {questions.filter((q) => q.is_active && !q.is_archived).length}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+            Live for assignment & delivery
+          </div>
+        </div>
+
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            border: '1px solid #E2E8F0',
+            padding: '16px 18px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#5B21B6', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Reusable Sections
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 800, color: '#7C3AED', marginTop: '4px' }}>
+            {sections.length}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+            Categorized section buckets
+          </div>
+        </div>
+
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            border: '1px solid #E2E8F0',
+            padding: '16px 18px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#9A3412', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Archived Questions
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 800, color: '#EA580C', marginTop: '4px' }}>
+            {questions.filter((q) => q.is_archived).length}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+            Safely retained historical items
+          </div>
+        </div>
+      </div>
+
+      {/* ─── SECTION NAVIGATION TAB PILLS (PHASE 2.1) ───────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'center',
+          overflowX: 'auto',
+          paddingBottom: '12px',
+          marginBottom: '14px',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            setSectionFilter('');
+          }}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '20px',
+            border: !sectionFilter ? '2px solid #1455B8' : '1px solid #CBD5E1',
+            backgroundColor: !sectionFilter ? '#EFF6FF' : '#FFFFFF',
+            color: !sectionFilter ? '#1D4ED8' : '#475569',
+            fontWeight: !sectionFilter ? 800 : 600,
+            fontSize: '13px',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          All Questions ({questions.length})
+        </button>
+
+        {sections.map((sec) => {
+          const count = questions.filter(
+            (q) => (q.section_type || '').toUpperCase() === sec.code.toUpperCase() || q.section_id === sec.id
+          ).length;
+          const isSelected = sectionFilter.toUpperCase() === sec.code.toUpperCase();
+
+          return (
+            <button
+              key={sec.id}
+              type="button"
+              onClick={() => {
+                setSectionFilter(sec.code);
+              }}
               style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: '12px',
-                border: '1.5px solid rgba(20, 85, 184, 0.15)',
-                padding: '14px 20px',
-                marginBottom: '16px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '12px',
-                background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                border: isSelected ? '2px solid #7C3AED' : '1px solid #CBD5E1',
+                backgroundColor: isSelected ? '#F5F3FF' : '#FFFFFF',
+                color: isSelected ? '#6D28D9' : '#475569',
+                fontWeight: isSelected ? 800 : 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                transition: 'all 0.15s ease',
               }}
             >
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 800, color: '#0B2E6F', marginBottom: '2px' }}>
-                  Question Pool Composition: {selectedAssessment.title}
-                </div>
-                <div style={{ fontSize: '12px', color: '#64748B' }}>
-                  {selectedAssessment.sections && selectedAssessment.sections.length > 0 ? (
-                    <>
-                      Exam Requirement:{' '}
-                      {selectedAssessment.sections.map((sec, idx) => (
-                        <span key={sec.section_id || idx}>
-                          <strong>
-                            {sec.question_count} {sec.section_name || sec.section_code || 'Section'}
-                          </strong>
-                          {idx < (selectedAssessment.sections?.length || 0) - 1 ? ' + ' : ''}
-                        </span>
-                      ))}{' '}
-                      (Total:{' '}
-                      <strong>
-                        {selectedAssessment.sections.reduce((acc, s) => acc + (s.question_count || 0), 0)}
-                      </strong>)
-                    </>
-                  ) : (selectedAssessment.aptitude_count > 0 || selectedAssessment.coding_count > 0) ? (
-                    <>
-                      Exam Requirement:{' '}
-                      {selectedAssessment.aptitude_count > 0 && <strong>{selectedAssessment.aptitude_count} Aptitude</strong>}
-                      {selectedAssessment.aptitude_count > 0 && selectedAssessment.coding_count > 0 && ' + '}
-                      {selectedAssessment.coding_count > 0 && <strong>{selectedAssessment.coding_count} Coding</strong>}
-                      {' '}questions (Total:{' '}
-                      <strong>{selectedAssessment.aptitude_count + selectedAssessment.coding_count}</strong>)
-                    </>
-                  ) : (
-                    <>
-                      Exam Requirement: <strong>No section requirements configured</strong>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Available in Pool</div>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#1455B8' }}>
-                    {selectedAssessment.sections && selectedAssessment.sections.length > 0 ? (
-                      <>
-                        {selectedAssessment.sections.map((sec, idx) => {
-                          const secCode = (sec.section_code || '').toUpperCase();
-                          const secName = (sec.section_name || '').toUpperCase();
-                          const count = questions.filter(
-                            (q) =>
-                              (q.section_type && q.section_type.toUpperCase() === secCode) ||
-                              (q.section_name && q.section_name.toUpperCase() === secName)
-                          ).length;
-                          return (
-                            <span key={sec.section_id || idx}>
-                              {count} {sec.section_name || sec.section_code || 'Sec'}
-                              {idx < (selectedAssessment.sections?.length || 0) - 1 ? ' / ' : ''}
-                            </span>
-                          );
-                        })}{' '}
-                        ({questions.length} total)
-                      </>
-                    ) : (selectedAssessment.aptitude_count > 0 || selectedAssessment.coding_count > 0) ? (
-                      <>
-                        {questions.filter((q) => q.section_type === 'APTITUDE').length} Aptitude /{' '}
-                        {questions.filter((q) => q.section_type === 'CODING').length} Coding ({questions.length} total)
-                      </>
-                    ) : (
-                      <>{questions.length} total</>
-                    )}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '8px',
-                    backgroundColor: selectedAssessment.pool_sufficient ? '#DCFCE7' : '#FEF3C7',
-                    border: `1px solid ${selectedAssessment.pool_sufficient ? '#86EFAC' : '#FCD34D'}`,
-                    color: selectedAssessment.pool_sufficient ? '#166534' : '#92400E',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                  }}
-                >
-                  {selectedAssessment.pool_sufficient
-                    ? '✓ Pool is Sufficient'
-                    : selectedAssessment.sections && selectedAssessment.sections.length > 0
-                    ? `⚠ Shortage (${selectedAssessment.sections
-                        .map((sec) => {
-                          const secCode = (sec.section_code || '').toUpperCase();
-                          const secName = (sec.section_name || '').toUpperCase();
-                          const count = questions.filter(
-                            (q) =>
-                              (q.section_type && q.section_type.toUpperCase() === secCode) ||
-                              (q.section_name && q.section_name.toUpperCase() === secName)
-                          ).length;
-                          const shortage = Math.max(0, sec.question_count - count);
-                          return shortage > 0 ? `${shortage} ${sec.section_code || sec.section_name || 'Sec'}` : null;
-                        })
-                        .filter(Boolean)
-                        .join(', ') || 'Check Pool'})`
-                    : (selectedAssessment.aptitude_count > 0 || selectedAssessment.coding_count > 0)
-                    ? `⚠ Shortage (${Math.max(0, selectedAssessment.aptitude_count - questions.filter((q) => q.section_type === 'APTITUDE').length)} Apt, ${Math.max(0, selectedAssessment.coding_count - questions.filter((q) => q.section_type === 'CODING').length)} Cod)`
-                    : '⚠ Shortage (No questions)'}
-                </div>
-              </div>
-            </div>
-          )}
+              {sec.name} ({count})
+            </button>
+          );
+        })}
+      </div>
 
       {/* ─── FILTER TOOLBAR ────────────────────────────────────────── */}
       <div
@@ -1635,6 +1148,27 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => handleOpenPoolAssign(selectedIds)}
+              disabled={bulkUpdating}
+              style={{
+                padding: '7px 14px',
+                backgroundColor: '#7C3AED',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <span>🎯 Assign to Pool ({selectedIds.length})</span>
+            </button>
+
             <button
               onClick={() => openBulkModal('section_type')}
               disabled={bulkUpdating}
@@ -2042,6 +1576,48 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                     {/* Phase 2.1 Actions */}
                     <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
+                        type="button"
+                        onClick={() => setPreviewQuestion(q)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '4px 8px',
+                          backgroundColor: '#F8FAFC',
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '6px',
+                          color: '#0B2E6F',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                        title="Preview question options and details"
+                      >
+                        👁️ Preview
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPoolAssign([q.id])}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '4px 8px',
+                          backgroundColor: '#F5F3FF',
+                          border: '1px solid #DDD6FE',
+                          borderRadius: '6px',
+                          color: '#6D28D9',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                        title="Assign to one or more assessment pools"
+                      >
+                        🎯 Pool
+                      </button>
+
+                      <button
                         onClick={() => openEditModal(q)}
                         style={{
                           display: 'inline-flex',
@@ -2201,8 +1777,6 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           </div>
         </div>
       </div>
-    </div>
-  )}
 
       {/* ─── DEDICATED SPACIOUS QUESTION EDITOR MODAL ─────────────── */}
       <AdminQuestionEditorModal
@@ -2863,6 +2437,393 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* ─── QUESTION PREVIEW MODAL (PHASE 2.1) ────────────────────── */}
+      {previewQuestion && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '640px',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 800, fontSize: '12px', padding: '2px 8px', borderRadius: '4px' }}>
+                    #{previewQuestion.id}
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748B' }}>
+                    Section: <strong>{getQuestionSectionDisplay(previewQuestion, sections)}</strong>
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
+                    • {previewQuestion.marks || 1} Marks
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: previewQuestion.difficulty === 'EASY' ? '#DCFCE7' : previewQuestion.difficulty === 'MEDIUM' ? '#FEF3C7' : '#FEE2E2',
+                      color: previewQuestion.difficulty === 'EASY' ? '#166534' : previewQuestion.difficulty === 'MEDIUM' ? '#92400E' : '#991B1B',
+                    }}
+                  >
+                    {previewQuestion.difficulty}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewQuestion(null)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A', marginBottom: '16px', lineHeight: 1.5, backgroundColor: '#F8FAFC', padding: '14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+              {previewQuestion.prompt}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              {[
+                { key: 'A', text: previewQuestion.option_a },
+                { key: 'B', text: previewQuestion.option_b },
+                { key: 'C', text: previewQuestion.option_c },
+                { key: 'D', text: previewQuestion.option_d },
+              ].map(({ key, text }) => {
+                const isCorrect = (previewQuestion.correct_option || '').toUpperCase() === key;
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: isCorrect ? '2px solid #16A34A' : '1px solid #E2E8F0',
+                      backgroundColor: isCorrect ? '#F0FDF4' : '#FFFFFF',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '50%',
+                        backgroundColor: isCorrect ? '#16A34A' : '#E2E8F0',
+                        color: isCorrect ? '#FFFFFF' : '#475569',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 800,
+                        fontSize: '12px',
+                      }}
+                    >
+                      {isCorrect ? '✓' : key}
+                    </span>
+                    <span style={{ fontSize: '13.5px', color: isCorrect ? '#14532D' : '#334155', fontWeight: isCorrect ? 700 : 500 }}>
+                      {text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {previewQuestion.explanation && (
+              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
+                <strong style={{ color: '#1D4ED8' }}>Explanation:</strong>
+                <div style={{ color: '#1E3A8A', marginTop: '4px', lineHeight: 1.4 }}>{previewQuestion.explanation}</div>
+              </div>
+            )}
+
+            {previewQuestion.assigned_assessments && previewQuestion.assigned_assessments.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <strong style={{ fontSize: '12px', color: '#64748B', textTransform: 'uppercase' }}>Assigned to Assessment Pools:</strong>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                  {previewQuestion.assigned_assessments.map((ass) => (
+                    <span
+                      key={ass.id}
+                      style={{
+                        backgroundColor: '#EEF2FF',
+                        color: '#3730A3',
+                        border: '1px solid #C7D2FE',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {ass.code} — {ass.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewQuestion(null);
+                  handleOpenPoolAssign([previewQuestion.id]);
+                }}
+                style={{ padding: '8px 18px', backgroundColor: '#7C3AED', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                🎯 Assign to Pool
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewQuestion(null)}
+                style={{ padding: '8px 18px', backgroundColor: '#0B2E6F', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── CREATE REUSABLE SECTION MODAL (PHASE 2.1) ───────────────── */}
+      {showCreateSectionModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '520px',
+              maxWidth: '90vw',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                Create Reusable Assessment Section
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCreateSectionModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSectionSubmit}>
+              {createSectionError && (
+                <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px', borderRadius: '6px', marginBottom: '12px', fontSize: '12px' }}>
+                  {createSectionError}
+                </div>
+              )}
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Section Name *
+                </label>
+                <input
+                  type="text"
+                  value={createSectionForm.name}
+                  onChange={(e) => setCreateSectionForm({ ...createSectionForm, name: e.target.value })}
+                  placeholder="e.g. Logical Reasoning, System Design, SQL"
+                  required
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Section Code *
+                </label>
+                <input
+                  type="text"
+                  value={createSectionForm.code}
+                  onChange={(e) => setCreateSectionForm({ ...createSectionForm, code: e.target.value.toUpperCase() })}
+                  placeholder="e.g. LOGICAL, SYS_DESIGN, SQL_QUERY"
+                  required
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', textTransform: 'uppercase' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Description
+                </label>
+                <textarea
+                  value={createSectionForm.description}
+                  onChange={(e) => setCreateSectionForm({ ...createSectionForm, description: e.target.value })}
+                  placeholder="Optional section curriculum details..."
+                  rows={3}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateSectionModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingSection}
+                  style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', background: '#0B2E6F', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: creatingSection ? 'not-allowed' : 'pointer' }}
+                >
+                  {creatingSection ? 'Creating...' : 'Create Section →'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── ASSIGN TO ASSESSMENT POOL MODAL (PHASE 2.1) ─────────────── */}
+      {showPoolAssignModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '560px',
+              maxWidth: '90vw',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Assign to Assessment Pools
+                </h3>
+                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                  Assigning {targetQuestionIdsForPool.length} question(s) to assessment delivery rounds.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPoolAssignModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handlePoolAssignSubmit}>
+              {poolAssignError && (
+                <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px', borderRadius: '6px', marginBottom: '12px', fontSize: '12px' }}>
+                  {poolAssignError}
+                </div>
+              )}
+
+              <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
+                {assessments.map((a) => {
+                  const isChecked = selectedAssessmentIdsForPool.includes(a.id);
+                  return (
+                    <label
+                      key={a.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        backgroundColor: isChecked ? '#F0F7FF' : 'transparent',
+                        cursor: 'pointer',
+                        marginBottom: '4px',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedAssessmentIdsForPool((prev) => [...prev, a.id]);
+                          } else {
+                            setSelectedAssessmentIdsForPool((prev) => prev.filter((id) => id !== a.id));
+                          }
+                        }}
+                        style={{ width: '16px', height: '16px', accentColor: '#1455B8' }}
+                      />
+                      <div>
+                        <span style={{ fontWeight: 700, color: '#0B2E6F', fontSize: '13px' }}>
+                          [{a.code}] {a.title}
+                        </span>
+                        <div style={{ fontSize: '11px', color: '#64748B' }}>
+                          Status: {a.status} • Questions in pool: {a.pool_questions_count || 0}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowPoolAssignModal(false)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={assigningToPool || selectedAssessmentIdsForPool.length === 0}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: assigningToPool || selectedAssessmentIdsForPool.length === 0 ? '#94A3B8' : '#7C3AED',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: assigningToPool || selectedAssessmentIdsForPool.length === 0 ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {assigningToPool ? 'Assigning...' : `Assign to ${selectedAssessmentIdsForPool.length} Pool(s) →`}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
