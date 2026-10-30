@@ -312,6 +312,7 @@ class AssessmentResultSerializer(serializers.ModelSerializer):
             "coding_score",
             "total_score",
             "percentage",
+            "section_scores",
             "duration_minutes",
             "max_marks",
             "total_questions",
@@ -356,6 +357,7 @@ class AssessmentResultSerializer(serializers.ModelSerializer):
                 "coding_score",
                 "total_score",
                 "percentage",
+                "section_scores",
                 "breakdown",
             ]:
                 data.pop(sensitive_key, None)

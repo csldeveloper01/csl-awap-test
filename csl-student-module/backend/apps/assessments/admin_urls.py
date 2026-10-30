@@ -3,6 +3,7 @@ from .admin_views import (
     AdminMeView,
     AdminStatsView,
     AdminCollegeListView,
+    AdminCollegeMergeView,
     AdminCollegeDetailView,
     AdminCollegeToggleStatusView,
     AdminCollegeBulkDeleteView,
@@ -37,6 +38,7 @@ from .admin_views import (
     AdminConfigView,
     AdminLiveAttemptsView,
     AdminAttemptReviewView,
+    AdminAttemptRevokeView,
     AdminAttemptBulkDeleteView,
     AdminResultsView,
     AdminIntegrityEventsView,
@@ -59,6 +61,7 @@ urlpatterns = [
     path("colleges/<int:pk>/", AdminCollegeDetailView.as_view(), name="admin-college-detail"),
     path("colleges/<int:pk>/toggle-status/", AdminCollegeToggleStatusView.as_view(), name="admin-college-toggle-status"),
     path("colleges/<int:pk>/import-candidates/", AdminCollegeImportCandidatesView.as_view(), name="admin-college-import-candidates"),
+    path("colleges/<int:pk>/merge/", AdminCollegeMergeView.as_view(), name="admin-college-merge"),
 
     # Assessments
     path("assessments/", AdminAssessmentListView.as_view(), name="admin-assessments"),
@@ -102,6 +105,7 @@ urlpatterns = [
     path("attempts/live/", AdminLiveAttemptsView.as_view(), name="admin-live-attempts"),
     path("attempts/bulk-delete/", AdminAttemptBulkDeleteView.as_view(), name="admin-attempts-bulk-delete"),
     path("attempts/<uuid:attempt_id>/review/", AdminAttemptReviewView.as_view(), name="admin-attempt-review"),
+    path("attempts/<uuid:pk>/revoke/", AdminAttemptRevokeView.as_view(), name="admin-attempt-revoke"),
     path("results/", AdminResultsView.as_view(), name="admin-results"),
     path("integrity-events/", AdminIntegrityEventsView.as_view(), name="admin-integrity-events"),
     path("integrity-events/bulk-delete/", AdminIntegrityEventBulkDeleteView.as_view(), name="admin-integrity-events-bulk-delete"),

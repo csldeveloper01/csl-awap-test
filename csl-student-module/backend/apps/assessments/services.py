@@ -1100,6 +1100,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
         locked_attempt.coding_score = 0
         locked_attempt.total_score = 0
         locked_attempt.percentage = 0.0
+        locked_attempt.section_scores = {}
         locked_attempt.submitted_at = now
         locked_attempt.save(
             update_fields=[
@@ -1108,6 +1109,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
                 "coding_score",
                 "total_score",
                 "percentage",
+                "section_scores",
                 "submitted_at",
                 "updated_at",
             ]
@@ -1148,11 +1150,29 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
     coding_score = 0
     total_score = 0
 
+    section_scores = {}
+
     for s in snapshots:
+        sec_key = (s.section_type or "GENERAL").strip().upper()
+        if sec_key not in section_scores:
+            q_marks = marks_map.get(sec_key, 1)
+            section_scores[sec_key] = {
+                "section_code": sec_key,
+                "score": 0,
+                "max_marks": 0,
+                "correct": 0,
+                "total_questions": 0,
+                "percentage": 0.0,
+                "marks_per_question": q_marks,
+            }
+        q_marks = section_scores[sec_key]["marks_per_question"]
+        section_scores[sec_key]["total_questions"] += 1
+        section_scores[sec_key]["max_marks"] += q_marks
+
         if s.selected_option and s.selected_option == s.correct_option_key:
             s.is_correct = True
-            sec_key = (s.section_type or "").upper()
-            q_marks = marks_map.get(sec_key, 1)
+            section_scores[sec_key]["correct"] += 1
+            section_scores[sec_key]["score"] += q_marks
             total_score += q_marks
             if sec_key in ("APTITUDE",):
                 aptitude_score += q_marks
@@ -1160,6 +1180,10 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
                 coding_score += q_marks
         else:
             s.is_correct = False
+
+    for sec_data in section_scores.values():
+        if sec_data["max_marks"] > 0:
+            sec_data["percentage"] = round((sec_data["score"] / float(sec_data["max_marks"])) * 100.0, 2)
 
     scoring_ms = (time.perf_counter() - scoring_start) * 1000.0
 
@@ -1178,6 +1202,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
     locked_attempt.coding_score = coding_score
     locked_attempt.total_score = total_score
     locked_attempt.percentage = percentage
+    locked_attempt.section_scores = section_scores
     locked_attempt.submitted_at = now
     locked_attempt.save(
         update_fields=[
@@ -1186,6 +1211,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
             "coding_score",
             "total_score",
             "percentage",
+            "section_scores",
             "submitted_at",
             "updated_at",
         ]
@@ -1217,3 +1243,65 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
     )
 
     return locked_attempt
+
+
+def resolve_or_create_college(name: str, code: str = None, location: str = "", is_student_entry: bool = False):
+    """
+    Resolves an institution name against existing colleges or creates a provisional record.
+    1. Checks exact normalized name match.
+    2. Checks alias matches (contained in aliases list).
+    3. Checks case-insensitive name match.
+    4. If code is provided, checks code match.
+    5. If no match found, creates a new College. If is_student_entry=True, marked as is_verified=False.
+    """
+    from .models import College, normalize_college_name
+    raw_name = (name or "").strip()
+    if not raw_name:
+        raise ValueError("College name cannot be empty.")
+
+    norm = normalize_college_name(raw_name)
+
+    # 1. Exact normalized name match
+    college = College.objects.filter(normalized_name=norm, is_active=True).first()
+    if college:
+        return college
+
+    # 2. Case-insensitive name match
+    college = College.objects.filter(name__iexact=raw_name, is_active=True).first()
+    if college:
+        return college
+
+    # 3. Match within aliases
+    for candidate_col in College.objects.filter(is_active=True):
+        if candidate_col.aliases and isinstance(candidate_col.aliases, list):
+            for alias in candidate_col.aliases:
+                if normalize_college_name(str(alias)) == norm or str(alias).strip().lower() == raw_name.lower():
+                    return candidate_col
+
+    # 4. If code provided, match by code
+    if code:
+        college = College.objects.filter(code__iexact=code.strip().upper(), is_active=True).first()
+        if college:
+            return college
+
+    # 5. Create new college
+    gen_code = (code or "").strip().upper()
+    if not gen_code:
+        clean_code = re.sub(r"[^A-Z0-9]", "", raw_name.upper())[:10]
+        if clean_code and not College.objects.filter(code=clean_code).exists():
+            gen_code = clean_code
+        else:
+            import uuid
+            gen_code = f"COL-{uuid.uuid4().hex[:6].upper()}"
+
+    college, created = College.objects.get_or_create(
+        code=gen_code,
+        defaults={
+            "name": raw_name,
+            "normalized_name": norm,
+            "location": location,
+            "is_verified": not is_student_entry,
+            "is_active": True,
+        }
+    )
+    return college

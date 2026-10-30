@@ -115,10 +115,10 @@ class AdminCollegeListSerializer(serializers.ModelSerializer):
         ]
 
     def get_candidates_count(self, obj):
-        return obj.candidates.count()
+        return getattr(obj, "annotated_candidates_count", obj.candidates.count())
 
     def get_assigned_assessments_count(self, obj):
-        return obj.assigned_assessments.count()
+        return getattr(obj, "annotated_assessments_count", obj.assigned_assessments.count())
 
     def get_active_attempts_count(self, obj):
         return AssessmentAttempt.objects.filter(
@@ -436,34 +436,118 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             return data
 
         sections_data = self.initial_data.get("sections")
+        target_status = data.get("status", getattr(self.instance, "status", Assessment.Status.DRAFT))
+
         if sections_data is not None:
             if not isinstance(sections_data, list) or len(sections_data) == 0:
                 errors["sections"] = "At least one section must be configured for the assessment."
             else:
+                if self.instance:
+                    active_attempts = self.instance.attempts.filter(
+                        state__in=[AssessmentAttempt.State.CREATED, AssessmentAttempt.State.IN_PROGRESS]
+                    ).count()
+                    if active_attempts > 0:
+                        errors["sections"] = f"Cannot reconfigure sections while {active_attempts} candidate attempt(s) are active or created."
+
                 calculated_total = 0
+                seen_sec_ids = set()
+                from .models import AssessmentSection, QuestionBank
+                from django.db.models import Q
+
                 for idx, sec in enumerate(sections_data):
-                    sec_id = sec.get("section_id")
-                    q_count = int(sec.get("question_count", 0))
-                    marks_q = int(sec.get("marks_per_question", 1))
+                    try:
+                        sec_id = int(sec.get("section_id") or 0)
+                        q_count = int(sec.get("question_count", 0))
+                        marks_q = int(sec.get("marks_per_question", 1))
+                    except (ValueError, TypeError):
+                        errors["sections"] = f"Section at index {idx} contains invalid numeric values."
+                        break
+
                     if not sec_id:
                         errors["sections"] = f"Section at index {idx} must specify a valid section_id."
                         break
+                    if sec_id in seen_sec_ids:
+                        errors["sections"] = f"Duplicate section (ID {sec_id}) cannot be added more than once."
+                        break
+                    seen_sec_ids.add(sec_id)
+
+                    section_obj = AssessmentSection.objects.filter(id=sec_id).first()
+                    if not section_obj:
+                        errors["sections"] = f"Section ID {sec_id} does not exist."
+                        break
+
                     if q_count < 1:
-                        errors["sections"] = "Question count for each section must be at least 1."
+                        errors["sections"] = f"Question count for section '{section_obj.name}' must be at least 1."
                         break
                     if marks_q < 1:
-                        errors["sections"] = "Marks per question must be at least 1."
+                        errors["sections"] = f"Marks per question for section '{section_obj.name}' must be at least 1."
                         break
+
+                    # Check question availability if assessment is or is becoming READY/OPEN
+                    if target_status in [Assessment.Status.READY, Assessment.Status.OPEN]:
+                        sec_filter = (
+                            Q(section=section_obj)
+                            | Q(section_type__iexact=section_obj.code)
+                            | Q(section_type__iexact=section_obj.name)
+                            | Q(section__code__iexact=section_obj.code)
+                            | Q(section__name__iexact=section_obj.name)
+                        )
+                        if self.instance and self.instance.questions.exists():
+                            avail = self.instance.questions.filter(sec_filter, is_active=True).distinct().count()
+                        else:
+                            avail = QuestionBank.objects.filter(sec_filter, is_active=True).distinct().count()
+                        if avail < q_count:
+                            errors["sections"] = (
+                                f"Insufficient questions for section '{section_obj.name}'. "
+                                f"Required: {q_count}, Available active: {avail}."
+                            )
+                            break
+
                     calculated_total += q_count * marks_q
-                if "sections" not in errors and total != calculated_total:
-                    errors["total_marks"] = f"Total marks ({total}) must equal sum of section marks ({calculated_total})."
+
+                if "sections" not in errors:
+                    if "total_marks" not in data or data.get("total_marks") is None:
+                        data["total_marks"] = calculated_total
+                    elif total != calculated_total:
+                        errors["total_marks"] = f"Total marks ({total}) must equal sum of section marks ({calculated_total})."
         else:
-            aptitude = data.get("aptitude_count", getattr(self.instance, "aptitude_count", 25))
-            coding = data.get("coding_count", getattr(self.instance, "coding_count", 25))
-            if aptitude < 1 and coding < 1:
-                errors["aptitude_count"] = "Must have at least one question configured."
-            if total != (aptitude + coding):
-                errors["total_marks"] = f"Total marks ({total}) must equal aptitude ({aptitude}) + coding ({coding})."
+            # sections not passed in payload (e.g. PATCHing title, duration, status)
+            if self.instance and self.instance.section_allocations.exists():
+                allocs = self.instance.section_allocations.select_related("section").all()
+                alloc_total = sum(a.question_count * a.marks_per_question for a in allocs)
+                if "total_marks" in data and total != alloc_total:
+                    errors["total_marks"] = f"Total marks ({total}) must equal sum of existing section allocations ({alloc_total})."
+                elif "total_marks" not in data:
+                    data["total_marks"] = alloc_total
+
+                if target_status in [Assessment.Status.READY, Assessment.Status.OPEN]:
+                    from django.db.models import Q
+                    for alloc in allocs:
+                        sec = alloc.section
+                        sec_filter = (
+                            Q(section=sec)
+                            | Q(section_type__iexact=sec.code)
+                            | Q(section_type__iexact=sec.name)
+                            | Q(section__code__iexact=sec.code)
+                            | Q(section__name__iexact=sec.name)
+                        )
+                        if self.instance.questions.exists():
+                            avail = self.instance.questions.filter(sec_filter, is_active=True).distinct().count()
+                        else:
+                            avail = QuestionBank.objects.filter(sec_filter, is_active=True).distinct().count()
+                        if avail < alloc.question_count:
+                            errors["sections"] = (
+                                f"Insufficient questions for section '{sec.name}'. "
+                                f"Required: {alloc.question_count}, Available active: {avail}."
+                            )
+                            break
+            else:
+                aptitude = data.get("aptitude_count", getattr(self.instance, "aptitude_count", 25))
+                coding = data.get("coding_count", getattr(self.instance, "coding_count", 25))
+                if aptitude < 1 and coding < 1:
+                    errors["aptitude_count"] = "Must have at least one question configured."
+                if total != (aptitude + coding):
+                    errors["total_marks"] = f"Total marks ({total}) must equal aptitude ({aptitude}) + coding ({coding})."
 
         if errors:
             raise serializers.ValidationError(errors)
@@ -669,10 +753,15 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         # Remove associations only (without deleting the reusable section!)
         assessment.section_allocations.exclude(section_id__in=seen_section_ids).delete()
 
-        # Update legacy aptitude_count and coding_count fields to reflect current allocations
+        # Update legacy aptitude_count and coding_count fields, and sync total_marks
         assessment.aptitude_count = apt_count
         assessment.coding_count = cod_count
-        assessment.save(update_fields=["aptitude_count", "coding_count"])
+        calc_total = sum(a.question_count * a.marks_per_question for a in assessment.section_allocations.all())
+        if calc_total > 0:
+            assessment.total_marks = calc_total
+            assessment.save(update_fields=["aptitude_count", "coding_count", "total_marks"])
+        else:
+            assessment.save(update_fields=["aptitude_count", "coding_count"])
 
 
 
@@ -746,13 +835,19 @@ class AdminCandidateSerializer(serializers.ModelSerializer):
         return obj.college_ref.code if obj.college_ref else ""
 
     def get_attempts_count(self, obj):
+        if hasattr(obj, "_prefetched_attempts"):
+            return len(obj._prefetched_attempts)
         return obj.attempts.count()
 
     def get_latest_state(self, obj):
+        if hasattr(obj, "_prefetched_attempts"):
+            return obj._prefetched_attempts[0].state if obj._prefetched_attempts else None
         latest = obj.attempts.first()
         return latest.state if latest else None
 
     def get_latest_score(self, obj):
+        if hasattr(obj, "_prefetched_attempts"):
+            return obj._prefetched_attempts[0].total_score if obj._prefetched_attempts else None
         latest = obj.attempts.first()
         return latest.total_score if latest else None
 
@@ -975,7 +1070,13 @@ class AdminLiveAttemptSerializer(serializers.ModelSerializer):
             "total_score",
             "delivery_mode",
             "is_manual_evaluation_pending",
+            "is_connected",
+            "is_stale_heartbeat",
+            "last_heartbeat",
         ]
+
+    is_connected = serializers.BooleanField(read_only=True)
+    is_stale_heartbeat = serializers.BooleanField(read_only=True)
 
     delivery_mode = serializers.SerializerMethodField()
     is_manual_evaluation_pending = serializers.SerializerMethodField()
@@ -1247,6 +1348,7 @@ class AdminResultSerializer(serializers.ModelSerializer):
             "coding_score",
             "total_score",
             "percentage",
+            "section_scores",
             "started_at",
             "submitted_at",
             "tab_switch_count",

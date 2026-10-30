@@ -139,18 +139,8 @@ class CandidateRegisterView(APIView):
                 )
             college_name = college_obj.name
         elif college_name:
-            # Search by name
-            college_obj = College.objects.filter(name__iexact=college_name, is_active=True).first()
-            if not college_obj:
-                import re
-                clean_code = re.sub(r'[^A-Z0-9]', '', college_name.upper())[:10]
-                if not clean_code or College.objects.filter(code=clean_code).exists():
-                    clean_code = f"COL-{College.objects.count() + 1:03d}"
-                college_obj = College.objects.create(
-                    name=college_name,
-                    code=clean_code,
-                    is_active=True,
-                )
+            from .services import resolve_or_create_college
+            college_obj = resolve_or_create_college(college_name, is_student_entry=True)
 
         if not college_obj:
             return Response(
@@ -728,13 +718,17 @@ class RecordIntegrityEventView(APIView):
                 else (attempt.config.auto_submit_on_tab_limit if attempt.config else True)
             )
 
+            # Flood protection: check how many events were recorded in last 60 seconds
+            from datetime import timedelta
+            one_minute_ago = timezone.now() - timedelta(seconds=60)
+            if IntegrityEvent.objects.filter(attempt=attempt, server_timestamp__gte=one_minute_ago).count() >= 30:
+                return Response(
+                    {"status": "rate_limited", "detail": "Integrity event rate limit exceeded."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
             # If attempt is already in a terminal state, return current status
-            if attempt.state in [
-                AssessmentAttempt.State.SUBMITTED,
-                AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
-                AssessmentAttempt.State.TIMED_OUT,
-                AssessmentAttempt.State.FLAGGED_FOR_REVIEW,
-            ]:
+            if attempt.state in AssessmentAttempt.TERMINAL_STATES:
                 return Response(
                     {
                         "status": "already_finalized",
@@ -893,6 +887,21 @@ class QuestionBankSummaryView(APIView):
 
         config = get_or_create_default_config()
 
+        # Dynamic section breakdown
+        from django.db.models import Q
+        sections_summary = []
+        for sec in AssessmentSection.objects.filter(is_active=True).order_by("order", "name"):
+            sec_cnt = QuestionBank.objects.filter(
+                Q(section=sec) | Q(section_type__iexact=sec.code) | Q(section_type__iexact=sec.name),
+                is_active=True,
+            ).distinct().count()
+            sections_summary.append({
+                "id": sec.id,
+                "name": sec.name,
+                "code": sec.code,
+                "active_questions": sec_cnt,
+            })
+
         return Response({
             "total_questions": total,
             "active_questions": active,
@@ -902,6 +911,7 @@ class QuestionBankSummaryView(APIView):
             "aptitude_required": config.aptitude_count,
             "coding_required": config.coding_count,
             "is_sufficient": (aptitude_active >= config.aptitude_count and coding_active >= config.coding_count),
+            "sections": sections_summary,
         })
 
 

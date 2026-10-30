@@ -127,7 +127,12 @@ class AdminCollegeListView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        queryset = College.objects.all().order_by("name")
+        from django.db.models import Count
+        queryset = College.objects.annotate(
+            annotated_candidates_count=Count("candidates", distinct=True),
+            annotated_assessments_count=Count("assigned_assessments", distinct=True),
+        ).order_by("name")
+
         search = request.query_params.get("search", "").strip()
         if search:
             queryset = queryset.filter(
@@ -142,6 +147,31 @@ class AdminCollegeListView(APIView):
             queryset = queryset.filter(is_active=True)
         elif is_active.lower() in ["false", "0"]:
             queryset = queryset.filter(is_active=False)
+
+        is_verified = request.query_params.get("is_verified", "").strip()
+        if is_verified.lower() in ["true", "1"]:
+            queryset = queryset.filter(is_verified=True)
+        elif is_verified.lower() in ["false", "0"]:
+            queryset = queryset.filter(is_verified=False)
+
+        page = request.query_params.get("page")
+        if page:
+            from django.core.paginator import Paginator
+            try:
+                page_size = max(1, min(100, int(request.query_params.get("page_size", 20))))
+            except (ValueError, TypeError):
+                page_size = 20
+            paginator = Paginator(queryset, page_size)
+            page_obj = paginator.get_page(page)
+            serializer = AdminCollegeListSerializer(page_obj.object_list, many=True)
+            return Response({
+                "count": paginator.count,
+                "num_pages": paginator.num_pages,
+                "current_page": page_obj.number,
+                "has_next": page_obj.has_next(),
+                "has_previous": page_obj.has_previous(),
+                "results": serializer.data,
+            })
 
         serializer = AdminCollegeListSerializer(queryset, many=True)
         return Response(serializer.data)
@@ -333,7 +363,7 @@ class AdminAssessmentListView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
-        queryset = Assessment.objects.prefetch_related("eligible_colleges", "attempts").all().order_by("-created_at")
+        queryset = Assessment.objects.select_related("pdf_document").prefetch_related("eligible_colleges", "attempts", "section_allocations__section", "questions").all().order_by("-created_at")
         status_param = request.query_params.get("status", "").strip().upper()
         if status_param in Assessment.Status.values:
             queryset = queryset.filter(status=status_param)
@@ -735,7 +765,19 @@ class AdminCandidateListView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        queryset = Candidate.objects.select_related("college_ref").all().order_by("-created_at")
+        from django.db.models import Prefetch
+        queryset = (
+            Candidate.objects.select_related("college_ref")
+            .prefetch_related(
+                Prefetch(
+                    "attempts",
+                    queryset=AssessmentAttempt.objects.only("id", "candidate_id", "state", "total_score", "created_at").order_by("-created_at"),
+                    to_attr="_prefetched_attempts",
+                )
+            )
+            .all()
+            .order_by("-created_at")
+        )
 
         college_id = request.query_params.get("college_id", "").strip()
         if college_id:
@@ -755,6 +797,25 @@ class AdminCandidateListView(APIView):
                 | Q(college__icontains=search)
                 | Q(email__icontains=search)
             )
+
+        page = request.query_params.get("page")
+        if page:
+            from django.core.paginator import Paginator
+            try:
+                page_size = max(1, min(100, int(request.query_params.get("page_size", 20))))
+            except (ValueError, TypeError):
+                page_size = 20
+            paginator = Paginator(queryset, page_size)
+            page_obj = paginator.get_page(page)
+            serializer = AdminCandidateSerializer(page_obj.object_list, many=True)
+            return Response({
+                "count": paginator.count,
+                "num_pages": paginator.num_pages,
+                "current_page": page_obj.number,
+                "has_next": page_obj.has_next(),
+                "has_previous": page_obj.has_previous(),
+                "results": serializer.data,
+            })
 
         serializer = AdminCandidateSerializer(queryset[:200], many=True)
         return Response(serializer.data)
@@ -1268,19 +1329,15 @@ class AdminQuestionImportCSVView(APIView):
 
     def post(self, request):
         assessment_id = request.data.get("assessment_id")
-        if not assessment_id:
-            return Response(
-                {"assessment_id": ["Target assessment is required. Please select an assessment for CSV question import."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            assessment = Assessment.objects.get(id=assessment_id)
-        except (Assessment.DoesNotExist, ValueError):
-            return Response(
-                {"assessment_id": [f"Selected assessment '{assessment_id}' does not exist or is invalid."]},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        assessment = None
+        if assessment_id:
+            try:
+                assessment = Assessment.objects.get(id=assessment_id)
+            except (Assessment.DoesNotExist, ValueError):
+                return Response(
+                    {"assessment_id": [f"Selected assessment '{assessment_id}' does not exist or is invalid."]},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         file_obj = request.FILES.get("file")
         csv_text = request.data.get("csv_content", "")
@@ -1317,9 +1374,13 @@ class AdminQuestionImportCSVView(APIView):
                 if not sec_obj:
                     sec_obj = AssessmentSection.objects.filter(name__iexact=sec).first()
                 if not sec_obj:
-                    active_codes = list(AssessmentSection.objects.filter(is_active=True).values_list("name", flat=True))
-                    errors.append(f"Row {row_idx}: Invalid section '{sec}'. Available sections: {', '.join(active_codes)}.")
-                    continue
+                    # Dynamically create or resolve section to support custom sections
+                    import re as _re
+                    sec_code = _re.sub(r"[^A-Z0-9_]", "_", sec.upper()).strip("_")[:50]
+                    sec_obj, _ = AssessmentSection.objects.get_or_create(
+                        code=sec_code,
+                        defaults={"name": sec.replace("_", " ").title(), "is_active": True}
+                    )
 
                 correct = row["correct_option"].strip().upper()
                 if correct not in ["A", "B", "C", "D"]:
@@ -1351,7 +1412,7 @@ class AdminQuestionImportCSVView(APIView):
                 except Exception as e:
                     errors.append(f"Row {row_idx}: Database save error: {str(e)}")
 
-            if created_questions:
+            if created_questions and assessment:
                 assessment.questions.add(*created_questions)
                 log_assessment_audit(
                     action=AssessmentAuditLog.Action.QUESTIONS_ASSIGNED,
@@ -1369,10 +1430,11 @@ class AdminQuestionImportCSVView(APIView):
             "success_count": len(created_questions),
             "error_count": len(errors),
             "errors": errors[:50],
-            "assessment_id": str(assessment.id),
-            "assessment_title": assessment.title,
-            "total_pool_count": assessment.questions.count(),
-        })
+            "assessment_id": str(assessment.id) if assessment else None,
+            "assessment_title": assessment.title if assessment else None,
+            "total_pool_count": assessment.questions.count() if assessment else None,
+            "imported_to": "ASSESSMENT_POOL" if assessment else "QUESTION_BANK",
+        }, status=status.HTTP_200_OK if len(created_questions) > 0 or not errors else status.HTTP_400_BAD_REQUEST)
 
 
 class AdminQuestionBulkUpdateView(APIView):
@@ -1591,6 +1653,53 @@ class AdminLiveAttemptsView(APIView):
                 | Q(candidate__register_number__icontains=search)
                 | Q(candidate__college__icontains=search)
             )
+
+        filter_preset = request.query_params.get("filter_preset", "").strip().lower()
+        if filter_preset == "stale":
+            from datetime import timedelta
+            threshold = timezone.now() - timedelta(seconds=90)
+            queryset = queryset.filter(
+                state=AssessmentAttempt.State.IN_PROGRESS,
+                last_heartbeat__lt=threshold,
+            )
+        elif filter_preset == "incomplete":
+            queryset = queryset.filter(
+                state__in=[AssessmentAttempt.State.CREATED, AssessmentAttempt.State.IN_PROGRESS]
+            )
+        elif filter_preset == "submitted":
+            queryset = queryset.filter(
+                state__in=[
+                    AssessmentAttempt.State.SUBMITTED,
+                    AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
+                ]
+            )
+        elif filter_preset == "flagged":
+            queryset = queryset.filter(
+                Q(is_flagged=True) | Q(state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW)
+            )
+        elif filter_preset == "pending_manual_evaluation":
+            queryset = queryset.filter(
+                state=AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+            )
+
+        page = request.query_params.get("page")
+        if page:
+            from django.core.paginator import Paginator
+            try:
+                page_size = max(1, min(100, int(request.query_params.get("page_size", 20))))
+            except (ValueError, TypeError):
+                page_size = 20
+            paginator = Paginator(queryset, page_size)
+            page_obj = paginator.get_page(page)
+            serializer = AdminLiveAttemptSerializer(page_obj.object_list, many=True)
+            return Response({
+                "count": paginator.count,
+                "num_pages": paginator.num_pages,
+                "current_page": page_obj.number,
+                "has_next": page_obj.has_next(),
+                "has_previous": page_obj.has_previous(),
+                "results": serializer.data,
+            })
 
         serializer = AdminLiveAttemptSerializer(queryset[:150], many=True)
         return Response(serializer.data)
@@ -2184,3 +2293,104 @@ class AdminAssessmentPdfDownloadView(APIView):
         resp["X-Content-Type-Options"] = "nosniff"
         resp["Cache-Control"] = "private, no-cache, no-store, must-revalidate"
         return resp
+
+
+class AdminCollegeMergeView(APIView):
+    """
+    Merges a source provisional/duplicate college into a target authoritative college.
+    Reassigns all candidates, updates assessment assignments, records alias, and deletes source.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        target_college_id = request.data.get("target_college_id")
+        if not target_college_id:
+            return Response({"target_college_id": ["Target college ID is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        if str(pk) == str(target_college_id):
+            return Response({"detail": "Cannot merge a college into itself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        source_college = get_object_or_404(College, pk=pk)
+        target_college = get_object_or_404(College, pk=target_college_id)
+
+        with transaction.atomic():
+            cand_count = Candidate.objects.filter(college_ref=source_college).update(
+                college_ref=target_college,
+                college=target_college.name,
+            )
+
+            for assessment in source_college.assigned_assessments.all():
+                assessment.eligible_colleges.add(target_college)
+                assessment.eligible_colleges.remove(source_college)
+
+            existing_aliases = target_college.aliases or []
+            if source_college.name not in existing_aliases:
+                existing_aliases.append(source_college.name)
+            if source_college.code not in existing_aliases:
+                existing_aliases.append(source_college.code)
+            target_college.aliases = existing_aliases
+            target_college.save(update_fields=["aliases", "updated_at"])
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.COLLEGE_MERGED,
+                entity_type="COLLEGE",
+                entity_id=str(target_college.id),
+                user=request.user,
+                details={
+                    "source_college_id": source_college.id,
+                    "source_college_name": source_college.name,
+                    "source_college_code": source_college.code,
+                    "reassigned_candidates_count": cand_count,
+                },
+            )
+
+            source_college.delete()
+
+        return Response({
+            "message": f"Successfully merged '{source_college.name}' into '{target_college.name}'.",
+            "reassigned_candidates_count": cand_count,
+            "target_college": AdminCollegeListSerializer(target_college).data,
+        })
+
+
+class AdminAttemptRevokeView(APIView):
+    """
+    Revokes a candidate assessment attempt (e.g. serious integrity breach or cancellation).
+    Transitions attempt state to REVOKED, stores flag_reason, and writes audit log.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        reason = request.data.get("reason", "").strip() or "Revoked by Administrator."
+        with transaction.atomic():
+            attempt = get_object_or_404(
+                AssessmentAttempt.objects.select_for_update().select_related("candidate", "assessment"),
+                pk=pk,
+            )
+            try:
+                attempt.transition_to(AssessmentAttempt.State.REVOKED, save=True, reason=reason)
+            except ValidationError as e:
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+            IntegrityEvent.objects.create(
+                attempt=attempt,
+                event_type=IntegrityEvent.EventType.SUBMITTED,
+                metadata={"action": "REVOKED", "reason": reason, "revoked_by": request.user.username},
+            )
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.ATTEMPT_REVOKED,
+                entity_type="ATTEMPT",
+                entity_id=str(attempt.id),
+                user=request.user,
+                details={
+                    "candidate_id": str(attempt.candidate_id),
+                    "candidate_name": attempt.candidate.full_name,
+                    "reason": reason,
+                },
+            )
+
+        return Response({
+            "message": f"Attempt {attempt.id} has been revoked.",
+            "state": attempt.state,
+            "flag_reason": attempt.flag_reason,
+        })

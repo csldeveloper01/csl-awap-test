@@ -3,6 +3,21 @@ from datetime import timedelta
 from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+import re
+
+
+def normalize_college_name(name: str) -> str:
+    """
+    Canonical normalized string for matching and deduplication:
+    lowercase, strips leading/trailing spaces, collapses multiple whitespaces,
+    removes punctuation marks, strips dots in abbreviations.
+    """
+    if not name:
+        return ""
+    # Strip dots (P.S.G. -> PSG)
+    cleaned = str(name).replace(".", "")
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned.lower())
+    return " ".join(cleaned.split())
 
 
 class AssessmentSection(models.Model):
@@ -164,6 +179,9 @@ class College(models.Model):
     contact_email = models.EmailField(blank=True, default="", help_text="Official institutional contact email")
     contact_phone = models.CharField(max_length=30, blank=True, default="", help_text="Contact phone number")
     admin_contact_name = models.CharField(max_length=150, blank=True, default="", help_text="TPO or faculty representative name")
+    normalized_name = models.CharField(max_length=200, blank=True, default="", db_index=True, help_text="Canonical normalized name for deduplication")
+    aliases = models.JSONField(blank=True, default=list, help_text="List of alternate names or abbreviations")
+    is_verified = models.BooleanField(default=True, db_index=True, help_text="Verified institutional record vs student/provisional entry")
     is_active = models.BooleanField(default=True, db_index=True, help_text="Active or deactivated status")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -173,11 +191,14 @@ class College(models.Model):
         indexes = [
             models.Index(fields=["code"]),
             models.Index(fields=["is_active", "name"]),
+            models.Index(fields=["normalized_name"]),
+            models.Index(fields=["is_verified", "is_active"]),
         ]
 
     def clean(self):
         if self.name:
             self.name = self.name.strip()
+            self.normalized_name = normalize_college_name(self.name)
         if self.code:
             self.code = self.code.strip().upper()
 
@@ -486,12 +507,23 @@ class AssessmentAttempt(models.Model):
         TIMED_OUT = "TIMED_OUT", "Timed Out"
         FLAGGED_FOR_REVIEW = "FLAGGED_FOR_REVIEW", "Flagged for Review"
         COMPLETED_PENDING_MANUAL_EVALUATION = "COMPLETED_PENDING_MANUAL_EVALUATION", "Completed (Pending Manual Evaluation)"
+        ABANDONED = "ABANDONED", "Abandoned"
+        REVOKED = "REVOKED", "Revoked"
 
     COMPLETED_STATES = [
         State.SUBMITTED,
         State.TIMED_OUT,
         State.FLAGGED_FOR_REVIEW,
         State.COMPLETED_PENDING_MANUAL_EVALUATION,
+    ]
+
+    TERMINAL_STATES = [
+        State.SUBMITTED,
+        State.TIMED_OUT,
+        State.FLAGGED_FOR_REVIEW,
+        State.COMPLETED_PENDING_MANUAL_EVALUATION,
+        State.ABANDONED,
+        State.REVOKED,
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -516,6 +548,11 @@ class AssessmentAttempt(models.Model):
     coding_score = models.IntegerField(default=0)
     total_score = models.IntegerField(default=0)
     percentage = models.FloatField(default=0.0)
+    section_scores = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Dynamic section score breakdown: {section_code: {score, max_marks, correct, total_questions, percentage}}",
+    )
     
     # Integrity flags
     tab_switch_count = models.PositiveIntegerField(default=0)
@@ -595,6 +632,56 @@ class AssessmentAttempt(models.Model):
         self.last_heartbeat = now
         self.save(update_fields=["is_paused", "paused_at", "deadline", "total_paused_seconds", "last_heartbeat", "updated_at"])
         return credited_seconds
+    ALLOWED_TRANSITIONS = {
+        State.CREATED: {State.IN_PROGRESS, State.ABANDONED, State.REVOKED},
+        State.IN_PROGRESS: {
+            State.SUBMITTED,
+            State.TIMED_OUT,
+            State.FLAGGED_FOR_REVIEW,
+            State.COMPLETED_PENDING_MANUAL_EVALUATION,
+            State.ABANDONED,
+            State.REVOKED,
+        },
+        State.SUBMITTED: {State.REVOKED},
+        State.TIMED_OUT: {State.REVOKED},
+        State.FLAGGED_FOR_REVIEW: {State.SUBMITTED, State.REVOKED},
+        State.COMPLETED_PENDING_MANUAL_EVALUATION: {State.SUBMITTED, State.REVOKED},
+        State.ABANDONED: set(),
+        State.REVOKED: set(),
+    }
+
+    def can_transition_to(self, target_state: str) -> bool:
+        allowed = self.ALLOWED_TRANSITIONS.get(self.state, set())
+        return target_state in allowed
+
+    def transition_to(self, target_state: str, save=True, reason=""):
+        if self.state == target_state:
+            return
+        if not self.can_transition_to(target_state):
+            raise ValidationError(f"Invalid attempt state transition from {self.state} to {target_state}")
+        self.state = target_state
+        if reason:
+            if not self.flag_reason:
+                self.flag_reason = reason
+            else:
+                self.flag_reason = f"{self.flag_reason} | {reason}".strip(" |")
+        if save:
+            self.save(update_fields=["state", "flag_reason", "updated_at"])
+
+    @property
+    def is_stale_heartbeat(self) -> bool:
+        if self.state != self.State.IN_PROGRESS or not self.last_heartbeat:
+            return False
+        return (timezone.now() - self.last_heartbeat).total_seconds() > 90
+
+    @property
+    def is_connected(self) -> bool:
+        if self.state != self.State.IN_PROGRESS:
+            return False
+        if self.is_paused or not self.last_heartbeat:
+            return False
+        return (timezone.now() - self.last_heartbeat).total_seconds() <= 90
+
 
 
 class AttemptQuestionSnapshot(models.Model):
@@ -648,6 +735,7 @@ class IntegrityEvent(models.Model):
         TIMED_OUT = "TIMED_OUT", "Timed Out"
         DEVTOOLS_SHORTCUT = "DEVTOOLS_SHORTCUT", "Developer Tools Shortcut Attempt"
         CONTEXT_MENU_BLOCKED = "CONTEXT_MENU_BLOCKED", "Context Menu Blocked"
+        WINDOW_BLUR = "WINDOW_BLUR", "Window Focus Lost / Blur"
 
     attempt = models.ForeignKey(AssessmentAttempt, on_delete=models.CASCADE, related_name="integrity_events")
     event_type = models.CharField(max_length=40, choices=EventType.choices)
@@ -715,6 +803,8 @@ class AssessmentAuditLog(models.Model):
         PDF_UPLOADED = "PDF_UPLOADED", "Assessment PDF Uploaded"
         PDF_REPLACED = "PDF_REPLACED", "Assessment PDF Replaced"
         PDF_DELETED = "PDF_DELETED", "Assessment PDF Deleted"
+        ATTEMPT_REVOKED = "ATTEMPT_REVOKED", "Attempt Revoked"
+        COLLEGE_MERGED = "COLLEGE_MERGED", "College Merged"
 
     action = models.CharField(max_length=40, choices=Action.choices, db_index=True)
     entity_type = models.CharField(max_length=30, db_index=True, help_text="ASSESSMENT, COLLEGE, CANDIDATE")
