@@ -12,6 +12,11 @@ from .models import (
     AssessmentAuditLog,
     AssessmentSection,
     AssessmentSectionAllocation,
+    QuestionPool,
+    QuestionPoolItem,
+    AssessmentPoolSource,
+    AdminAccessGrant,
+    RecoveryEvent,
 )
 
 
@@ -1444,3 +1449,141 @@ class AdminResultSerializer(serializers.ModelSerializer):
         if obj.assessment:
             return obj.assessment.coding_count
         return obj.config.coding_count if obj.config else 25
+
+
+class AdminQuestionPoolSerializer(serializers.ModelSerializer):
+    questions_count = serializers.SerializerMethodField()
+    assessments_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuestionPool
+        fields = [
+            "id",
+            "name",
+            "code",
+            "description",
+            "category",
+            "is_active",
+            "questions_count",
+            "assessments_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_questions_count(self, obj):
+        return obj.items.count()
+
+    def get_assessments_count(self, obj):
+        return obj.assessment_sources.count()
+
+
+class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
+    question_prompt = serializers.CharField(source="question.prompt", read_only=True)
+    question_section = serializers.CharField(source="question.section_type", read_only=True)
+    question_difficulty = serializers.CharField(source="question.difficulty", read_only=True)
+    question_marks = serializers.IntegerField(source="question.marks", read_only=True)
+
+    class Meta:
+        model = QuestionPoolItem
+        fields = [
+            "id",
+            "pool",
+            "question",
+            "order",
+            "added_at",
+            "question_prompt",
+            "question_section",
+            "question_difficulty",
+            "question_marks",
+        ]
+
+
+class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):
+    items = AdminQuestionPoolItemSerializer(many=True, read_only=True)
+
+    class Meta(AdminQuestionPoolSerializer.Meta):
+        fields = AdminQuestionPoolSerializer.Meta.fields + ["items"]
+
+
+class AdminAssessmentPoolSourceSerializer(serializers.ModelSerializer):
+    pool_name = serializers.CharField(source="pool.name", read_only=True)
+    pool_code = serializers.CharField(source="pool.code", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True, default="")
+    section_code = serializers.CharField(source="section.code", read_only=True, default="")
+
+    class Meta:
+        model = AssessmentPoolSource
+        fields = [
+            "id",
+            "assessment",
+            "pool",
+            "pool_name",
+            "pool_code",
+            "section",
+            "section_name",
+            "section_code",
+            "question_count",
+            "randomize",
+            "created_at",
+        ]
+
+
+class AdminAccessGrantSerializer(serializers.ModelSerializer):
+    candidate_name = serializers.CharField(source="candidate.full_name", read_only=True)
+    candidate_register_number = serializers.CharField(source="candidate.register_number", read_only=True)
+    assessment_title = serializers.CharField(source="assessment.title", read_only=True)
+    assessment_code = serializers.CharField(source="assessment.code", read_only=True)
+    authorized_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AdminAccessGrant
+        fields = [
+            "id",
+            "candidate",
+            "candidate_name",
+            "candidate_register_number",
+            "assessment",
+            "assessment_title",
+            "assessment_code",
+            "grant_type",
+            "reason",
+            "authorized_by",
+            "authorized_by_name",
+            "is_used",
+            "used_at",
+            "created_at",
+        ]
+
+    def get_authorized_by_name(self, obj):
+        if obj.authorized_by:
+            return obj.authorized_by.get_full_name() or obj.authorized_by.username
+        return "System"
+
+
+class AdminRecoveryEventSerializer(serializers.ModelSerializer):
+    candidate_name = serializers.CharField(source="attempt.candidate.full_name", read_only=True)
+    candidate_register_number = serializers.CharField(source="attempt.candidate.register_number", read_only=True)
+    assessment_title = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RecoveryEvent
+        fields = [
+            "id",
+            "attempt",
+            "candidate_name",
+            "candidate_register_number",
+            "assessment_title",
+            "recovery_type",
+            "grant",
+            "session_key",
+            "ip_address",
+            "user_agent",
+            "timer_remaining_seconds",
+            "answers_restored_count",
+            "created_at",
+        ]
+
+    def get_assessment_title(self, obj):
+        if obj.attempt and obj.attempt.assessment:
+            return obj.attempt.assessment.title
+        return "CSL Assessment"

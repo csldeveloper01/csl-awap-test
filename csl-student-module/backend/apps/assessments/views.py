@@ -21,6 +21,7 @@ from .models import (
     IntegrityEvent,
     AssessmentConfig,
     QuestionBank,
+    RecoveryEvent,
 )
 from .serializers import (
     CandidateRegistrationSerializer,
@@ -224,6 +225,17 @@ class StudentAttemptRecoveryView(APIView):
                 attempt=attempt,
                 event_type=IntegrityEvent.EventType.RECONNECTED,
                 metadata={"recovery_number": attempt.recovery_count, "channel": "SELF_SERVICE_RECOVERY"},
+            )
+
+            # Persist structured RecoveryEvent
+            RecoveryEvent.objects.create(
+                attempt=attempt,
+                recovery_type=RecoveryEvent.RecoveryType.STUDENT_SELF_SERVICE,
+                session_key=request.session.session_key or "",
+                ip_address=request.META.get("REMOTE_ADDR") or None,
+                user_agent=request.META.get("HTTP_USER_AGENT", "")[:255],
+                timer_remaining_seconds=attempt.get_remaining_seconds(),
+                answers_restored_count=attempt.question_snapshots.exclude(selected_option="").count(),
             )
 
             token = generate_candidate_token(str(candidate.id), str(attempt.id))

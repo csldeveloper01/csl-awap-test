@@ -54,6 +54,12 @@ from .admin_views import (
     AdminUserManagementView,
     AdminUserDetailView,
     AdminClearCacheView,
+    AdminQuestionPoolListCreateView,
+    AdminQuestionPoolDetailView,
+    AdminQuestionPoolItemsView,
+    AdminAssessmentPoolSourcesView,
+    AdminAccessGrantListView,
+    AdminRecoveryEventsListView,
 )
 
 urlpatterns = [
@@ -110,6 +116,16 @@ urlpatterns = [
     path("sections/", AdminSectionListCreateView.as_view(), name="admin-sections-list-create"),
     path("sections/bulk-delete/", AdminSectionBulkDeleteView.as_view(), name="admin-sections-bulk-delete"),
     path("sections/<int:pk>/", AdminSectionDetailView.as_view(), name="admin-sections-detail"),
+
+    # Independent Question Pools
+    path("question-pools/", AdminQuestionPoolListCreateView.as_view(), name="admin-question-pools"),
+    path("question-pools/<uuid:pk>/", AdminQuestionPoolDetailView.as_view(), name="admin-question-pool-detail"),
+    path("question-pools/<uuid:pk>/items/", AdminQuestionPoolItemsView.as_view(), name="admin-question-pool-items"),
+    path("assessments/<uuid:pk>/pool-sources/", AdminAssessmentPoolSourcesView.as_view(), name="admin-assessment-pool-sources"),
+
+    # Access Grants & Structured Recovery Auditing
+    path("access-grants/", AdminAccessGrantListView.as_view(), name="admin-access-grants"),
+    path("recovery-events/", AdminRecoveryEventsListView.as_view(), name="admin-recovery-events"),
 
     # Platform Configuration
     path("config/", AdminConfigView.as_view(), name="admin-config"),

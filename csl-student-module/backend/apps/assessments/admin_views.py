@@ -24,6 +24,11 @@ from .models import (
     AssessmentAuditLog,
     AssessmentSection,
     AssessmentSectionAllocation,
+    QuestionPool,
+    QuestionPoolItem,
+    AssessmentPoolSource,
+    AdminAccessGrant,
+    RecoveryEvent,
 )
 from .admin_permissions import IsCSLAdminUser
 from .admin_serializers import (
@@ -45,6 +50,12 @@ from .admin_serializers import (
     AdminIntegrityEventSerializer,
     AdminAssessmentSectionSerializer,
     AdminAssessmentSectionAllocationSerializer,
+    AdminQuestionPoolSerializer,
+    AdminQuestionPoolDetailSerializer,
+    AdminQuestionPoolItemSerializer,
+    AdminAssessmentPoolSourceSerializer,
+    AdminAccessGrantSerializer,
+    AdminRecoveryEventSerializer,
 )
 from django.http import HttpResponse
 from .services import (
@@ -2816,6 +2827,16 @@ class AdminAttemptGrantRecoveryView(APIView):
             attempt.recovery_metadata = meta
             attempt.save(update_fields=["admin_recovery_granted", "state", "recovery_metadata", "updated_at"])
 
+            if attempt.assessment:
+                AdminAccessGrant.objects.create(
+                    candidate=attempt.candidate,
+                    assessment=attempt.assessment,
+                    grant_type=AdminAccessGrant.GrantType.EXTRA_RECOVERY,
+                    reason=reason,
+                    authorized_by=request.user,
+                    is_used=False,
+                )
+
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.ADMIN_RECOVERY_GRANTED,
                 entity_type="ATTEMPT",
@@ -2881,6 +2902,16 @@ class AdminCandidateReassignAttemptView(APIView):
             candidate.attempts.filter(
                 assessment=assessment,
             ).update(is_reassigned=True)
+
+            AdminAccessGrant.objects.create(
+                candidate=candidate,
+                assessment=assessment,
+                grant_type=AdminAccessGrant.GrantType.REASSIGN_NEW_ATTEMPT,
+                reason=reason,
+                authorized_by=request.user,
+                is_used=True,
+                used_at=timezone.now(),
+            )
 
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.CANDIDATE_REASSIGNED_NEW_ATTEMPT,
@@ -2970,3 +3001,263 @@ class AdminClearCacheView(APIView):
             return Response({"message": "Application cache successfully cleared.", "status": "ok", "timestamp": _tz.now().isoformat()})
         except Exception as e:
             return Response({"detail": f"Failed to clear cache: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminQuestionPoolListCreateView(APIView):
+    """
+    Workstream 1 & 7: Independent Question Pool Management.
+    List all question pools with question counts and linked assessments,
+    or create a new reusable question pool.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = QuestionPool.objects.all().prefetch_related("items", "assessment_sources")
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(Q(name__icontains=q) | Q(code__icontains=q) | Q(category__icontains=q))
+        category = request.query_params.get("category")
+        if category:
+            qs = qs.filter(category__iexact=category)
+        is_active = request.query_params.get("is_active")
+        if is_active is not None and is_active != "":
+            qs = qs.filter(is_active=(is_active.lower() in ["true", "1"]))
+
+        serializer = AdminQuestionPoolSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        name = (request.data.get("name") or "").strip()
+        code = (request.data.get("code") or "").strip().upper()
+        description = (request.data.get("description") or "").strip()
+        category = (request.data.get("category") or "").strip()
+
+        if not name:
+            return Response({"name": ["Pool name is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not code:
+            import re
+            code = re.sub(r"[^A-Z0-9_]", "_", name.upper()).strip("_")[:50]
+
+        if QuestionPool.objects.filter(code=code).exists():
+            return Response({"code": [f"Question pool with code '{code}' already exists."]}, status=status.HTTP_400_BAD_REQUEST)
+        if QuestionPool.objects.filter(name__iexact=name).exists():
+            return Response({"name": [f"Question pool with name '{name}' already exists."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        pool = QuestionPool.objects.create(
+            name=name,
+            code=code,
+            description=description,
+            category=category,
+            is_active=request.data.get("is_active", True),
+        )
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTION_POOL_CREATED,
+            entity_type="QUESTION_POOL",
+            entity_id=str(pool.id),
+            user=request.user,
+            details={"name": pool.name, "code": pool.code, "category": pool.category},
+        )
+
+        return Response(AdminQuestionPoolSerializer(pool).data, status=status.HTTP_201_CREATED)
+
+
+class AdminQuestionPoolDetailView(APIView):
+    """
+    Retrieve, update or delete an independent question pool.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        pool = get_object_or_404(
+            QuestionPool.objects.prefetch_related("items__question", "assessment_sources"),
+            pk=pk,
+        )
+        return Response(AdminQuestionPoolDetailSerializer(pool).data)
+
+    def put(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        name = (request.data.get("name") or "").strip()
+        code = (request.data.get("code") or "").strip().upper()
+
+        if name and name != pool.name:
+            if QuestionPool.objects.filter(name__iexact=name).exclude(pk=pk).exists():
+                return Response({"name": ["Another pool with this name already exists."]}, status=status.HTTP_400_BAD_REQUEST)
+            pool.name = name
+
+        if code and code != pool.code:
+            if QuestionPool.objects.filter(code=code).exclude(pk=pk).exists():
+                return Response({"code": ["Another pool with this code already exists."]}, status=status.HTTP_400_BAD_REQUEST)
+            pool.code = code
+
+        if "description" in request.data:
+            pool.description = str(request.data["description"]).strip()
+        if "category" in request.data:
+            pool.category = str(request.data["category"]).strip()
+        if "is_active" in request.data:
+            pool.is_active = bool(request.data["is_active"])
+
+        pool.save()
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+            entity_type="QUESTION_POOL",
+            entity_id=str(pool.id),
+            user=request.user,
+            details={"name": pool.name, "code": pool.code},
+        )
+        return Response(AdminQuestionPoolSerializer(pool).data)
+
+    def delete(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        # Check if actively used in open assessments
+        if pool.assessment_sources.filter(assessment__status=Assessment.Status.OPEN).exists():
+            return Response(
+                {"detail": "Cannot delete question pool linked to currently open assessments. Unlink or close assessments first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pool_id_str = str(pool.id)
+        pool_name = pool.name
+        pool.delete()
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTION_POOL_DELETED,
+            entity_type="QUESTION_POOL",
+            entity_id=pool_id_str,
+            user=request.user,
+            details={"name": pool_name},
+        )
+        return Response({"message": f"Question pool '{pool_name}' successfully deleted.", "deleted": True})
+
+
+class AdminQuestionPoolItemsView(APIView):
+    """
+    Manage questions inside a QuestionPool: add, remove, or replace question items.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        question_ids = request.data.get("question_ids") or []
+        action = request.data.get("action", "add")  # "add", "replace", "remove"
+
+        if isinstance(question_ids, str):
+            question_ids = [int(x.strip()) for x in question_ids.split(",") if x.strip().isdigit()]
+        elif hasattr(request.data, "getlist") and not isinstance(question_ids, list):
+            question_ids = request.data.getlist("question_ids")
+
+        if not isinstance(question_ids, list):
+            return Response({"question_ids": ["Must be a list of question IDs."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if action == "replace":
+                pool.items.all().delete()
+                valid_questions = QuestionBank.objects.filter(id__in=question_ids, is_active=True)
+                items = [QuestionPoolItem(pool=pool, question=q, order=idx + 1) for idx, q in enumerate(valid_questions)]
+                QuestionPoolItem.objects.bulk_create(items)
+            elif action == "remove":
+                pool.items.filter(question_id__in=question_ids).delete()
+            else:  # add
+                existing_q_ids = set(pool.items.values_list("question_id", flat=True))
+                new_q_ids = [qid for qid in question_ids if qid not in existing_q_ids]
+                valid_questions = QuestionBank.objects.filter(id__in=new_q_ids, is_active=True)
+                start_order = pool.items.count() + 1
+                items = [QuestionPoolItem(pool=pool, question=q, order=start_order + idx) for idx, q in enumerate(valid_questions)]
+                QuestionPoolItem.objects.bulk_create(items)
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.POOL_ITEMS_UPDATED if hasattr(AssessmentAuditLog.Action, "POOL_ITEMS_UPDATED") else AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                entity_type="QUESTION_POOL",
+                entity_id=str(pool.id),
+                user=request.user,
+                details={"action": action, "question_count": pool.items.count()},
+            )
+
+        pool.refresh_from_db()
+        return Response(AdminQuestionPoolDetailSerializer(pool).data)
+
+
+class AdminAssessmentPoolSourcesView(APIView):
+    """
+    Manage question pool sources linked to an assessment.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        sources = assessment.pool_sources.select_related("pool", "section").all()
+        return Response(AdminAssessmentPoolSourceSerializer(sources, many=True).data)
+
+    def post(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        pool_id = request.data.get("pool_id")
+        section_id = request.data.get("section_id")
+        question_count = int(request.data.get("question_count", 0))
+        randomize = bool(request.data.get("randomize", True))
+
+        if not pool_id:
+            return Response({"pool_id": ["Pool ID is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        pool = get_object_or_404(QuestionPool, pk=pool_id)
+        section = get_object_or_404(AssessmentSection, pk=section_id) if section_id else None
+
+        source, created = AssessmentPoolSource.objects.update_or_create(
+            assessment=assessment,
+            pool=pool,
+            section=section,
+            defaults={"question_count": question_count, "randomize": randomize},
+        )
+
+        return Response(AdminAssessmentPoolSourceSerializer(source).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def delete(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        source_id = request.data.get("source_id") or request.query_params.get("source_id")
+        if not source_id:
+            return Response({"detail": "source_id is required to remove a pool source."}, status=status.HTTP_400_BAD_REQUEST)
+
+        source = get_object_or_404(AssessmentPoolSource, pk=source_id, assessment=assessment)
+        source.delete()
+        return Response({"message": "Pool source removed from assessment.", "deleted": True})
+
+
+class AdminAccessGrantListView(APIView):
+    """
+    Audit and inspect administrative access grants (retakes, extra recoveries, unlocked attempts).
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = AdminAccessGrant.objects.select_related("candidate", "assessment", "authorized_by").all()
+        candidate_id = request.query_params.get("candidate_id")
+        if candidate_id:
+            qs = qs.filter(candidate_id=candidate_id)
+        assessment_id = request.query_params.get("assessment_id")
+        if assessment_id:
+            qs = qs.filter(assessment_id=assessment_id)
+        grant_type = request.query_params.get("grant_type")
+        if grant_type:
+            qs = qs.filter(grant_type=grant_type)
+
+        serializer = AdminAccessGrantSerializer(qs[:100], many=True)
+        return Response(serializer.data)
+
+
+class AdminRecoveryEventsListView(APIView):
+    """
+    Audit and inspect structured recovery events across candidate attempts.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = RecoveryEvent.objects.select_related("attempt__candidate", "attempt__assessment", "grant").all()
+        attempt_id = request.query_params.get("attempt_id")
+        if attempt_id:
+            qs = qs.filter(attempt_id=attempt_id)
+        recovery_type = request.query_params.get("recovery_type")
+        if recovery_type:
+            qs = qs.filter(recovery_type=recovery_type)
+
+        serializer = AdminRecoveryEventSerializer(qs[:100], many=True)
+        return Response(serializer.data)

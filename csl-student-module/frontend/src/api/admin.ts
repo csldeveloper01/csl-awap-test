@@ -847,6 +847,121 @@ export async function bulkDeleteAdminSections(ids: number[]): Promise<{
   return res.data;
 }
 
+// ─── INDEPENDENT QUESTION POOLS MODULE ─────────────────────────────────────
+export interface AdminQuestionPool {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  is_active: boolean;
+  questions_count: number;
+  assessments_count: number;
+  created_at: string;
+  updated_at: string;
+  items?: {
+    id: number;
+    question: number;
+    order: number;
+    question_prompt: string;
+    question_section: string;
+    question_difficulty: string;
+    question_marks: number;
+  }[];
+}
+
+export interface AdminAssessmentPoolSource {
+  id: number;
+  assessment: string;
+  pool: string;
+  pool_name: string;
+  pool_code: string;
+  section?: number;
+  section_name?: string;
+  section_code?: string;
+  question_count: number;
+  randomize: boolean;
+  created_at: string;
+}
+
+export async function getAdminQuestionPools(params?: {
+  q?: string;
+  category?: string;
+  is_active?: boolean;
+}): Promise<AdminQuestionPool[]> {
+  const res = await adminApi.get<AdminQuestionPool[]>('/question-pools/', { params });
+  return res.data;
+}
+
+export async function createAdminQuestionPool(data: {
+  name: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  is_active?: boolean;
+}): Promise<AdminQuestionPool> {
+  const res = await adminApi.post<AdminQuestionPool>('/question-pools/', data);
+  return res.data;
+}
+
+export async function getAdminQuestionPoolDetail(poolId: string): Promise<AdminQuestionPool> {
+  const res = await adminApi.get<AdminQuestionPool>(`/question-pools/${poolId}/`);
+  return res.data;
+}
+
+export async function updateAdminQuestionPool(
+  poolId: string,
+  data: Partial<AdminQuestionPool>
+): Promise<AdminQuestionPool> {
+  const res = await adminApi.put<AdminQuestionPool>(`/question-pools/${poolId}/`, data);
+  return res.data;
+}
+
+export async function deleteAdminQuestionPool(poolId: string): Promise<{ message: string; deleted: boolean }> {
+  const res = await adminApi.delete(`/question-pools/${poolId}/`);
+  return res.data;
+}
+
+export async function manageAdminQuestionPoolItems(
+  poolId: string,
+  questionIds: number[],
+  action: 'add' | 'replace' | 'remove'
+): Promise<AdminQuestionPool> {
+  const res = await adminApi.post<AdminQuestionPool>(`/question-pools/${poolId}/items/`, {
+    question_ids: questionIds,
+    action,
+  });
+  return res.data;
+}
+
+export async function getAdminAssessmentPoolSources(assessmentId: string): Promise<AdminAssessmentPoolSource[]> {
+  const res = await adminApi.get<AdminAssessmentPoolSource[]>(`/assessments/${assessmentId}/pool-sources/`);
+  return res.data;
+}
+
+export async function linkAdminAssessmentPoolSource(
+  assessmentId: string,
+  data: {
+    pool_id: string;
+    section_id?: number;
+    question_count?: number;
+    randomize?: boolean;
+  }
+): Promise<AdminAssessmentPoolSource> {
+  const res = await adminApi.post<AdminAssessmentPoolSource>(`/assessments/${assessmentId}/pool-sources/`, data);
+  return res.data;
+}
+
+export async function unlinkAdminAssessmentPoolSource(
+  assessmentId: string,
+  sourceId: number
+): Promise<{ message: string; deleted: boolean }> {
+  const res = await adminApi.delete(`/assessments/${assessmentId}/pool-sources/`, {
+    data: { source_id: sourceId },
+  });
+  return res.data;
+}
+
 // ─── LIVE SESSIONS & RESULTS ────────────────────────────────────────────────
 export async function getAdminLiveAttempts(params?: {
   state?: string;

@@ -15,6 +15,11 @@ from apps.assessments.models import (
     AssessmentAttempt,
     AttemptQuestionSnapshot,
     AssessmentSectionAllocation,
+    QuestionPool,
+    QuestionPoolItem,
+    AssessmentPoolSource,
+    AdminAccessGrant,
+    RecoveryEvent,
 )
 
 User = get_user_model()
@@ -462,3 +467,91 @@ class Phase21WorkflowTests(TestCase):
         cache_res = self.client.post("/api/csl-admin/system/clear-cache/")
         self.assertEqual(cache_res.status_code, status.HTTP_200_OK)
         self.assertIn("timestamp", cache_res.data)
+
+    # =========================================================================
+    # Phase 2.1 Deliverable 7 & 8: Independent Question Pools & Access Grants
+    # =========================================================================
+    def test_independent_question_pool_crud_and_item_linking(self):
+        """Create question pool, assign questions, and link pool source to assessment."""
+        # 1. Create Question Pool
+        pool_res = self.client.post("/api/csl-admin/question-pools/", {
+            "name": "Core Aptitude 2026",
+            "category": "Aptitude",
+            "description": "Standard diagnostic aptitude question pool",
+        })
+        self.assertEqual(pool_res.status_code, status.HTTP_201_CREATED)
+        pool_id = pool_res.data["id"]
+        self.assertEqual(pool_res.data["code"], "CORE_APTITUDE_2026")
+
+        # 2. Add Question Items to Pool
+        questions = list(QuestionBank.objects.filter(section_type="APTITUDE")[:3])
+        q_ids = [q.id for q in questions]
+        items_res = self.client.post(
+            f"/api/csl-admin/question-pools/{pool_id}/items/",
+            {"question_ids": q_ids, "action": "add"},
+            format="json",
+        )
+        self.assertEqual(items_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(items_res.data["items"]), len(q_ids))
+
+        # 3. Link Pool to Assessment
+        assessment = Assessment.objects.create(
+            code="POOL-TEST-01",
+            title="Pool Testing Assessment",
+            status=Assessment.Status.DRAFT,
+        )
+        link_res = self.client.post(f"/api/csl-admin/assessments/{assessment.id}/pool-sources/", {
+            "pool_id": pool_id,
+            "section_id": self.section_apt.id,
+            "question_count": 25,
+            "randomize": True,
+        })
+        self.assertEqual(link_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(link_res.data["pool_name"], "Core Aptitude 2026")
+
+        # 4. List pool sources for assessment
+        list_res = self.client.get(f"/api/csl-admin/assessments/{assessment.id}/pool-sources/")
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_res.data), 1)
+
+    def test_admin_access_grants_and_structured_recovery_events_audit(self):
+        """Verify structured RecoveryEvent and AdminAccessGrant persistence."""
+        assessment = Assessment.objects.create(
+            code="AUDIT-GRANT-01",
+            title="Grant Audit Assessment",
+            status=Assessment.Status.OPEN,
+        )
+        attempt = AssessmentAttempt.objects.create(
+            candidate=self.candidate,
+            assessment=assessment,
+            config=self.config,
+            state=AssessmentAttempt.State.IN_PROGRESS,
+            deadline=timezone.now() + timezone.timedelta(minutes=45),
+        )
+
+        # 1. Admin grants recovery (+1)
+        grant_res = self.client.post(f"/api/csl-admin/attempts/{attempt.id}/grant-recovery/", {
+            "reason": "System network disconnection reported by invigilator",
+        })
+        self.assertEqual(grant_res.status_code, status.HTTP_200_OK)
+
+        # 2. Check AdminAccessGrant list
+        grants_res = self.client.get(f"/api/csl-admin/access-grants/?candidate_id={self.candidate.id}")
+        self.assertEqual(grants_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(len(grants_res.data) >= 1)
+        self.assertEqual(grants_res.data[0]["grant_type"], "EXTRA_RECOVERY")
+        self.assertIn("System network disconnection", grants_res.data[0]["reason"])
+
+        # 3. Student executes self-service recovery
+        student_client = APIClient()
+        rec_res = student_client.post("/api/assessment/recover/", {
+            "register_number": self.candidate.register_number,
+            "verification_factor": self.candidate.email,
+        })
+        self.assertEqual(rec_res.status_code, status.HTTP_200_OK)
+
+        # 4. Check RecoveryEvent list
+        events_res = self.client.get(f"/api/csl-admin/recovery-events/?attempt_id={attempt.id}")
+        self.assertEqual(events_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(len(events_res.data) >= 1)
+        self.assertEqual(events_res.data[0]["recovery_type"], "STUDENT_SELF_SERVICE")

@@ -810,6 +810,9 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
             deadline=deadline,
             last_heartbeat=now,
             max_disconnection_grace_seconds=600,
+            snapshot_duration_minutes=duration,
+            snapshot_total_marks=assessment.total_marks if assessment else config.total_marks,
+            snapshot_tab_switch_limit=assessment.max_tab_switches_warning if assessment else config.max_tab_switches_warning,
         )
 
         IntegrityEvent.objects.create(
@@ -909,6 +912,9 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
         state=AssessmentAttempt.State.IN_PROGRESS,
         started_at=now,
         deadline=deadline,
+        snapshot_duration_minutes=duration,
+        snapshot_total_marks=assessment.total_marks if assessment else config.total_marks,
+        snapshot_tab_switch_limit=assessment.max_tab_switches_warning if assessment else config.max_tab_switches_warning,
     )
 
     # Create Snapshots with option shuffling and strict question uniqueness

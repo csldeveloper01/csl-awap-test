@@ -124,6 +124,62 @@ class QuestionBank(models.Model):
     def __str__(self):
         return f"[{self.section_type}] ({self.difficulty}): {self.prompt[:60]}"
 
+class QuestionPool(models.Model):
+    """
+    Independent reusable collection of questions, decoupled from specific assessments.
+    Can be curated, categorized, and linked to multiple assessments simultaneously.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=150, unique=True, help_text="Pool name, e.g. Core Aptitude 2026")
+    code = models.CharField(max_length=50, unique=True, db_index=True, help_text="Unique uppercase code, e.g. POOL_APT_2026")
+    description = models.TextField(blank=True, default="", help_text="Description of pool contents/purpose")
+    category = models.CharField(max_length=100, blank=True, default="", db_index=True, help_text="Category tag, e.g. Aptitude, Technical")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        indexes = [
+            models.Index(fields=["code"]),
+            models.Index(fields=["category", "is_active"]),
+        ]
+
+    def clean(self):
+        if self.name:
+            self.name = self.name.strip()
+        if not self.code and self.name:
+            self.code = re.sub(r"[^A-Z0-9_]", "_", self.name.upper()).strip("_")[:50]
+        elif self.code:
+            self.code = self.code.strip().upper()
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
+class QuestionPoolItem(models.Model):
+    """
+    Join table linking QuestionBank items to QuestionPools with ordering.
+    """
+    pool = models.ForeignKey(QuestionPool, on_delete=models.CASCADE, related_name="items")
+    question = models.ForeignKey("QuestionBank", on_delete=models.CASCADE, related_name="pool_items")
+    order = models.PositiveIntegerField(default=0)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["pool", "order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["pool", "question"], name="uniq_pool_question"),
+        ]
+
+    def __str__(self):
+        return f"{self.pool.code} -> Q{self.question_id}"
+
+
 
 class AssessmentConfig(models.Model):
     title = models.CharField(max_length=200, default="CSL Initial Assessment")
@@ -451,6 +507,27 @@ class AssessmentSectionAllocation(models.Model):
     def __str__(self):
         return f"{self.assessment.code} - {self.section.name}: {self.question_count} Qs"
 
+class AssessmentPoolSource(models.Model):
+    """
+    Through model specifying which reusable question pools feed into this assessment.
+    """
+    assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name="pool_sources")
+    pool = models.ForeignKey(QuestionPool, on_delete=models.PROTECT, related_name="assessment_sources")
+    section = models.ForeignKey(AssessmentSection, null=True, blank=True, on_delete=models.PROTECT, related_name="assessment_pool_sources")
+    question_count = models.PositiveIntegerField(default=0, help_text="Number of questions to pick (0 = all pool questions)")
+    randomize = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["assessment", "pool"]
+        constraints = [
+            models.UniqueConstraint(fields=["assessment", "pool", "section"], name="uniq_assessment_pool_section"),
+        ]
+
+    def __str__(self):
+        return f"{self.assessment.code} from {self.pool.code}"
+
+
 
 class Candidate(models.Model):
     """
@@ -548,7 +625,10 @@ class AssessmentAttempt(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name="attempts")
-    config = models.ForeignKey(AssessmentConfig, on_delete=models.PROTECT, related_name="attempts")
+    config = models.ForeignKey(AssessmentConfig, null=True, blank=True, on_delete=models.PROTECT, related_name="attempts")
+    snapshot_duration_minutes = models.PositiveIntegerField(default=60, help_text="Snapshotted attempt duration limit")
+    snapshot_total_marks = models.PositiveIntegerField(default=50, help_text="Snapshotted total marks obtainable")
+    snapshot_tab_switch_limit = models.PositiveIntegerField(default=2, help_text="Snapshotted allowed tab switch warning limit")
     assessment = models.ForeignKey(
         Assessment,
         null=True,
@@ -749,6 +829,73 @@ class AttemptQuestionSnapshot(models.Model):
     def __str__(self):
         return f"Attempt {self.attempt_id} - Q{self.question_order} ({self.section_type})"
 
+class AdminAccessGrant(models.Model):
+    """
+    Explicit administrative permission grant providing access, retakes, or extra recovery.
+    """
+    class GrantType(models.TextChoices):
+        RETRIEVE_ACCESS = "RETRIEVE_ACCESS", "Retrieve Access Token / Credentials"
+        REASSIGN_NEW_ATTEMPT = "REASSIGN_NEW_ATTEMPT", "Reassign New Attempt"
+        EXTRA_RECOVERY = "EXTRA_RECOVERY", "Grant Extra Recovery Session"
+        UNLOCK_FLAGGED = "UNLOCK_FLAGGED", "Unlock Flagged Attempt"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name="access_grants")
+    assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name="access_grants")
+    grant_type = models.CharField(max_length=40, choices=GrantType.choices)
+    reason = models.TextField(help_text="Mandatory administrative reason for this authorization")
+    authorized_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="authorized_access_grants",
+    )
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["candidate", "assessment", "is_used"]),
+            models.Index(fields=["grant_type", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.grant_type} for {self.candidate.register_number} by {self.authorized_by}"
+
+
+class RecoveryEvent(models.Model):
+    """
+    Detailed audit log of each accidental-exit or admin-granted session restoration.
+    """
+    class RecoveryType(models.TextChoices):
+        STUDENT_SELF_SERVICE = "STUDENT_SELF_SERVICE", "Student Self-Service Recovery"
+        ADMIN_AUTHORIZED = "ADMIN_AUTHORIZED", "Admin Authorized Recovery"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    attempt = models.ForeignKey(AssessmentAttempt, on_delete=models.CASCADE, related_name="recovery_events")
+    recovery_type = models.CharField(max_length=30, choices=RecoveryType.choices)
+    grant = models.ForeignKey(AdminAccessGrant, null=True, blank=True, on_delete=models.SET_NULL, related_name="recovery_events")
+    session_key = models.CharField(max_length=100, blank=True, default="")
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+    timer_remaining_seconds = models.PositiveIntegerField(default=0)
+    answers_restored_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["attempt", "recovery_type"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.recovery_type} on {self.attempt_id} at {self.created_at}"
+
+
 
 class IntegrityEvent(models.Model):
     class EventType(models.TextChoices):
@@ -839,6 +986,10 @@ class AssessmentAuditLog(models.Model):
         QUESTION_ARCHIVED = "QUESTION_ARCHIVED", "Question Bank Item Archived"
         QUESTION_UNARCHIVED = "QUESTION_UNARCHIVED", "Question Bank Item Unarchived"
         QUESTION_DELETED = "QUESTION_DELETED", "Question Bank Item Deleted"
+        QUESTION_POOL_CREATED = "QUESTION_POOL_CREATED", "Question Pool Created"
+        QUESTION_POOL_UPDATED = "QUESTION_POOL_UPDATED", "Question Pool Updated"
+        QUESTION_POOL_DELETED = "QUESTION_POOL_DELETED", "Question Pool Deleted"
+        ADMIN_ACCESS_GRANTED = "ADMIN_ACCESS_GRANTED", "Admin Access Grant Created"
 
     action = models.CharField(max_length=40, choices=Action.choices, db_index=True)
     entity_type = models.CharField(max_length=30, db_index=True, help_text="ASSESSMENT, COLLEGE, CANDIDATE")
