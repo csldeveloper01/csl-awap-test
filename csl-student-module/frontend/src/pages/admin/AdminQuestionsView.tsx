@@ -122,8 +122,8 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Sub-navigation: Question Bank vs Reusable Question Pools (Phase 2.1)
-  const [activeSubTab, setActiveSubTab] = useState<'BANK' | 'POOLS'>('BANK');
+  // Sub-navigation: Question Bank vs Reusable Question Pools (Phase 2.1 Default: POOLS directory)
+  const [activeSubTab, setActiveSubTab] = useState<'BANK' | 'POOLS'>('POOLS');
   const [questionPools, setQuestionPools] = useState<AdminQuestionPool[]>([]);
 
   // Phase 2.1 Question Bank modals state
@@ -727,7 +727,11 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       </div>
 
       {activeSubTab === 'POOLS' ? (
-        <AdminQuestionPoolsView />
+        <AdminQuestionPoolsView
+          onCreateQuestion={() => openCreateModal()}
+          onImportCSV={() => setShowImportModal(true)}
+          onViewCentralBank={() => setActiveSubTab('BANK')}
+        />
       ) : (
         <>
           {/* ─── PHASE 2.1 INDEPENDENT QUESTION BANK HEADER ─────────────────── */}

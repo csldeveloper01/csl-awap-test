@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -115,6 +115,26 @@ class AdminStatsView(APIView):
         ).count()
         total_questions = QuestionBank.objects.count()
 
+        pools_count = QuestionPool.objects.count()
+        active_pools_count = QuestionPool.objects.filter(is_active=True).count()
+        action_required_pools_count = (
+            QuestionPool.objects.annotate(q_count=Count("items")).filter(q_count=0).count()
+        )
+        integrity_events_count = IntegrityEvent.objects.count()
+        unreviewed_integrity_count = IntegrityEvent.objects.filter(is_reviewed=False).count()
+
+        recent_activities = []
+        for log in AssessmentAuditLog.objects.select_related("performed_by").order_by("-created_at")[:10]:
+            recent_activities.append({
+                "id": log.id,
+                "action": log.action,
+                "action_display": log.get_action_display(),
+                "entity_type": log.entity_type,
+                "entity_id": str(log.entity_id),
+                "performed_by_name": log.performed_by.email if log.performed_by else "System",
+                "created_at": log.created_at.isoformat(),
+            })
+
         return Response({
             "colleges_count": colleges_count,
             "assessments_count": assessments_count,
@@ -128,6 +148,12 @@ class AdminStatsView(APIView):
             "aptitude_questions_count": aptitude_count,
             "coding_questions_count": coding_count,
             "total_questions_count": total_questions,
+            "pools_count": pools_count,
+            "active_pools_count": active_pools_count,
+            "action_required_pools_count": action_required_pools_count,
+            "integrity_events_count": integrity_events_count,
+            "unreviewed_integrity_count": unreviewed_integrity_count,
+            "recent_activities": recent_activities,
         })
 
 

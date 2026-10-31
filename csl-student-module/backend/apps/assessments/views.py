@@ -1159,3 +1159,37 @@ class CandidateAttemptPdfDownloadView(APIView):
         resp["X-Content-Type-Options"] = "nosniff"
         resp["Cache-Control"] = "private, no-cache, no-store, must-revalidate"
         return resp
+
+
+class StudentInstitutionRequestView(APIView):
+    """
+    Allows candidates to submit an institution enrollment request if their college
+    is not yet present in the platform's College Directory.
+    Preserves directory integrity without automatically injecting unverified entities.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        institution_name = (request.data.get("institution_name") or "").strip()
+        student_email = (request.data.get("email") or "").strip().lower()
+        city = (request.data.get("city") or "").strip()
+        state_name = (request.data.get("state") or "").strip()
+
+        if not institution_name:
+            return Response(
+                {"institution_name": ["Institution name is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        AssessmentAuditLog.objects.create(
+            action=AssessmentAuditLog.Action.COLLEGE_CREATED,
+            entity_type="COLLEGE_REQUEST",
+            entity_id=student_email or "STUDENT",
+            description=f"Candidate requested institution addition: '{institution_name}' ({city}, {state_name}) - Contact: {student_email}",
+        )
+
+        return Response({
+            "message": f"Your request to add '{institution_name}' has been received. Our administration team has been notified.",
+            "success": True,
+        })
+

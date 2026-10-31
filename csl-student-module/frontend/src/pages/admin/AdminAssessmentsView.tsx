@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
+import { OdometerCard } from '../../components/admin/OdometerCard';
 import {
   getAdminAssessments,
   getAdminAssessmentDetail,
@@ -63,6 +64,10 @@ export function AdminAssessmentsView({
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // View Mode: Grid (Mockup 3) vs List
+  const [viewLayout, setViewLayout] = useState<'GRID' | 'LIST'>('GRID');
+  const [bulkActionActive, setBulkActionActive] = useState(false);
 
   // Bulk Selection & Deletion State
   const [selectedAssessmentIds, setSelectedAssessmentIds] = useState<string[]>([]);
@@ -1032,38 +1037,39 @@ export function AdminAssessmentsView({
   };
 
   return (
-    <div style={{ padding: '24px 32px' }}>
-      {/* ─── HEADER & ACTIONS ───────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-        <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-            Assessment Lifecycle Management
-          </h1>
-          <p style={{ margin: '4px 0 0', color: '#556987', fontSize: '14px' }}>
-            Configure independent diagnostic rounds with dynamic section allocations, assign participating colleges, and control server-side opening states.
-          </p>
-        </div>
+    <div style={{ maxWidth: '1100px' }}>
+      {/* ─── HEADER & ACTIONS (Mockup 3) ─────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h1
+          style={{
+            fontSize: '44px',
+            fontWeight: 900,
+            color: '#0F172A',
+            margin: 0,
+            letterSpacing: '-0.03em',
+            lineHeight: 1.1,
+          }}
+        >
+          Assessments
+        </h1>
+
         <button
           onClick={handleOpenCreateModal}
           style={{
-            backgroundColor: '#0B2E6F',
+            backgroundColor: '#0D52D6',
             color: '#FFFFFF',
             border: 'none',
-            borderRadius: '8px',
-            padding: '10px 18px',
-            fontWeight: 700,
+            borderRadius: '24px',
+            padding: '10px 22px',
+            fontWeight: 800,
             fontSize: '14px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
             cursor: 'pointer',
-            boxShadow: '0 2px 4px rgba(11,46,111,0.15)',
+            boxShadow: '0 2px 6px rgba(13,82,214,0.3)',
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
           Create New Assessment
         </button>
       </div>
@@ -1072,10 +1078,10 @@ export function AdminAssessmentsView({
         <div
           style={{
             padding: '12px 16px',
-            borderRadius: '8px',
+            borderRadius: '12px',
             marginBottom: '20px',
-            fontSize: '14px',
-            fontWeight: 600,
+            fontSize: '13px',
+            fontWeight: 700,
             backgroundColor: actionMessage.type === 'success' ? '#F0FDF4' : '#FEF2F2',
             color: actionMessage.type === 'success' ? '#15803D' : '#B91C1C',
             border: `1px solid ${actionMessage.type === 'success' ? '#BBF7D0' : '#FECDD3'}`,
@@ -1094,83 +1100,198 @@ export function AdminAssessmentsView({
         </div>
       )}
 
-      {/* ─── KPI SUMMARY CARDS ──────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Assessments Total</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#0B2E6F', marginTop: '6px' }}>{totalCount}</div>
-        </div>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#16A34A', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active (Open)</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#16A34A', marginTop: '6px' }}>{openCount} <span style={{ fontSize: '14px', color: '#64748B', fontWeight: 500 }}>/ {totalCount}</span></div>
-        </div>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#6366F1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Attempts Recorded</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#6366F1', marginTop: '6px' }}>{totalAttempts}</div>
-        </div>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Enrolled Colleges</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#0B2E6F', marginTop: '6px' }}>{colleges.length}</div>
-        </div>
+      {/* ─── 4 ODOMETER COUNTERS (Mockup 3) ─────────────────────────── */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: '16px',
+          marginBottom: '28px',
+        }}
+      >
+        <OdometerCard label="Assessments" value={totalCount} />
+        <OdometerCard label="Active" value={openCount} />
+        <OdometerCard label="Attempts" value={totalAttempts} />
+        <OdometerCard label="Colleges" value={colleges.length} />
       </div>
 
-      {/* ─── CONTROLS: SEARCH & STATUS ──────────────────────────────── */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1 }}>
+      {/* ─── SEARCH & FILTER PILL BAR (Mockup 3) ─────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          marginBottom: '16px',
+        }}
+      >
+        {/* Grid/List View Toggle */}
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            type="button"
+            onClick={() => setViewLayout('GRID')}
+            title="Grid View"
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
+              border: '1px solid #CBD5E1',
+              backgroundColor: viewLayout === 'GRID' ? '#0D52D6' : '#FFFFFF',
+              color: viewLayout === 'GRID' ? '#FFFFFF' : '#64748B',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewLayout('LIST')}
+            title="List View"
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
+              border: '1px solid #CBD5E1',
+              backgroundColor: viewLayout === 'LIST' ? '#0D52D6' : '#FFFFFF',
+              color: viewLayout === 'LIST' ? '#FFFFFF' : '#64748B',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        {/* Pill Search Input */}
+        <div style={{ flex: 1, position: 'relative' }}>
           <input
             type="text"
-            placeholder="Search assessments by code, title, or instructions..."
+            placeholder="Search..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
               width: '100%',
-              padding: '10px 14px 10px 38px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              boxSizing: 'border-box',
-              outline: 'none',
               backgroundColor: '#FFFFFF',
+              border: '1.5px solid #CBD5E1',
+              borderRadius: '24px',
+              padding: '10px 42px 10px 18px',
+              fontSize: '13px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              color: '#1E293B',
             }}
           />
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#94A3B8"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
+          <div
+            style={{
+              position: 'absolute',
+              right: '4px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
           >
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </div>
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+        {/* All Statuses Pill Dropdown */}
+        <div style={{ position: 'relative' }}>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{
+              appearance: 'none',
+              backgroundColor: '#FFFFFF',
+              border: '1.5px solid #CBD5E1',
+              borderRadius: '24px',
+              padding: '10px 36px 10px 18px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#1E293B',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="all">All Statuses</option>
+            <option value="OPEN">Open</option>
+            <option value="READY">Ready</option>
+            <option value="DRAFT">Draft</option>
+            <option value="CLOSED">Closed</option>
+            <option value="ARCHIVED">Archived</option>
+          </select>
+          <div
+            style={{
+              position: 'absolute',
+              right: '12px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              pointerEvents: 'none',
+              color: '#0D52D6',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── ACTION BUTTONS ROW (Mockup 3) ─── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          marginBottom: '26px',
+        }}
+      >
+        <div
           style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            border: '1px solid #CBD5E1',
-            fontSize: '14px',
-            backgroundColor: '#FFFFFF',
-            cursor: 'pointer',
-            outline: 'none',
-            fontWeight: 500,
+            backgroundColor: '#CBD5E1',
+            borderRadius: '20px',
+            padding: '4px 10px 4px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '12px',
+            fontWeight: 800,
+            color: '#1E293B',
           }}
         >
-          <option value="all">All Lifecycle States</option>
-          <option value="DRAFT">DRAFT</option>
-          <option value="READY">READY</option>
-          <option value="SCHEDULED">SCHEDULED</option>
-          <option value="OPEN">OPEN (Accepting Attempts)</option>
-          <option value="CLOSED">CLOSED</option>
-          <option value="ARCHIVED">ARCHIVED</option>
-        </select>
+          <span>Bulk Action</span>
+          <input
+            type="checkbox"
+            checked={bulkActionActive}
+            onChange={(e) => setBulkActionActive(e.target.checked)}
+            style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+          />
+        </div>
       </div>
 
       {/* ─── BULK ACTIONS BAR (DURING SELECTION) ───────────────────── */}
@@ -1251,7 +1372,384 @@ export function AdminAssessmentsView({
         </div>
       )}
 
-      {/* ─── ASSESSMENTS TABLE ──────────────────────────────────────── */}
+      {/* ─── ASSESSMENTS DISPLAY: GRID (Mockup 3) OR LIST ─────────── */}
+      {loading ? (
+        <div style={{ padding: '60px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
+          Loading assessments from PostgreSQL...
+        </div>
+      ) : assessments.length === 0 ? (
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '24px',
+            border: '1px solid #E2E8F0',
+            padding: '48px 24px',
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+            No Assessments Found
+          </div>
+          <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 20px 0' }}>
+            Click "Create New Assessment" to configure your first round.
+          </p>
+          <button
+            onClick={handleOpenCreateModal}
+            style={{
+              padding: '10px 22px',
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            Create New Assessment
+          </button>
+        </div>
+      ) : viewLayout === 'GRID' ? (
+        /* ─── ASSESSMENT CARDS GRID (Mockup 3) ────────────────────────── */
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(460px, 1fr))',
+            gap: '22px',
+          }}
+        >
+          {assessments.map((a) => {
+            const sectionLabel =
+              a.sections && a.sections.length > 0
+                ? a.sections.map((s) => s.section_name || s.section_code).join(' • ')
+                : a.delivery_mode === 'PDF_CODING'
+                ? 'PDF Assessment'
+                : 'Section Type';
+
+            const poolSufficient = a.pool_sufficient ?? true;
+
+            return (
+              <div
+                key={a.id}
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: '24px',
+                  border: '1px solid #CBD5E1',
+                  padding: '24px 22px 20px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.04)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  minHeight: '260px',
+                }}
+              >
+                {/* Blue Folded Corner Ribbon Accent (Mockup 3) */}
+                <svg
+                  style={{ position: 'absolute', top: 0, right: 0 }}
+                  width="48"
+                  height="48"
+                  viewBox="0 0 48 48"
+                  fill="none"
+                >
+                  <path d="M0 0 L48 0 L48 48 Z" fill="#0D52D6" />
+                </svg>
+
+                {/* Top Row: Title, Section & 3 Odometer Stat Counters */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingRight: '28px' }}>
+                    <div>
+                      <div style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1.25 }}>
+                        {a.title}
+                      </div>
+                      <div
+                        style={{
+                          display: 'inline-block',
+                          backgroundColor: '#F1F5F9',
+                          color: '#475569',
+                          borderRadius: '12px',
+                          padding: '3px 10px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          marginTop: '6px',
+                        }}
+                      >
+                        {sectionLabel}
+                      </div>
+                    </div>
+
+                    {/* 3 Digital Counters (Attempts, Marks, Time) */}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {/* Attempts */}
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
+                          Attempts
+                        </div>
+                        <div
+                          style={{
+                            backgroundColor: '#8C96A6',
+                            border: '1.5px solid #788291',
+                            borderRadius: '8px',
+                            padding: '3px 8px',
+                            minWidth: '40px',
+                            textAlign: 'center',
+                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
+                          }}
+                        >
+                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
+                            {String(a.attempts_count || 0).padStart(2, '0')}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Marks */}
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
+                          Marks
+                        </div>
+                        <div
+                          style={{
+                            backgroundColor: '#8C96A6',
+                            border: '1.5px solid #788291',
+                            borderRadius: '8px',
+                            padding: '3px 8px',
+                            minWidth: '40px',
+                            textAlign: 'center',
+                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
+                          }}
+                        >
+                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
+                            {String(a.total_marks || 0).padStart(2, '0')}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Time */}
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
+                          Time
+                        </div>
+                        <div
+                          style={{
+                            backgroundColor: '#8C96A6',
+                            border: '1.5px solid #788291',
+                            borderRadius: '8px',
+                            padding: '3px 8px',
+                            minWidth: '50px',
+                            textAlign: 'center',
+                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
+                          }}
+                        >
+                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
+                            {String(a.duration_minutes || 0).padStart(2, '0')}
+                          </span>
+                          <span style={{ fontSize: '9px', fontWeight: 800, color: '#1E293B', marginLeft: '2px' }}>
+                            mins
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bottom Row: 6-Action Grid on Left & Manage Pool / Active on Right */}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-end',
+                    marginTop: '22px',
+                    paddingTop: '16px',
+                    borderTop: '1px solid #F1F5F9',
+                  }}
+                >
+                  {/* Left: 6 Action Buttons Matrix (2 cols x 3 rows) */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, 70px)',
+                      gap: '8px',
+                    }}
+                  >
+                    {/* Row 1: Open / Close & View */}
+                    {a.status === 'OPEN' ? (
+                      <button
+                        onClick={() => handleOpenCloseModal(a)}
+                        style={{
+                          backgroundColor: '#FEE2E2',
+                          color: '#B91C1C',
+                          border: 'none',
+                          borderRadius: '12px',
+                          padding: '6px 0',
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Close
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleOpen(a)}
+                        style={{
+                          backgroundColor: '#DCFCE7',
+                          color: '#15803D',
+                          border: 'none',
+                          borderRadius: '12px',
+                          padding: '6px 0',
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => handleOpenDetail(a)}
+                      style={{
+                        backgroundColor: '#F1F5F9',
+                        color: '#334155',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      View
+                    </button>
+
+                    {/* Row 2: Archive & Colleges */}
+                    <button
+                      onClick={() => handleArchive(a)}
+                      style={{
+                        backgroundColor: '#F1F5F9',
+                        color: '#64748B',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Archive
+                    </button>
+
+                    <button
+                      onClick={() => handleOpenDetail(a, 'colleges')}
+                      style={{
+                        backgroundColor: '#EFF6FF',
+                        color: '#1D4ED8',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Colleges
+                    </button>
+
+                    {/* Row 3: Edit & Delete */}
+                    <button
+                      onClick={() => handleOpenEdit(a)}
+                      style={{
+                        backgroundColor: '#FEF3C7',
+                        color: '#92400E',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteAssessment(a)}
+                      style={{
+                        backgroundColor: '#FFF1F2',
+                        color: '#BE123C',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  {/* Right: Manage Question Pool Button, Sufficiency Badge & Active Switch */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                    <button
+                      onClick={() => {
+                        if (onNavigateToQuestions) {
+                          onNavigateToQuestions(a.id);
+                        } else {
+                          handleOpenDetail(a, 'overview');
+                        }
+                      }}
+                      style={{
+                        backgroundColor: '#0D52D6',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '20px',
+                        padding: '8px 18px',
+                        fontSize: '12px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 6px rgba(13,82,214,0.25)',
+                      }}
+                    >
+                      Manage Question Pool
+                    </button>
+
+                    <div
+                      style={{
+                        backgroundColor: poolSufficient ? '#22C55E' : '#F59E0B',
+                        color: '#FFFFFF',
+                        borderRadius: '16px',
+                        padding: '4px 12px',
+                        fontSize: '10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      {poolSufficient ? 'Pool Status: Sufficient' : 'Pool Status: Insufficient'}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Active</span>
+                      <input
+                        type="checkbox"
+                        checked={a.status === 'OPEN' || a.is_open}
+                        onChange={() => {
+                          if (a.status === 'OPEN') {
+                            handleOpenCloseModal(a);
+                          } else {
+                            handleOpen(a);
+                          }
+                        }}
+                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#0D52D6' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
       <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         {loading ? (
           <div style={{ padding: '48px', textAlign: 'center', color: '#64748B', fontWeight: 600 }}>
@@ -1596,6 +2094,7 @@ export function AdminAssessmentsView({
           </table>
         )}
       </div>
+      )}
 
       {/* ─── CREATE ASSESSMENT MODAL ─────────────────────────────────── */}
       {showCreateModal && (

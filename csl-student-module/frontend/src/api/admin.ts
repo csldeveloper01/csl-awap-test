@@ -52,6 +52,20 @@ export interface AdminStats {
   aptitude_questions_count: number;
   coding_questions_count: number;
   total_questions_count: number;
+  pools_count?: number;
+  active_pools_count?: number;
+  action_required_pools_count?: number;
+  integrity_events_count?: number;
+  unreviewed_integrity_count?: number;
+  recent_activities?: {
+    id: number;
+    action: string;
+    action_display: string;
+    entity_type: string;
+    entity_id: string;
+    performed_by_name: string;
+    created_at: string;
+  }[];
 }
 
 export interface AdminCollege {

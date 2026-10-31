@@ -14,10 +14,12 @@ from .views import (
     AttemptHeartbeatView,
     SyncAnswersView,
     CandidateAttemptPdfDownloadView,
+    StudentInstitutionRequestView,
 )
 
 urlpatterns = [
     path("colleges/", StudentCollegesListView.as_view(), name="student-colleges-list"),
+    path("request-college/", StudentInstitutionRequestView.as_view(), name="student-request-college"),
     path("candidate-assessments/", CandidateEligibleAssessmentsView.as_view(), name="candidate-eligible-assessments"),
     path("register/", CandidateRegisterView.as_view(), name="assessment-register"),
     path("recover/", StudentAttemptRecoveryView.as_view(), name="assessment-recover"),

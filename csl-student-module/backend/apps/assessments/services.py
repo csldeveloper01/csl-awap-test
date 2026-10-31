@@ -1317,7 +1317,11 @@ def resolve_or_create_college(name: str, code: str = None, location: str = "", i
         if college:
             return college
 
-    # 5. Create new college
+    # Student entries cannot automatically create unverified college records
+    if is_student_entry:
+        return None
+
+    # 5. Create new college (Admin / import entry only)
     gen_code = (code or "").strip().upper()
     if not gen_code:
         clean_code = re.sub(r"[^A-Z0-9]", "", raw_name.upper())[:10]

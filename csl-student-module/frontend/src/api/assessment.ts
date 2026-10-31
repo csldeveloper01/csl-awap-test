@@ -392,3 +392,14 @@ export const recoverStudentAttempt = async (
   }
   return res.data;
 };
+
+
+export const requestInstitutionAddition = async (data: {
+  institution_name: string;
+  email?: string;
+  city?: string;
+  state?: string;
+}): Promise<{ message: string; success: boolean }> => {
+  const res = await assessmentApi.post<{ message: string; success: boolean }>('/request-college/', data);
+  return res.data;
+};

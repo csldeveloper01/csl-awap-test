@@ -305,10 +305,15 @@ class Phase2DynamicAssessmentTests(TestCase):
         col2 = resolve_or_create_college("  P.S.G. College of Technology! ")
         self.assertEqual(col2.id, self.college.id)
 
-        # 3. New student entry marked provisional
+        # 3. Student entry for unrecognized college returns None (Phase 2.1 prevents student pollution)
         col3 = resolve_or_create_college("Sri Krishna College", is_student_entry=True)
-        self.assertFalse(col3.is_verified)
-        self.assertTrue(col3.is_active)
+        self.assertIsNone(col3)
+
+        # 4. Admin / import entry can create college
+        col4 = resolve_or_create_college("Sri Krishna College", is_student_entry=False)
+        self.assertIsNotNone(col4)
+        self.assertTrue(col4.is_verified)
+        self.assertTrue(col4.is_active)
 
     def test_college_merge_action(self):
         """Merging duplicate provisional college updates candidates and adds alias."""

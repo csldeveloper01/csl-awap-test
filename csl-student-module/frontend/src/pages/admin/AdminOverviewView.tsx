@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getAdminStats, type AdminStats } from '../../api/admin';
+import { OdometerCard } from '../../components/admin/OdometerCard';
 
 interface AdminOverviewViewProps {
   onNavigateTab: (tab: string) => void;
@@ -30,7 +31,7 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
   if (loading) {
     return (
       <div style={{ padding: '64px', textAlign: 'center', color: '#64748B' }}>
-        <div style={{ fontSize: '14px', fontWeight: 600 }}>Loading system statistics from PostgreSQL...</div>
+        <div style={{ fontSize: '15px', fontWeight: 700 }}>Loading system statistics...</div>
       </div>
     );
   }
@@ -42,23 +43,21 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
           padding: '24px',
           backgroundColor: '#FEF2F2',
           border: '1px solid #FECACA',
-          borderRadius: '12px',
+          borderRadius: '16px',
           color: '#991B1B',
-          maxWidth: '680px',
+          maxWidth: '560px',
         }}
       >
-        <strong style={{ display: 'block', marginBottom: '6px' }}>Database Query Error</strong>
-        <p style={{ margin: 0, fontSize: '13px' }}>{error}</p>
+        <div style={{ fontWeight: 800, marginBottom: '6px' }}>Database Error</div>
+        <div style={{ fontSize: '13px', marginBottom: '12px' }}>{error}</div>
         <button
           onClick={loadStats}
           style={{
-            marginTop: '12px',
-            padding: '6px 14px',
-            backgroundColor: '#0B2E6F',
+            padding: '8px 16px',
+            backgroundColor: '#0D52D6',
             color: '#FFFFFF',
             border: 'none',
-            borderRadius: '6px',
-            fontSize: '12px',
+            borderRadius: '8px',
             fontWeight: 700,
             cursor: 'pointer',
           }}
@@ -69,386 +68,228 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
     );
   }
 
-  const statCards = [
-    {
-      title: 'Colleges & Institutions',
-      value: stats.colleges_count || 0,
-      subtext: 'Active academic institutions',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v4M12 14v4M16 14v4"></path>
-        </svg>
-      ),
-      color: '#4338CA',
-      bg: '#EEF2FF',
-      tab: 'colleges',
-    },
-    {
-      title: 'Assessments Configured',
-      value: stats.assessments_count || 0,
-      subtext: `${stats.open_assessments_count || 0} currently OPEN & accepting`,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M9 11l3 3L22 4"></path>
-          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-        </svg>
-      ),
-      color: '#059669',
-      bg: '#ECFDF5',
-      tab: 'assessments',
-    },
-    {
-      title: 'Total Candidates',
-      value: stats.candidates_count,
-      subtext: 'Registered candidates in system',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-          <circle cx="9" cy="7" r="4"></circle>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-        </svg>
-      ),
-      color: '#1455B8',
-      bg: '#EFF6FF',
-      tab: 'candidates',
-    },
-    {
-      title: 'Total Sessions Created',
-      value: stats.attempts_count,
-      subtext: 'Cumulative candidate attempts',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-        </svg>
-      ),
-      color: '#0B2E6F',
-      bg: '#F8FAFC',
-      tab: 'live',
-    },
-    {
-      title: 'Active In-Progress',
-      value: stats.in_progress_count,
-      subtext: 'Live assessments currently running',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-        </svg>
-      ),
-      color: '#D97706',
-      bg: '#FFFBEB',
-      tab: 'live',
-    },
-    {
-      title: 'Submitted & Completed',
-      value: stats.submitted_count,
-      subtext: 'Finalized and scored attempts',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-      ),
-      color: '#16A34A',
-      bg: '#F0FDF4',
-      tab: 'results',
-    },
-    {
-      title: 'Timed Out Sessions',
-      value: stats.timed_out_count,
-      subtext: 'Auto-finalized on timer expiry',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
-      ),
-      color: '#64748B',
-      bg: '#F1F5F9',
-      tab: 'results',
-    },
-    {
-      title: 'Flagged for Integrity',
-      value: stats.flagged_count,
-      subtext: 'Tab violations & security flags',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-      ),
-      color: stats.flagged_count > 0 ? '#DC2626' : '#16A34A',
-      bg: stats.flagged_count > 0 ? '#FEF2F2' : '#F0FDF4',
-      tab: 'integrity',
-    },
-  ];
-
   return (
-    <div>
-      {/* Page Header */}
-      <div
+    <div style={{ maxWidth: '1080px' }}>
+      {/* Page Title (Mockup 4) */}
+      <h1
         style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '24px',
-          flexWrap: 'wrap',
-          gap: '12px',
+          fontSize: '44px',
+          fontWeight: 900,
+          color: '#0F172A',
+          margin: '0 0 28px 0',
+          letterSpacing: '-0.03em',
+          lineHeight: 1.1,
         }}
       >
-        <div>
-          <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0', letterSpacing: '-0.02em' }}>
-            System Operational Dashboard
-          </h2>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-            Authoritative, real-time telemetry aggregated directly from PostgreSQL database tables.
-          </p>
-        </div>
+        Welcome<br />Admin
+      </h1>
 
-        <button
-          onClick={loadStats}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 16px',
-            backgroundColor: '#FFFFFF',
-            border: '1px solid #CBD5E1',
-            borderRadius: '8px',
-            fontSize: '13px',
-            fontWeight: 700,
-            color: '#0B2E6F',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F8FAFC')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="23 4 23 10 17 10"></polyline>
-            <polyline points="1 20 1 14 7 14"></polyline>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-          </svg>
-          <span>Refresh Metrics</span>
-        </button>
-      </div>
-
-      {/* 8 Stats Grid */}
+      {/* 8 Odometer Counters in 4x2 Grid (Mockup 4) */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))',
+          gridTemplateColumns: 'repeat(4, 1fr)',
           gap: '16px',
-          marginBottom: '28px',
+          marginBottom: '32px',
         }}
       >
-        {statCards.map((card, idx) => (
-          <div
-            key={idx}
-            onClick={() => onNavigateTab(card.tab)}
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
-              border: '1px solid #E2E8F0',
-              padding: '20px',
-              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 6px 14px rgba(11, 46, 111, 0.06)';
-              e.currentTarget.style.borderColor = '#CBD5E1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.02)';
-              e.currentTarget.style.borderColor = '#E2E8F0';
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: '#475569' }}>{card.title}</span>
-              <div
-                style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  backgroundColor: card.bg,
-                  color: card.color,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                {card.icon}
-              </div>
-            </div>
+        {/* Row 1 */}
+        <OdometerCard
+          label="Colleges"
+          value={stats.colleges_count || 0}
+          onClick={() => onNavigateTab('colleges')}
+        />
+        <OdometerCard
+          label="Assessments"
+          value={stats.assessments_count || 0}
+          onClick={() => onNavigateTab('assessments')}
+        />
+        <OdometerCard
+          label="Submitted"
+          value={stats.submitted_count || 0}
+          onClick={() => onNavigateTab('results')}
+        />
+        <OdometerCard
+          label="Sessions"
+          value={stats.attempts_count || 0}
+          onClick={() => onNavigateTab('live')}
+        />
 
-            <div style={{ fontSize: '28px', fontWeight: 800, color: '#0B2E6F', letterSpacing: '-0.02em' }}>
-              {card.value}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-              <span style={{ fontSize: '11px', color: '#94A3B8' }}>{card.subtext}</span>
-              <span style={{ fontSize: '12px', fontWeight: 700, color: '#1455B8' }}>→</span>
-            </div>
-          </div>
-        ))}
+        {/* Row 2 */}
+        <OdometerCard
+          label="Active Assessments"
+          value={stats.open_assessments_count || 0}
+          onClick={() => onNavigateTab('assessments')}
+        />
+        <OdometerCard
+          label="In Progress"
+          value={stats.in_progress_count || 0}
+          onClick={() => onNavigateTab('live')}
+        />
+        <OdometerCard
+          label="Timed Out"
+          value={stats.timed_out_count || 0}
+          onClick={() => onNavigateTab('results')}
+        />
+        <OdometerCard
+          label="Flagged"
+          value={stats.flagged_count || 0}
+          onClick={() => onNavigateTab('integrity')}
+        />
       </div>
 
-      {/* Quick Actions & Bank Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px' }}>
-        {/* Question Bank Status */}
+      {/* 2 Lower Highlight Cards (Mockup 4) */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: '20px',
+        }}
+      >
+        {/* Left Card: Question Bank Balance & Health */}
         <div
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '14px',
-            border: '1px solid #E2E8F0',
-            padding: '24px',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+            backgroundColor: '#CBD5E1',
+            borderRadius: '24px',
+            padding: '20px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-            <div
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                color: '#1455B8',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-              </svg>
+          <div>
+            <div style={{ fontSize: '16px', fontWeight: 900, color: '#0F172A', marginBottom: '14px' }}>
+              Question Bank Balance<br />& Health
             </div>
-            <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-              Question Bank Balance & Health
-            </h3>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+              {/* Recessed Digital Display */}
+              <div
+                style={{
+                  backgroundColor: '#94A3B8',
+                  borderRadius: '12px',
+                  padding: '6px 16px',
+                  minWidth: '70px',
+                  textAlign: 'center',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
+                }}
+              >
+                <span style={{ fontSize: '36px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
+                  {String(stats.pools_count ?? stats.assessments_count ?? 0).padStart(2, '0')}
+                </span>
+              </div>
+
+              {/* Status Pill */}
+              <div
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: '16px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 800,
+                  color: '#0F172A',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                }}
+              >
+                Status: OK
+              </div>
+            </div>
           </div>
 
-          <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.6, margin: '0 0 18px 0' }}>
-            Total questions in bank: <strong style={{ color: '#0F172A' }}>{stats.total_questions_count}</strong>.
-            The randomized assessment engine samples questions dynamically according to each assessment's configured sections.
-            Ensure adequate pool diversity across difficulty tiers.
-          </p>
-
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => onNavigateTab('questions')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '9px 18px',
-                borderRadius: '8px',
-                border: 'none',
-                backgroundColor: '#1455B8',
-                color: '#FFFFFF',
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '0 2px 6px rgba(20, 85, 184, 0.2)',
-              }}
-            >
-              <span>Manage Question Bank</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
-            </button>
-            <button
-              onClick={() => onNavigateTab('config')}
-              style={{
-                padding: '9px 16px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: '#334155',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Assessment Configuration
-            </button>
-          </div>
+          <button
+            onClick={() => onNavigateTab('questions')}
+            style={{
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '20px',
+              padding: '10px 20px',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: 'pointer',
+              alignSelf: 'flex-start',
+              boxShadow: '0 2px 6px rgba(13, 82, 214, 0.3)',
+              transition: 'opacity 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+          >
+            View Question Bank
+          </button>
         </div>
 
-        {/* Proctoring & Integrity Health */}
+        {/* Right Card: Integrity Enforcement Audit Trail */}
         <div
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '14px',
-            border: '1px solid #E2E8F0',
-            padding: '24px',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+            backgroundColor: '#CBD5E1',
+            borderRadius: '24px',
+            padding: '20px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-            <div
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                backgroundColor: stats.flagged_count > 0 ? '#FEE2E2' : '#DCFCE7',
-                color: stats.flagged_count > 0 ? '#DC2626' : '#166534',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-              </svg>
+          <div>
+            <div style={{ fontSize: '16px', fontWeight: 900, color: '#0F172A', marginBottom: '14px' }}>
+              Integrity Enforcement<br />Audit Trail
             </div>
-            <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-              Integrity Enforcement Audit Trail
-            </h3>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+              {/* Recessed Digital Display */}
+              <div
+                style={{
+                  backgroundColor: '#94A3B8',
+                  borderRadius: '12px',
+                  padding: '6px 16px',
+                  minWidth: '70px',
+                  textAlign: 'center',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
+                }}
+              >
+                <span style={{ fontSize: '36px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
+                  {String(stats.flagged_count ?? 0).padStart(2, '0')}
+                </span>
+              </div>
+
+              {/* Status Pill */}
+              <div
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: '16px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 800,
+                  color: stats.flagged_count > 0 ? '#DC2626' : '#16A34A',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                }}
+              >
+                {stats.flagged_count > 0 ? 'Status: Action Required!' : 'Status: OK'}
+              </div>
+            </div>
           </div>
 
-          <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.6, margin: '0 0 18px 0' }}>
-            Page visibility tracking enforces the 2-warning policy, triggering automated attempt finalization on the 3rd switch.
-            {stats.flagged_count > 0 ? (
-              <span style={{ color: '#DC2626', fontWeight: 600, display: 'block', marginTop: '4px' }}>
-                ⚠️ There are {stats.flagged_count} attempts flagged for administrative review.
-              </span>
-            ) : (
-              <span style={{ color: '#166534', fontWeight: 600, display: 'block', marginTop: '4px' }}>
-                ✓ Zero unreviewed violations currently pending.
-              </span>
-            )}
-          </p>
-
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={() => onNavigateTab('integrity')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '9px 18px',
-                borderRadius: '8px',
-                border: 'none',
-                backgroundColor: stats.flagged_count > 0 ? '#DC2626' : '#0B2E6F',
-                color: '#FFFFFF',
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '0 2px 6px rgba(0, 0, 0, 0.1)',
-              }}
-            >
-              <span>Inspect Integrity Log ({stats.flagged_count})</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
-            </button>
-          </div>
+          <button
+            onClick={() => onNavigateTab('integrity')}
+            style={{
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '20px',
+              padding: '10px 20px',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: 'pointer',
+              alignSelf: 'flex-start',
+              boxShadow: '0 2px 6px rgba(13, 82, 214, 0.3)',
+              transition: 'opacity 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+          >
+            View Integrity Events
+          </button>
         </div>
       </div>
     </div>

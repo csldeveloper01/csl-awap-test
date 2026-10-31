@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
+import { OdometerCard } from '../../components/admin/OdometerCard';
 import {
   getAdminColleges,
   createAdminCollege,
@@ -20,7 +21,8 @@ export function AdminCollegesView() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'true' | 'false'>('all');
-  const [districtFilter, setDistrictFilter] = useState('');
+  const districtFilter = '';
+  const [expandedCollegeId, setExpandedCollegeId] = useState<number | null>(null);
   const [showDirectoryImportModal, setShowDirectoryImportModal] = useState(false);
   const [directoryFile, setDirectoryFile] = useState<File | null>(null);
   const [directoryImporting, setDirectoryImporting] = useState(false);
@@ -376,194 +378,188 @@ export function AdminCollegesView() {
   const totalCandidates = colleges.reduce((acc, c) => acc + (c.candidates_count || 0), 0);
 
   return (
-    <div style={{ padding: '24px 32px' }}>
-      {/* ─── HEADER & ACTIONS ───────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-        <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-            Colleges & Institutions
-          </h1>
-          <p style={{ margin: '4px 0 0', color: '#556987', fontSize: '14px' }}>
-            Manage participating academic institutions, assigned assessments, and student enrollment rosters.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
+    <div style={{ maxWidth: '1100px' }}>
+      {/* ─── PAGE TITLE & ACTIONS (Mockup 2) ─────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h1
           style={{
-            backgroundColor: '#0B2E6F',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '10px 18px',
-            fontWeight: 700,
-            fontSize: '14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            boxShadow: '0 2px 4px rgba(11,46,111,0.15)',
+            fontSize: '44px',
+            fontWeight: 900,
+            color: '#0F172A',
+            margin: 0,
+            letterSpacing: '-0.03em',
+            lineHeight: 1.1,
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          Add New Institution
-        </button>
+          Colleges
+        </h1>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => setShowDirectoryImportModal(true)}
+            style={{
+              backgroundColor: '#FFFFFF',
+              color: '#0D52D6',
+              border: '1.5px solid #0D52D6',
+              borderRadius: '20px',
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            Import TN Directory
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            style={{
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '20px',
+              padding: '8px 18px',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(13,82,214,0.3)',
+            }}
+          >
+            Add New Institution
+          </button>
+        </div>
       </div>
 
-      {/* ─── KPI SUMMARY CARDS ──────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Colleges</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#0B2E6F', marginTop: '6px' }}>{totalCount}</div>
-        </div>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#16A34A', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active Status</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#16A34A', marginTop: '6px' }}>{activeCount} <span style={{ fontSize: '14px', color: '#64748B', fontWeight: 500 }}>/ {totalCount}</span></div>
-        </div>
-        <div style={{ background: '#FFFFFF', borderRadius: '10px', padding: '16px 20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#2563EB', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Enrolled Students</div>
-          <div style={{ fontSize: '28px', fontWeight: 800, color: '#2563EB', marginTop: '6px' }}>{totalCandidates}</div>
-        </div>
+      {/* ─── 3 ODOMETER COUNTERS (Mockup 2) ─────────────────────────── */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: '16px',
+          marginBottom: '28px',
+        }}
+      >
+        <OdometerCard label="Colleges" value={totalCount} />
+        <OdometerCard label="Active" value={activeCount} />
+        <OdometerCard label="Students" value={totalCandidates} />
       </div>
 
-      {/* ─── CONTROLS: SEARCH & STATUS ──────────────────────────────── */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1 }}>
+      {/* ─── SEARCH & FILTER PILL BAR (Mockup 2) ─────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          marginBottom: '24px',
+        }}
+      >
+        {/* Pill Search Input: Search by College Name */}
+        <div style={{ flex: 1, position: 'relative' }}>
           <input
             type="text"
-            placeholder="Search by college name, code, location, email..."
+            placeholder="Search by College Name"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
               width: '100%',
-              padding: '10px 14px 10px 38px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              boxSizing: 'border-box',
-              outline: 'none',
               backgroundColor: '#FFFFFF',
+              border: '1.5px solid #CBD5E1',
+              borderRadius: '24px',
+              padding: '10px 42px 10px 18px',
+              fontSize: '13px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              color: '#1E293B',
             }}
           />
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#94A3B8"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
+          <div
+            style={{
+              position: 'absolute',
+              right: '4px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              backgroundColor: '#0D52D6',
+              color: '#FFFFFF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
           >
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </div>
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as any)}
-          style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            border: '1px solid #CBD5E1',
-            fontSize: '14px',
-            backgroundColor: '#FFFFFF',
-            cursor: 'pointer',
-            outline: 'none',
-            fontWeight: 500,
-          }}
-        >
-          <option value="all">All Statuses</option>
-          <option value="true">Active Only</option>
-          <option value="false">Inactive Only</option>
-        </select>
-
-        <select
-          value={districtFilter}
-          onChange={(e) => setDistrictFilter(e.target.value)}
-          style={{
-            padding: '10px 14px',
-            borderRadius: '8px',
-            border: '1px solid #CBD5E1',
-            fontSize: '14px',
-            backgroundColor: '#FFFFFF',
-            cursor: 'pointer',
-            outline: 'none',
-            fontWeight: 500,
-          }}
-        >
-          <option value="">All TN Districts</option>
-          <option value="Chennai">Chennai</option>
-          <option value="Coimbatore">Coimbatore</option>
-          <option value="Madurai">Madurai</option>
-          <option value="Tiruchirappalli">Tiruchirappalli</option>
-          <option value="Salem">Salem</option>
-          <option value="Kanchipuram">Kanchipuram</option>
-          <option value="Chengalpattu">Chengalpattu</option>
-          <option value="Erode">Erode</option>
-          <option value="Vellore">Vellore</option>
-          <option value="Tirunelveli">Tirunelveli</option>
-          <option value="Thanjavur">Thanjavur</option>
-          <option value="Dindigul">Dindigul</option>
-          <option value="Cuddalore">Cuddalore</option>
-          <option value="Dharmapuri">Dharmapuri</option>
-          <option value="Karur">Karur</option>
-          <option value="Namakkal">Namakkal</option>
-          <option value="Krishnagiri">Krishnagiri</option>
-          <option value="Virudhunagar">Virudhunagar</option>
-        </select>
+        {/* All Statuses Pill Dropdown */}
+        <div style={{ position: 'relative' }}>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as any)}
+            style={{
+              appearance: 'none',
+              backgroundColor: '#FFFFFF',
+              border: '1.5px solid #CBD5E1',
+              borderRadius: '24px',
+              padding: '10px 36px 10px 18px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#1E293B',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="all">All Statuses</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+          <div
+            style={{
+              position: 'absolute',
+              right: '12px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              pointerEvents: 'none',
+              color: '#0D52D6',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+        </div>
       </div>
 
-      {/* ─── BULK ACTIONS BAR (DURING SELECTION) ───────────────────── */}
+      {/* Bulk Action Bar */}
       {selectedCollegeIds.length > 0 && (
         <div
           style={{
             backgroundColor: '#EFF6FF',
-            border: '1.5px solid #BFDBFE',
-            borderRadius: '12px',
-            padding: '12px 20px',
+            border: '1px solid #BFDBFE',
+            borderRadius: '16px',
+            padding: '10px 18px',
             marginBottom: '16px',
             display: 'flex',
-            alignItems: 'center',
             justifyContent: 'space-between',
-            boxShadow: '0 2px 8px rgba(20, 85, 184, 0.08)',
-            flexWrap: 'wrap',
-            gap: '12px',
+            alignItems: 'center',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span
-              style={{
-                backgroundColor: '#1455B8',
-                color: '#FFFFFF',
-                borderRadius: '6px',
-                padding: '3px 9px',
-                fontSize: '12px',
-                fontWeight: 800,
-              }}
-            >
-              {selectedCollegeIds.length} Selected
-            </span>
-            <span style={{ fontSize: '13px', color: '#1E3A8A', fontWeight: 600 }}>
-              Bulk actions for academic institutions. Colleges with candidate attempts are protected from deletion.
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: '#1D4ED8' }}>
+            {selectedCollegeIds.length} Colleges Selected
+          </span>
+          <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => setSelectedCollegeIds([])}
               style={{
-                padding: '6px 12px',
                 backgroundColor: '#FFFFFF',
                 border: '1px solid #CBD5E1',
-                borderRadius: '6px',
+                borderRadius: '12px',
+                padding: '6px 12px',
                 fontSize: '12px',
-                fontWeight: 600,
-                color: '#475569',
+                fontWeight: 700,
                 cursor: 'pointer',
               }}
             >
@@ -573,212 +569,228 @@ export function AdminCollegesView() {
               onClick={handleBulkDeleteColleges}
               disabled={bulkDeleting}
               style={{
-                padding: '6px 14px',
                 backgroundColor: '#DC2626',
                 color: '#FFFFFF',
                 border: 'none',
-                borderRadius: '6px',
+                borderRadius: '12px',
+                padding: '6px 16px',
                 fontSize: '12px',
                 fontWeight: 700,
                 cursor: bulkDeleting ? 'not-allowed' : 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-              <span>{bulkDeleting ? 'Deleting...' : `Delete Selected (${selectedCollegeIds.length})`}</span>
+              {bulkDeleting ? 'Deleting...' : `Delete Selected (${selectedCollegeIds.length})`}
             </button>
           </div>
         </div>
       )}
 
-      {/* ─── COLLEGES TABLE ─────────────────────────────────────────── */}
-      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+      {/* ─── COLLEGES TABLE CONTAINER (Mockup 2) ────────────────────── */}
+      <div
+        style={{
+          backgroundColor: '#0D52D6',
+          borderRadius: '24px',
+          padding: '12px 14px 16px',
+          boxShadow: '0 6px 18px rgba(13, 82, 214, 0.15)',
+        }}
+      >
+        {/* Table Header Row (Mockup 2) */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.9fr 1fr 1fr 1fr 36px',
+            padding: '10px 16px',
+            color: '#FFFFFF',
+            fontSize: '13px',
+            fontWeight: 800,
+            alignItems: 'center',
+          }}
+        >
+          <div>
+            <input
+              type="checkbox"
+              checked={colleges.length > 0 && selectedCollegeIds.length === colleges.length}
+              onChange={handleToggleSelectAllColleges}
+              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+            />
+          </div>
+          <div>Institution Name</div>
+          <div>Location</div>
+          <div>Contact</div>
+          <div style={{ textAlign: 'center' }}>Students</div>
+          <div style={{ textAlign: 'center' }}>Assessments</div>
+          <div>Status</div>
+          <div style={{ textAlign: 'center' }}>Action</div>
+          <div></div>
+        </div>
+
+        {/* College Row Cards (Mockup 2) */}
         {loading ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B', fontWeight: 600 }}>
-            Loading colleges roster...
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
+            Loading colleges directory...
           </div>
         ) : colleges.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#0B2E6F', marginBottom: '6px' }}>No colleges found</div>
-            <p style={{ margin: 0, fontSize: '14px' }}>Try adjusting your search filters or click "Add New Institution" to register one.</p>
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
+            No colleges found matching the criteria.
           </div>
         ) : (
-          <table style={{ width: '100%', minWidth: '1000px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                <th style={{ padding: '12px 16px', width: '40px', textAlign: 'center' }}>
-                  <input
-                    type="checkbox"
-                    checked={colleges.length > 0 && selectedCollegeIds.length === colleges.length}
-                    ref={(el) => {
-                      if (el) el.indeterminate = selectedCollegeIds.length > 0 && selectedCollegeIds.length < colleges.length;
-                    }}
-                    onChange={handleToggleSelectAllColleges}
-                    style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
-                    title="Select / Deselect All Colleges"
-                  />
-                </th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', width: '100px' }}>CODE</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>INSTITUTION NAME</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>LOCATION</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>CONTACT / TPO</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>STUDENTS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>ASSESSMENTS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>STATUS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {colleges.map((col) => {
-                const isSelected = selectedCollegeIds.includes(col.id);
-                return (
-                <tr
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+            {colleges.map((col) => {
+              const isSelected = selectedCollegeIds.includes(col.id);
+              const isExpanded = expandedCollegeId === col.id;
+
+              return (
+                <div
                   key={col.id}
                   style={{
-                    borderBottom: '1px solid #F1F5F9',
-                    backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
-                    transition: 'background-color 0.15s',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = '#F8FAFC';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                    backgroundColor: '#FFFFFF',
+                    borderRadius: '16px',
+                    border: isSelected ? '1.5px solid #0D52D6' : '1px solid #E2E8F0',
+                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.02)',
+                    overflow: 'hidden',
                   }}
                 >
-                  <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => handleToggleSelectCollege(col.id)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
-                    />
-                  </td>
-                  <td style={{ padding: '14px 16px' }}>
-                    <span
-                      style={{
-                        backgroundColor: '#EEF2FF',
-                        color: '#3730A3',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        padding: '4px 8px',
-                        borderRadius: '6px',
-                        letterSpacing: '0.02em',
-                      }}
-                    >
-                      {col.code}
-                    </span>
-                  </td>
-                  <td style={{ padding: '14px 16px' }}>
-                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{col.name}</div>
-                    <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      {col.is_verified ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            backgroundColor: '#ECFDF5',
-                            color: '#047857',
-                            border: '1px solid #A7F3D0',
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                          }}
-                        >
-                          ✓ Verified Institution
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            backgroundColor: '#FFFBEB',
-                            color: '#B45309',
-                            border: '1px solid #FDE68A',
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                          }}
-                        >
-                          ⚠ Unverified / Student Entry
-                        </span>
-                      )}
-                      <span style={{ fontSize: '12px', color: '#64748B' }}>
-                        {col.institution_type || 'Engineering'} • {col.affiliation || 'Anna University'}
+                  {/* Top Grid Row */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.9fr 1fr 1fr 1fr 36px',
+                      alignItems: 'center',
+                      padding: '14px 18px',
+                    }}
+                  >
+                    <div>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggleSelectCollege(col.id)}
+                        style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                      />
+                    </div>
+
+                    {/* Institution Name */}
+                    <div style={{ paddingRight: '8px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', lineHeight: 1.3 }}>
+                        {col.name}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px', fontFamily: 'monospace' }}>
+                        {col.code} {col.is_verified ? '• Verified' : ''}
+                      </div>
+                    </div>
+
+                    {/* Location */}
+                    <div style={{ fontSize: '13px', color: '#334155' }}>
+                      {col.city || col.district || col.location || '—'}
+                    </div>
+
+                    {/* Contact */}
+                    <div style={{ fontSize: '12px', color: '#334155' }}>
+                      {col.contact_phone || col.contact_email || col.admin_contact_name || '—'}
+                    </div>
+
+                    {/* Students */}
+                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
+                      {String(col.candidates_count || 0).padStart(2, '0')}
+                    </div>
+
+                    {/* Assessments */}
+                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
+                      {String(col.assigned_assessments_count || 0).padStart(2, '0')}
+                    </div>
+
+                    {/* Status */}
+                    <div>
+                      <span
+                        style={{
+                          backgroundColor: col.is_active ? '#DCFCE7' : '#F1F5F9',
+                          color: col.is_active ? '#15803D' : '#64748B',
+                          padding: '3px 12px',
+                          borderRadius: '12px',
+                          fontSize: '11px',
+                          fontWeight: 800,
+                        }}
+                      >
+                        {col.is_active ? 'Active' : 'Inactive'}
                       </span>
                     </div>
-                    {col.website && (
-                      <div style={{ fontSize: '11.5px', marginTop: '3px' }}>
-                        <a
-                          href={col.website.startsWith('http') ? col.website : `https://${col.website}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: '#1D4ED8', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                        >
-                          <span>🌐</span>
-                          <span style={{ textDecoration: 'underline' }}>{col.website}</span>
-                        </a>
-                      </div>
-                    )}
-                    {col.contact_email && (
-                      <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>{col.contact_email}</div>
-                    )}
-                  </td>
-                  <td style={{ padding: '14px 16px', color: '#475569' }}>
-                    <div style={{ fontWeight: 600, color: '#0F172A' }}>{col.city || col.location || '—'}</div>
-                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                      District: <strong>{col.district || '—'}</strong>
+
+                    {/* View Button (Mockup 2) */}
+                    <div style={{ textAlign: 'center' }}>
+                      <button
+                        onClick={() => handleOpenDetail(col)}
+                        style={{
+                          backgroundColor: '#0D52D6',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '16px',
+                          padding: '5px 16px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        View
+                      </button>
                     </div>
-                  </td>
-                  <td style={{ padding: '14px 16px', color: '#475569' }}>
-                    <div>{col.admin_contact_name || 'TPO Representative'}</div>
-                    {col.contact_phone && (
-                      <div style={{ fontSize: '12px', color: '#64748B' }}>{col.contact_phone}</div>
-                    )}
-                  </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#0B2E6F' }}>
-                    {col.candidates_count || 0}
-                  </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#6366F1' }}>
-                    {col.assigned_assessments_count || 0}
-                  </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <span
+
+                    {/* Expand Chevron Toggle (Mockup 2) */}
+                    <div style={{ textAlign: 'center' }}>
+                      <button
+                        onClick={() => setExpandedCollegeId(isExpanded ? null : col.id)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#0D52D6',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '4px',
+                        }}
+                      >
+                        <svg
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{
+                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                            transition: 'transform 0.2s ease',
+                          }}
+                        >
+                          <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expandable Drawer (Mockup 2) */}
+                  {isExpanded && (
+                    <div
                       style={{
-                        display: 'inline-block',
-                        padding: '3px 10px',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        backgroundColor: col.is_active ? '#DCFCE7' : '#F1F5F9',
-                        color: col.is_active ? '#15803D' : '#64748B',
+                        backgroundColor: '#CBD5E1',
+                        borderTop: '1px solid #E2E8F0',
+                        padding: '10px 24px',
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        alignItems: 'center',
+                        gap: '12px',
                       }}
                     >
-                      {col.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                       <button
                         onClick={() => handleOpenEdit(col)}
-                        title="Edit institution details"
                         style={{
-                          backgroundColor: '#F8FAFC',
-                          color: '#0B2E6F',
-                          border: '1px solid #CBD5E1',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
+                          backgroundColor: '#FFFFFF',
+                          color: '#1E293B',
+                          border: '1px solid #94A3B8',
+                          borderRadius: '16px',
+                          padding: '6px 16px',
                           fontSize: '12px',
-                          fontWeight: 600,
+                          fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
@@ -786,15 +798,14 @@ export function AdminCollegesView() {
                       </button>
                       <button
                         onClick={() => handleOpenMerge(col)}
-                        title="Merge duplicate provisional entry into verified institution"
                         style={{
-                          backgroundColor: '#FEF3C7',
-                          color: '#92400E',
-                          border: '1px solid #FCD34D',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
+                          backgroundColor: '#FFFFFF',
+                          color: '#1E293B',
+                          border: '1px solid #94A3B8',
+                          borderRadius: '16px',
+                          padding: '6px 16px',
                           fontSize: '12px',
-                          fontWeight: 700,
+                          fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
@@ -802,47 +813,29 @@ export function AdminCollegesView() {
                       </button>
                       <button
                         onClick={() => handleOpenImport(col)}
-                        title="Bulk Import Candidates CSV"
                         style={{
-                          backgroundColor: '#F8FAFC',
-                          color: '#0B2E6F',
-                          border: '1px solid #CBD5E1',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
+                          backgroundColor: '#FFFFFF',
+                          color: '#1E293B',
+                          border: '1px solid #94A3B8',
+                          borderRadius: '16px',
+                          padding: '6px 18px',
                           fontSize: '12px',
-                          fontWeight: 600,
+                          fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
-                        Import CSV
-                      </button>
-                      <button
-                        onClick={() => handleOpenDetail(col)}
-                        title="View details and roster"
-                        style={{
-                          backgroundColor: '#EFF6FF',
-                          color: '#1D4ED8',
-                          border: '1px solid #BFDBFE',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        View
+                        Export Data
                       </button>
                       <button
                         onClick={() => handleToggleStatus(col)}
-                        title={col.is_active ? 'Deactivate Institution' : 'Activate Institution'}
                         style={{
-                          backgroundColor: col.is_active ? '#FFF1F2' : '#F0FDF4',
-                          color: col.is_active ? '#E11D48' : '#16A34A',
-                          border: `1px solid ${col.is_active ? '#FECDD3' : '#BBF7D0'}`,
-                          padding: '6px 10px',
-                          borderRadius: '6px',
+                          backgroundColor: '#F87171',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '16px',
+                          padding: '6px 18px',
                           fontSize: '12px',
-                          fontWeight: 600,
+                          fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
@@ -850,27 +843,25 @@ export function AdminCollegesView() {
                       </button>
                       <button
                         onClick={() => handleDeleteCollege(col)}
-                        title="Delete institution permanently"
                         style={{
-                          backgroundColor: '#FFF1F2',
-                          color: '#BE123C',
-                          border: '1px solid #FDA4AF',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
+                          backgroundColor: '#DC2626',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '16px',
+                          padding: '6px 18px',
                           fontSize: '12px',
-                          fontWeight: 600,
+                          fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
                         Delete
                       </button>
                     </div>
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 

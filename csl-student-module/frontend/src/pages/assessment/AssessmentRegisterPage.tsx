@@ -6,6 +6,7 @@ import {
   getStudentColleges,
   getCandidateAssessments,
   recoverStudentAttempt,
+  requestInstitutionAddition,
   type RegistrationPayload,
   type CollegeOption,
   type CandidateAssessmentItem,
@@ -135,6 +136,19 @@ export function AssessmentRegisterPage() {
   const [candidateAssessments, setCandidateAssessments] = useState<CandidateAssessmentItem[]>([]);
   const [loadingAssessments, setLoadingAssessments] = useState<boolean>(false);
 
+  // Searchable College Selection & Institution Request (Requirement 3)
+  const [collegeSearch, setCollegeSearch] = useState('');
+  const [isCollegeDropdownOpen, setIsCollegeDropdownOpen] = useState(false);
+  const [showRequestCollegeModal, setShowRequestCollegeModal] = useState(false);
+  const [requestCollegeForm, setRequestCollegeForm] = useState({
+    institution_name: '',
+    city: '',
+    state: '',
+  });
+  const [submittingCollegeRequest, setSubmittingCollegeRequest] = useState(false);
+  const [collegeRequestSuccess, setCollegeRequestSuccess] = useState('');
+  const [collegeRequestError, setCollegeRequestError] = useState('');
+
   // Fetch active colleges on mount
   useEffect(() => {
     let isMounted = true;
@@ -143,14 +157,6 @@ export function AssessmentRegisterPage() {
       .then((data) => {
         if (isMounted) {
           setColleges(data);
-          if (data.length > 0 && !formData.college_id) {
-            // Pre-select first college if available
-            setFormData((prev) => ({
-              ...prev,
-              college_id: data[0].id,
-              college: data[0].name,
-            }));
-          }
         }
       })
       .catch((err) => {
@@ -223,6 +229,55 @@ export function AssessmentRegisterPage() {
     }
     if (error) {
       setError('');
+    }
+  };
+
+  const handleSelectCollege = (col: CollegeOption) => {
+    setFormData((prev) => ({
+      ...prev,
+      college_id: col.id,
+      college: col.name,
+    }));
+    setCollegeSearch('');
+    setIsCollegeDropdownOpen(false);
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.college_id;
+      delete next.college;
+      return next;
+    });
+  };
+
+  const handleClearCollege = () => {
+    setFormData((prev) => ({
+      ...prev,
+      college_id: undefined,
+      college: '',
+    }));
+    setCollegeSearch('');
+  };
+
+  const handleSubmitCollegeRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requestCollegeForm.institution_name.trim()) {
+      setCollegeRequestError('Institution name is required.');
+      return;
+    }
+    try {
+      setSubmittingCollegeRequest(true);
+      setCollegeRequestError('');
+      const res = await requestInstitutionAddition({
+        institution_name: requestCollegeForm.institution_name.trim(),
+        email: formData.email,
+        city: requestCollegeForm.city.trim(),
+        state: requestCollegeForm.state.trim(),
+      });
+      setCollegeRequestSuccess(res.message);
+      setRequestCollegeForm({ institution_name: '', city: '', state: '' });
+    } catch (err: unknown) {
+      setCollegeRequestError(err instanceof Error ? err.message : 'Failed to submit institution request.');
+    } finally {
+      setSubmittingCollegeRequest(false);
     }
   };
 
@@ -1462,50 +1517,185 @@ export function AssessmentRegisterPage() {
               )}
             </div>
 
-            <div>
-              <label
-                htmlFor="college_id"
-                style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}
-              >
-                College / Institution *
-              </label>
-              <select
-                id="college_id"
-                name="college_id"
-                required
-                disabled={collegesLoading}
-                value={formData.college_id ?? ''}
-                onChange={handleChange}
-                onBlur={() => handleBlur('college_id')}
-                aria-invalid={Boolean(fieldErrors.college_id || fieldErrors.college)}
-                aria-describedby={(fieldErrors.college_id || fieldErrors.college) ? 'college_id-error' : undefined}
-                style={{
-                  width: '100%',
-                  padding: '9px 12px',
-                  borderRadius: '8px',
-                  border: fieldErrors.college_id || fieldErrors.college ? '1px solid #DC2626' : '1px solid #CBD5E1',
-                  fontSize: '13px',
-                  color: '#111111',
-                  boxSizing: 'border-box',
-                  backgroundColor: collegesLoading ? '#F3F4F6' : '#FFFFFF',
-                  outlineColor: '#1455B8',
-                }}
-              >
-                {collegesLoading ? (
-                  <option value="">Loading enrolled colleges...</option>
-                ) : colleges.length === 0 ? (
-                  <option value="">No active colleges found</option>
-                ) : (
-                  <>
-                    <option value="">-- Select Your College --</option>
-                    {colleges.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.code}){c.location ? ` — ${c.location}` : ''}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
+            {/* Searchable College Dropdown (Requirement 3) */}
+            <div style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <label
+                  htmlFor="college_search_input"
+                  style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155' }}
+                >
+                  College / Institution *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRequestCollegeModal(true);
+                    setCollegeRequestSuccess('');
+                    setCollegeRequestError('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: '#1455B8',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Institution not listed?
+                </button>
+              </div>
+
+              {formData.college_id ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1.5px solid #1455B8',
+                    backgroundColor: '#EFF6FF',
+                    fontSize: '13px',
+                    color: '#0B2E6F',
+                    fontWeight: 600,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                    <span style={{ fontSize: '14px' }}>🏛️</span>
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {formData.college}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleClearCollege}
+                    title="Change College"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#64748B',
+                      cursor: 'pointer',
+                      fontSize: '16px',
+                      padding: '0 4px',
+                      lineHeight: 1,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      border: fieldErrors.college_id || fieldErrors.college ? '1px solid #DC2626' : isCollegeDropdownOpen ? '1.5px solid #1455B8' : '1px solid #CBD5E1',
+                      borderRadius: '8px',
+                      backgroundColor: collegesLoading ? '#F8FAFC' : '#FFFFFF',
+                      padding: '2px 8px',
+                    }}
+                  >
+                    <span style={{ fontSize: '13px', color: '#94A3B8', marginRight: '6px' }}>🔍</span>
+                    <input
+                      id="college_search_input"
+                      type="text"
+                      placeholder={collegesLoading ? 'Loading enrolled institutions...' : 'Search and select your college...'}
+                      value={collegeSearch}
+                      disabled={collegesLoading}
+                      onFocus={() => setIsCollegeDropdownOpen(true)}
+                      onChange={(e) => {
+                        setCollegeSearch(e.target.value);
+                        setIsCollegeDropdownOpen(true);
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '7px 0',
+                        border: 'none',
+                        outline: 'none',
+                        fontSize: '13px',
+                        color: '#111111',
+                        backgroundColor: 'transparent',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setIsCollegeDropdownOpen(!isCollegeDropdownOpen)}
+                      style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer', padding: '4px' }}
+                    >
+                      {isCollegeDropdownOpen ? '▲' : '▼'}
+                    </button>
+                  </div>
+
+                  {isCollegeDropdownOpen && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        zIndex: 100,
+                        marginTop: '4px',
+                        maxHeight: '220px',
+                        overflowY: 'auto',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: '8px',
+                        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                      }}
+                    >
+                      {collegesLoading ? (
+                        <div style={{ padding: '12px', textAlign: 'center', color: '#64748B', fontSize: '12px' }}>
+                          Loading enrolled colleges...
+                        </div>
+                      ) : (
+                        colleges
+                          .filter((c) => {
+                            if (!collegeSearch.trim()) return true;
+                            const term = collegeSearch.toLowerCase();
+                            return (
+                              c.name.toLowerCase().includes(term) ||
+                              c.code.toLowerCase().includes(term) ||
+                              (c.location && c.location.toLowerCase().includes(term))
+                            );
+                          })
+                          .map((col) => (
+                            <div
+                              key={col.id}
+                              onClick={() => handleSelectCollege(col)}
+                              style={{
+                                padding: '10px 12px',
+                                borderBottom: '1px solid #F1F5F9',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                transition: 'background-color 0.1s ease',
+                              }}
+                              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F0F7FF')}
+                              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                            >
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: '13px', color: '#0F172A' }}>
+                                  {col.name}
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>
+                                  Code: <strong>{col.code}</strong> {col.location ? `• ${col.location}` : ''}
+                                </div>
+                              </div>
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: '#1455B8', backgroundColor: '#EFF6FF', padding: '2px 6px', borderRadius: '4px' }}>
+                                Select
+                              </span>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {(fieldErrors.college_id || fieldErrors.college) && (
                 <span
                   id="college_id-error"
@@ -1699,6 +1889,153 @@ export function AssessmentRegisterPage() {
           </button>
         </form>
         </div>
+
+        {/* Institution Addition Request Modal (Requirement 3) */}
+        {showRequestCollegeModal && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+              padding: '16px',
+            }}
+          >
+            <div
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: '12px',
+                padding: '24px',
+                maxWidth: '460px',
+                width: '100%',
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Request Institution Addition
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowRequestCollegeModal(false)}
+                  style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+                If your university or college is not currently listed, submit your details. Our verification team will verify and enroll your institution into the platform directory.
+              </p>
+
+              {collegeRequestSuccess ? (
+                <div style={{ padding: '12px', backgroundColor: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: '8px', color: '#065F46', fontSize: '13px', marginBottom: '16px' }}>
+                  ✓ {collegeRequestSuccess}
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#047857' }}>
+                    Tip: For immediate assessment access today, please consult your campus placement officer or select your parent affiliated campus.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowRequestCollegeModal(false)}
+                    style={{ marginTop: '12px', padding: '6px 14px', backgroundColor: '#059669', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Got it, Return
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleSubmitCollegeRequest} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {collegeRequestError && (
+                    <div style={{ padding: '10px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', color: '#DC2626', fontSize: '12px' }}>
+                      {collegeRequestError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Institution Full Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Government College of Engineering"
+                      value={requestCollegeForm.institution_name}
+                      onChange={(e) => setRequestCollegeForm({ ...requestCollegeForm, institution_name: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                        City / District
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Chennai"
+                        value={requestCollegeForm.city}
+                        onChange={(e) => setRequestCollegeForm({ ...requestCollegeForm, city: e.target.value })}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '6px',
+                          fontSize: '13px',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                        State
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Tamil Nadu"
+                        value={requestCollegeForm.state}
+                        onChange={(e) => setRequestCollegeForm({ ...requestCollegeForm, state: e.target.value })}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '6px',
+                          fontSize: '13px',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowRequestCollegeModal(false)}
+                      style={{ padding: '8px 14px', backgroundColor: '#F1F5F9', border: '1px solid #CBD5E1', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submittingCollegeRequest}
+                      style={{ padding: '8px 18px', backgroundColor: '#1455B8', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: submittingCollegeRequest ? 'not-allowed' : 'pointer' }}
+                    >
+                      {submittingCollegeRequest ? 'Submitting...' : 'Submit Request'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
       </div>
   );
 }
