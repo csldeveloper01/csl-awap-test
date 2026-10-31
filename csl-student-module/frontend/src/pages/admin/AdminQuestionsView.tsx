@@ -14,13 +14,17 @@ import {
   getAdminSections,
   createAdminSection,
   assignAdminAssessmentQuestions,
+  getAdminQuestionPools,
+  manageAdminQuestionPoolItems,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
+  type AdminQuestionPool,
   type CSVImportPreviewResponse,
   type SectionMappingRule,
 } from '../../api/admin';
 import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
+import { AdminQuestionPoolsView } from './AdminQuestionPoolsView';
 
 interface AdminQuestionsViewProps {
   initialAssessmentId?: string;
@@ -118,6 +122,10 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Sub-navigation: Question Bank vs Reusable Question Pools (Phase 2.1)
+  const [activeSubTab, setActiveSubTab] = useState<'BANK' | 'POOLS'>('BANK');
+  const [questionPools, setQuestionPools] = useState<AdminQuestionPool[]>([]);
+
   // Phase 2.1 Question Bank modals state
   const [previewQuestion, setPreviewQuestion] = useState<AdminQuestion | null>(null);
   const [showCreateSectionModal, setShowCreateSectionModal] = useState(false);
@@ -129,6 +137,8 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [showPoolAssignModal, setShowPoolAssignModal] = useState(false);
   const [targetQuestionIdsForPool, setTargetQuestionIdsForPool] = useState<number[]>([]);
   const [selectedAssessmentIdsForPool, setSelectedAssessmentIdsForPool] = useState<string[]>([]);
+  const [selectedPoolIds, setSelectedPoolIds] = useState<string[]>([]);
+  const [poolAssignTargetType, setPoolAssignTargetType] = useState<'POOLS' | 'ASSESSMENTS'>('POOLS');
   const [assigningToPool, setAssigningToPool] = useState(false);
   const [poolAssignError, setPoolAssignError] = useState('');
 
@@ -240,6 +250,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       }
     }).catch(() => {});
     loadSections();
+    getAdminQuestionPools().then(setQuestionPools).catch(() => {});
   }, [initialAssessmentId]);
 
   const loadSections = async () => {
@@ -288,32 +299,55 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const handleOpenPoolAssign = (questionIds: number[]) => {
     setTargetQuestionIdsForPool(questionIds);
     setSelectedAssessmentIdsForPool([]);
+    setSelectedPoolIds([]);
     setPoolAssignError('');
     setShowPoolAssignModal(true);
+    getAdminQuestionPools().then(setQuestionPools).catch(() => {});
   };
 
   const handlePoolAssignSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedAssessmentIdsForPool.length === 0 || targetQuestionIdsForPool.length === 0) {
-      setPoolAssignError('Please select at least one assessment pool.');
-      return;
-    }
-    setAssigningToPool(true);
-    setPoolAssignError('');
-    try {
-      for (const assId of selectedAssessmentIdsForPool) {
-        await assignAdminAssessmentQuestions(assId, {
-          question_ids: targetQuestionIdsForPool,
-          action: 'assign',
-        });
+    if (poolAssignTargetType === 'POOLS') {
+      if (selectedPoolIds.length === 0 || targetQuestionIdsForPool.length === 0) {
+        setPoolAssignError('Please select at least one reusable question pool.');
+        return;
       }
-      alert(`Successfully assigned ${targetQuestionIdsForPool.length} question(s) to ${selectedAssessmentIdsForPool.length} assessment pool(s).`);
-      setShowPoolAssignModal(false);
-      loadQuestions();
-    } catch (err: any) {
-      setPoolAssignError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to assign questions to assessment pools.');
-    } finally {
-      setAssigningToPool(false);
+      setAssigningToPool(true);
+      setPoolAssignError('');
+      try {
+        for (const poolId of selectedPoolIds) {
+          await manageAdminQuestionPoolItems(poolId, targetQuestionIdsForPool, 'add');
+        }
+        alert(`Successfully added ${targetQuestionIdsForPool.length} question(s) to ${selectedPoolIds.length} question pool(s).`);
+        setShowPoolAssignModal(false);
+        getAdminQuestionPools().then(setQuestionPools).catch(() => {});
+      } catch (err: any) {
+        setPoolAssignError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to add questions to question pools.');
+      } finally {
+        setAssigningToPool(false);
+      }
+    } else {
+      if (selectedAssessmentIdsForPool.length === 0 || targetQuestionIdsForPool.length === 0) {
+        setPoolAssignError('Please select at least one assessment delivery round.');
+        return;
+      }
+      setAssigningToPool(true);
+      setPoolAssignError('');
+      try {
+        for (const assId of selectedAssessmentIdsForPool) {
+          await assignAdminAssessmentQuestions(assId, {
+            question_ids: targetQuestionIdsForPool,
+            action: 'assign',
+          });
+        }
+        alert(`Successfully assigned ${targetQuestionIdsForPool.length} question(s) to ${selectedAssessmentIdsForPool.length} assessment pool(s).`);
+        setShowPoolAssignModal(false);
+        loadQuestions();
+      } catch (err: any) {
+        setPoolAssignError(err?.response?.data?.error || err?.response?.data?.detail || 'Failed to assign questions to assessment pools.');
+      } finally {
+        setAssigningToPool(false);
+      }
     }
   };
 
@@ -627,18 +661,87 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
   return (
     <div>
-      {/* ─── PHASE 2.1 INDEPENDENT QUESTION BANK HEADER ─────────────────── */}
+      {/* ─── PHASE 2.1 SUB-NAVIGATION: BANK VS REUSABLE POOLS ───────────── */}
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
+          gap: '8px',
           marginBottom: '20px',
-          flexWrap: 'wrap',
-          gap: '12px',
+          borderBottom: '1px solid #E2E8F0',
+          paddingBottom: '12px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('BANK')}
+          style={{
+            padding: '8px 18px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 700,
+            backgroundColor: activeSubTab === 'BANK' ? '#1455B8' : '#F8FAFC',
+            color: activeSubTab === 'BANK' ? '#FFFFFF' : '#475569',
+            border: activeSubTab === 'BANK' ? 'none' : '1px solid #CBD5E1',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: activeSubTab === 'BANK' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
+          }}
+        >
+          <span>📚 Question Bank</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('POOLS')}
+          style={{
+            padding: '8px 18px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 700,
+            backgroundColor: activeSubTab === 'POOLS' ? '#1455B8' : '#F8FAFC',
+            color: activeSubTab === 'POOLS' ? '#FFFFFF' : '#475569',
+            border: activeSubTab === 'POOLS' ? 'none' : '1px solid #CBD5E1',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: activeSubTab === 'POOLS' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
+          }}
+        >
+          <span>📦 Reusable Question Pools</span>
+          {questionPools.length > 0 && (
+            <span
+              style={{
+                backgroundColor: activeSubTab === 'POOLS' ? 'rgba(255,255,255,0.25)' : '#E2E8F0',
+                color: activeSubTab === 'POOLS' ? '#FFFFFF' : '#334155',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '11px',
+              }}
+            >
+              {questionPools.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeSubTab === 'POOLS' ? (
+        <AdminQuestionPoolsView />
+      ) : (
+        <>
+          {/* ─── PHASE 2.1 INDEPENDENT QUESTION BANK HEADER ─────────────────── */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
             style={{
               width: '44px',
@@ -2756,47 +2859,132 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 </div>
               )}
 
-              <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
-                {assessments.map((a) => {
-                  const isChecked = selectedAssessmentIdsForPool.includes(a.id);
-                  return (
-                    <label
-                      key={a.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '10px',
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        backgroundColor: isChecked ? '#F0F7FF' : 'transparent',
-                        cursor: 'pointer',
-                        marginBottom: '4px',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedAssessmentIdsForPool((prev) => [...prev, a.id]);
-                          } else {
-                            setSelectedAssessmentIdsForPool((prev) => prev.filter((id) => id !== a.id));
-                          }
-                        }}
-                        style={{ width: '16px', height: '16px', accentColor: '#1455B8' }}
-                      />
-                      <div>
-                        <span style={{ fontWeight: 700, color: '#0B2E6F', fontSize: '13px' }}>
-                          [{a.code}] {a.title}
-                        </span>
-                        <div style={{ fontSize: '11px', color: '#64748B' }}>
-                          Status: {a.status} • Questions in pool: {a.pool_questions_count || 0}
-                        </div>
-                      </div>
-                    </label>
-                  );
-                })}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', borderBottom: '1px solid #E2E8F0', paddingBottom: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setPoolAssignTargetType('POOLS')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    backgroundColor: poolAssignTargetType === 'POOLS' ? '#1455B8' : '#F1F5F9',
+                    color: poolAssignTargetType === 'POOLS' ? '#FFFFFF' : '#475569',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reusable Question Pools ({questionPools.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPoolAssignTargetType('ASSESSMENTS')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    backgroundColor: poolAssignTargetType === 'ASSESSMENTS' ? '#1455B8' : '#F1F5F9',
+                    color: poolAssignTargetType === 'ASSESSMENTS' ? '#FFFFFF' : '#475569',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Assessment Rounds ({assessments.length})
+                </button>
               </div>
+
+              {poolAssignTargetType === 'POOLS' ? (
+                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
+                  {questionPools.length === 0 ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+                      No reusable question pools found. Switch to the "Question Pools" tab to create one.
+                    </div>
+                  ) : (
+                    questionPools.map((p) => {
+                      const isChecked = selectedPoolIds.includes(p.id);
+                      return (
+                        <label
+                          key={p.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            borderRadius: '6px',
+                            backgroundColor: isChecked ? '#F0F7FF' : 'transparent',
+                            cursor: 'pointer',
+                            marginBottom: '4px',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedPoolIds((prev) => [...prev, p.id]);
+                              } else {
+                                setSelectedPoolIds((prev) => prev.filter((id) => id !== p.id));
+                              }
+                            }}
+                            style={{ width: '16px', height: '16px', accentColor: '#1455B8' }}
+                          />
+                          <div>
+                            <span style={{ fontWeight: 700, color: '#0B2E6F', fontSize: '13px' }}>
+                              [{p.code}] {p.name}
+                            </span>
+                            <div style={{ fontSize: '11px', color: '#64748B' }}>
+                              Category: {p.category || 'General'} • Questions: {p.questions_count || 0}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              ) : (
+                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
+                  {assessments.map((a) => {
+                    const isChecked = selectedAssessmentIdsForPool.includes(a.id);
+                    return (
+                      <label
+                        key={a.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 10px',
+                          borderRadius: '6px',
+                          backgroundColor: isChecked ? '#F0F7FF' : 'transparent',
+                          cursor: 'pointer',
+                          marginBottom: '4px',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedAssessmentIdsForPool((prev) => [...prev, a.id]);
+                            } else {
+                              setSelectedAssessmentIdsForPool((prev) => prev.filter((id) => id !== a.id));
+                            }
+                          }}
+                          style={{ width: '16px', height: '16px', accentColor: '#1455B8' }}
+                        />
+                        <div>
+                          <span style={{ fontWeight: 700, color: '#0B2E6F', fontSize: '13px' }}>
+                            [{a.code}] {a.title}
+                          </span>
+                          <div style={{ fontSize: '11px', color: '#64748B' }}>
+                            Status: {a.status} • Questions in pool: {a.pool_questions_count || 0}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
@@ -2808,24 +2996,41 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 </button>
                 <button
                   type="submit"
-                  disabled={assigningToPool || selectedAssessmentIdsForPool.length === 0}
+                  disabled={
+                    assigningToPool ||
+                    (poolAssignTargetType === 'POOLS' ? selectedPoolIds.length === 0 : selectedAssessmentIdsForPool.length === 0)
+                  }
                   style={{
                     padding: '8px 20px',
                     borderRadius: '6px',
                     border: 'none',
-                    background: assigningToPool || selectedAssessmentIdsForPool.length === 0 ? '#94A3B8' : '#7C3AED',
+                    background:
+                      assigningToPool ||
+                      (poolAssignTargetType === 'POOLS' ? selectedPoolIds.length === 0 : selectedAssessmentIdsForPool.length === 0)
+                        ? '#94A3B8'
+                        : '#7C3AED',
                     color: '#FFFFFF',
                     fontSize: '13px',
                     fontWeight: 700,
-                    cursor: assigningToPool || selectedAssessmentIdsForPool.length === 0 ? 'not-allowed' : 'pointer',
+                    cursor:
+                      assigningToPool ||
+                      (poolAssignTargetType === 'POOLS' ? selectedPoolIds.length === 0 : selectedAssessmentIdsForPool.length === 0)
+                        ? 'not-allowed'
+                        : 'pointer',
                   }}
                 >
-                  {assigningToPool ? 'Assigning...' : `Assign to ${selectedAssessmentIdsForPool.length} Pool(s) →`}
+                  {assigningToPool
+                    ? 'Assigning...'
+                    : poolAssignTargetType === 'POOLS'
+                    ? `Add to ${selectedPoolIds.length} Question Pool(s) →`
+                    : `Assign to ${selectedAssessmentIdsForPool.length} Round(s) →`}
                 </button>
               </div>
             </form>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

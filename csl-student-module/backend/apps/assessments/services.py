@@ -84,22 +84,45 @@ def get_or_create_default_assessment():
     return assessment
 
 
+def get_assessment_available_questions_qs(assessment: Assessment):
+    """
+    Returns QuerySet of questions explicitly available to this assessment:
+    - Questions linked directly via assessment.questions
+    - Questions included in QuestionPools linked via assessment.pool_sources
+    NEVER silently falls back to the unassigned QuestionBank for an assessment.
+    """
+    if not assessment or not assessment.pk:
+        return QuestionBank.objects.filter(is_active=True)
+
+    direct_ids = set(assessment.questions.filter(is_active=True).values_list("id", flat=True))
+    pool_ids = set(
+        QuestionBank.objects.filter(
+            pool_items__pool__assessment_sources__assessment=assessment,
+            pool_items__pool__is_active=True,
+            is_active=True,
+        ).values_list("id", flat=True)
+    )
+    combined_ids = direct_ids | pool_ids
+    if not combined_ids:
+        return QuestionBank.objects.none()
+    return QuestionBank.objects.filter(id__in=combined_ids, is_active=True)
+
+
 def validate_question_bank_sufficiency(aptitude_count: int = None, coding_count: int = None, assessment: Assessment = None):
     """
     Checks that the Question Bank or assessment question pool contains enough active questions for each section.
     Supports dynamic section allocations with fallback to legacy aptitude and coding counts.
+    Never silently serves unrelated global questions when an assessment has no assigned pool.
     """
-    has_assessment_questions = (
-        assessment.questions.exists()
-        if assessment
-        else False
-    )
+    if assessment and assessment.pk:
+        available_qs = get_assessment_available_questions_qs(assessment)
+        has_assessment_questions = available_qs.exists()
+        scope_name = f"question pool for '{assessment.title}' ({assessment.code})"
+    else:
+        available_qs = QuestionBank.objects.filter(is_active=True)
+        has_assessment_questions = False
+        scope_name = "bank"
 
-    scope_name = (
-        f"question pool for '{assessment.title}' ({assessment.code})"
-        if has_assessment_questions
-        else "bank"
-    )
     errors = []
 
     allocations = (
@@ -123,10 +146,7 @@ def validate_question_bank_sufficiency(aptitude_count: int = None, coding_count:
                 | models.Q(section__code__iexact=sec.code)
                 | models.Q(section__name__iexact=sec.name)
             )
-            if has_assessment_questions:
-                available = assessment.questions.filter(sec_q_filter, is_active=True).distinct().count()
-            else:
-                available = QuestionBank.objects.filter(sec_q_filter, is_active=True).distinct().count()
+            available = available_qs.filter(sec_q_filter).distinct().count()
 
             if available < needed:
                 shortage = needed - available
@@ -148,12 +168,8 @@ def validate_question_bank_sufficiency(aptitude_count: int = None, coding_count:
             | models.Q(section__code__iexact="CODING")
         )
 
-        if assessment and assessment.questions.exists():
-            active_aptitude = assessment.questions.filter(apt_filter, is_active=True).distinct().count()
-            active_coding = assessment.questions.filter(cod_filter, is_active=True).distinct().count()
-        else:
-            active_aptitude = QuestionBank.objects.filter(apt_filter, is_active=True).distinct().count()
-            active_coding = QuestionBank.objects.filter(cod_filter, is_active=True).distinct().count()
+        active_aptitude = available_qs.filter(apt_filter).distinct().count()
+        active_coding = available_qs.filter(cod_filter).distinct().count()
 
         if active_aptitude < apt_count:
             shortage = apt_count - active_aptitude
@@ -181,7 +197,7 @@ def select_balanced_questions(
 ):
     """
     Selects exactly required_count questions distributed evenly across available difficulty levels.
-    - Scopes strictly to assessment pool if questions are assigned to that assessment.
+    - Scopes strictly to assessment pool (direct questions + linked QuestionPools).
     - Fully supports dynamic AssessmentSection instances or section codes.
     - Excludes previously selected question IDs to guarantee global uniqueness.
     - Uses round-robin stratified sampling across available difficulty groups.
@@ -223,10 +239,11 @@ def select_balanced_questions(
             | models.Q(section__name__iexact=sec_name)
         )
 
-    if has_pool_questions is None:
-        has_pool_questions = bool(assessment and assessment.questions.exists())
+    if assessment and assessment.pk:
+        base_qs = get_assessment_available_questions_qs(assessment)
+    else:
+        base_qs = QuestionBank.objects.filter(is_active=True)
 
-    base_qs = assessment.questions if (assessment and has_pool_questions) else QuestionBank.objects
     query = base_qs.filter(q_filter, is_active=True)
     if exclude_question_ids:
         query = query.exclude(id__in=exclude_question_ids)

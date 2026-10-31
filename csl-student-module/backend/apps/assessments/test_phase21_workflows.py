@@ -555,3 +555,121 @@ class Phase21WorkflowTests(TestCase):
         self.assertEqual(events_res.status_code, status.HTTP_200_OK)
         self.assertTrue(len(events_res.data) >= 1)
         self.assertEqual(events_res.data[0]["recovery_type"], "STUDENT_SELF_SERVICE")
+
+    def test_assessment_pool_sourcing_isolation_and_stability(self):
+        """
+        Deliverable 3: Verify question sourcing exclusively from linked pools/assigned questions,
+        eliminate global fallback, and guarantee snapshot stability when reusable pools change.
+        """
+        from apps.assessments.services import prepare_assessment, start_assessment_for_candidate
+
+        # 1. Assessment without questions or pools must fail preparation (NO silent global fallback)
+        unlinked_assessment = Assessment.objects.create(
+            code="NO-POOL-ASSESS",
+            title="Unlinked Assessment",
+            status=Assessment.Status.DRAFT,
+            total_marks=2,
+        )
+        AssessmentSectionAllocation.objects.create(
+            assessment=unlinked_assessment,
+            section=self.section_apt,
+            question_count=2,
+            marks_per_question=1,
+            order=1,
+        )
+        from rest_framework.exceptions import ValidationError
+        with self.assertRaises(ValidationError) as cm:
+            prepare_assessment(unlinked_assessment, user=self.admin)
+        self.assertIn("bank_error", str(cm.exception))
+
+        # 2. Create isolated pool with specific tagged questions
+        pool = QuestionPool.objects.create(name="Isolated Test Pool", code="ISOLATED_POOL")
+        pool_q1 = QuestionBank.objects.create(
+            prompt="Isolated Pool Q1",
+            section=self.section_apt,
+            section_type="APTITUDE",
+            option_a="1", option_b="2", option_c="3", option_d="4", correct_option="A"
+        )
+        pool_q2 = QuestionBank.objects.create(
+            prompt="Isolated Pool Q2",
+            section=self.section_apt,
+            section_type="APTITUDE",
+            option_a="1", option_b="2", option_c="3", option_d="4", correct_option="B"
+        )
+        pool_q3 = QuestionBank.objects.create(
+            prompt="Isolated Pool Q3",
+            section=self.section_apt,
+            section_type="APTITUDE",
+            option_a="1", option_b="2", option_c="3", option_d="4", correct_option="C"
+        )
+        QuestionPoolItem.objects.create(pool=pool, question=pool_q1, order=1)
+        QuestionPoolItem.objects.create(pool=pool, question=pool_q2, order=2)
+        QuestionPoolItem.objects.create(pool=pool, question=pool_q3, order=3)
+
+        # Create unrelated question in general bank
+        unrelated_q = QuestionBank.objects.create(
+            prompt="Unrelated Global Bank Question NEVER IN POOL",
+            section=self.section_apt,
+            section_type="APTITUDE",
+            option_a="1", option_b="2", option_c="3", option_d="4", correct_option="D"
+        )
+
+        # 3. Assessment linked to pool via AssessmentPoolSource
+        assessment = Assessment.objects.create(
+            code="POOL-ASSESS-01",
+            title="Pool Sourced Assessment",
+            status=Assessment.Status.DRAFT,
+            duration_minutes=30,
+            total_marks=2,
+        )
+        AssessmentSectionAllocation.objects.create(
+            assessment=assessment,
+            section=self.section_apt,
+            question_count=2,
+            marks_per_question=1,
+            order=1,
+        )
+        AssessmentPoolSource.objects.create(
+            assessment=assessment,
+            pool=pool,
+            section=self.section_apt,
+            question_count=2,
+            randomize=True,
+        )
+
+        # Prepare succeeds using pool
+        prepare_assessment(assessment, user=self.admin)
+        self.assertEqual(assessment.status, Assessment.Status.READY)
+
+        # Open and start attempt
+        assessment.status = Assessment.Status.OPEN
+        assessment.save()
+
+        attempt = start_assessment_for_candidate(self.candidate, assessment=assessment, config=self.config)
+        self.assertIsNotNone(attempt)
+
+        # Verify snapshots contain ONLY questions from the pool
+        attempt.refresh_from_db()
+        snapshot_q_ids = set(attempt.question_snapshots.values_list("question_id", flat=True))
+        self.assertEqual(len(snapshot_q_ids), 2)
+        pool_q_ids = {pool_q1.id, pool_q2.id, pool_q3.id}
+        self.assertTrue(snapshot_q_ids.issubset(pool_q_ids))
+        self.assertNotIn(unrelated_q.id, snapshot_q_ids)
+
+        # 4. Modify pool items and verify snapshot stability & referential protection
+        pool.items.all().delete()
+        
+        # Hard deletion is blocked by PROTECT constraint on AttemptQuestionSnapshot
+        from django.db.models import ProtectedError
+        with self.assertRaises(ProtectedError):
+            pool_q1.delete()
+
+        # Soft archive/deactivate question
+        pool_q1.is_active = False
+        pool_q1.save()
+
+        # Existing candidate snapshot remains completely intact
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.question_snapshots.count(), 2)
+        first_snap = attempt.question_snapshots.first()
+        self.assertTrue(first_snap.prompt.startswith("Isolated Pool Q"))

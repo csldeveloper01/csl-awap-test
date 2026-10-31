@@ -26,10 +26,16 @@ import {
   getAdminAssessmentCandidates,
   assignAdminAssessmentCandidates,
   getAdminCandidates,
+  getAdminQuestionPools,
+  getAdminAssessmentPoolSources,
+  linkAdminAssessmentPoolSource,
+  unlinkAdminAssessmentPoolSource,
   type AdminAssessment,
   type AdminAssessmentDetail,
   type AdminCollege,
   type AdminSection,
+  type AdminQuestionPool,
+  type AdminAssessmentPoolSource,
 } from '../../api/admin';
 
 interface AdminAssessmentsViewProps {
@@ -96,6 +102,20 @@ export function AdminAssessmentsView({
   const [savingColleges, setSavingColleges] = useState(false);
   const [collegeAssignError, setCollegeAssignError] = useState<string | null>(null);
   const [collegeSearchQuery, setCollegeSearchQuery] = useState('');
+
+  // Reusable Question Pools Linking State (Phase 2.1)
+  const [poolSources, setPoolSources] = useState<AdminAssessmentPoolSource[]>([]);
+  const [availableQuestionPools, setAvailableQuestionPools] = useState<AdminQuestionPool[]>([]);
+  const [loadingPoolSources, setLoadingPoolSources] = useState(false);
+  const [showLinkPoolModal, setShowLinkPoolModal] = useState(false);
+  const [linkPoolForm, setLinkPoolForm] = useState({
+    pool_id: '',
+    section_id: '',
+    question_count: 5,
+    randomize: true,
+  });
+  const [linkingPool, setLinkingPool] = useState(false);
+  const [linkPoolError, setLinkPoolError] = useState('');
 
   // Dynamic Section Pool Questions Management State (Phase 2.1)
   const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
@@ -261,6 +281,8 @@ export function AdminAssessmentsView({
         : [];
       setSelectedCollegeIdsForAssign(colIds);
       fetchCandidatesForAssessment(assessmentId);
+      fetchPoolSourcesForAssessment(assessmentId);
+      getAdminQuestionPools({ is_active: true }).then(setAvailableQuestionPools).catch(() => {});
     } catch (err: any) {
       console.error('Failed to fetch assessment detail:', err);
       const status = err?.response?.status;
@@ -475,6 +497,68 @@ export function AdminAssessmentsView({
       setActionMessage({ text: errFormatted, type: 'error' });
     } finally {
       setSavingColleges(false);
+    }
+  };
+
+  // Reusable Question Pools Handlers (Phase 2.1)
+  const fetchPoolSourcesForAssessment = async (assessmentId: string) => {
+    try {
+      setLoadingPoolSources(true);
+      const data = await getAdminAssessmentPoolSources(assessmentId);
+      setPoolSources(data);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingPoolSources(false);
+    }
+  };
+
+  const handleOpenLinkPool = () => {
+    setLinkPoolForm({
+      pool_id: availableQuestionPools[0]?.id || '',
+      section_id: '',
+      question_count: 5,
+      randomize: true,
+    });
+    setLinkPoolError('');
+    setShowLinkPoolModal(true);
+  };
+
+  const handleLinkPoolSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assessmentDetail || !linkPoolForm.pool_id) return;
+    try {
+      setLinkingPool(true);
+      setLinkPoolError('');
+      await linkAdminAssessmentPoolSource(assessmentDetail.id, {
+        pool_id: linkPoolForm.pool_id,
+        section_id: linkPoolForm.section_id ? Number(linkPoolForm.section_id) : undefined,
+        question_count: Number(linkPoolForm.question_count) || 1,
+        randomize: linkPoolForm.randomize,
+      });
+      setShowLinkPoolModal(false);
+      await fetchPoolSourcesForAssessment(assessmentDetail.id);
+      const freshDetail = await getAdminAssessmentDetail(assessmentDetail.id);
+      setAssessmentDetail(freshDetail);
+      setSelectedAssessment(freshDetail);
+    } catch (err: unknown) {
+      setLinkPoolError(formatApiError(err, 'Failed to link question pool.'));
+    } finally {
+      setLinkingPool(false);
+    }
+  };
+
+  const handleUnlinkPool = async (sourceId: number) => {
+    if (!assessmentDetail) return;
+    if (!window.confirm('Unlink this question pool from the assessment?')) return;
+    try {
+      await unlinkAdminAssessmentPoolSource(assessmentDetail.id, sourceId);
+      await fetchPoolSourcesForAssessment(assessmentDetail.id);
+      const freshDetail = await getAdminAssessmentDetail(assessmentDetail.id);
+      setAssessmentDetail(freshDetail);
+      setSelectedAssessment(freshDetail);
+    } catch (err: unknown) {
+      alert(formatApiError(err, 'Failed to unlink question pool.'));
     }
   };
 
@@ -2791,6 +2875,122 @@ export function AdminAssessmentsView({
                       )}
                     </div>
 
+                    {/* Linked Reusable Question Pools (Phase 2.1) */}
+                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '16px', marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                              Linked Reusable Question Pools
+                            </h4>
+                            <span style={{ fontSize: '11px', fontWeight: 700, backgroundColor: '#ECFDF5', color: '#059669', padding: '2px 8px', borderRadius: '12px', border: '1px solid #A7F3D0' }}>
+                              {poolSources.length} Linked Pool(s)
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                            Combine reusable question pools with individually assigned questions to compose assessment deliveries.
+                          </div>
+                        </div>
+
+                        {assessmentDetail.status === 'DRAFT' && (
+                          <button
+                            type="button"
+                            onClick={handleOpenLinkPool}
+                            style={{
+                              padding: '7px 14px',
+                              backgroundColor: '#1455B8',
+                              color: '#FFFFFF',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <span>+ Link Question Pool</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {loadingPoolSources ? (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '12px' }}>
+                          Loading linked pools...
+                        </div>
+                      ) : poolSources.length === 0 ? (
+                        <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px dashed #CBD5E1', textAlign: 'center' }}>
+                          <span style={{ fontSize: '13px', color: '#64748B' }}>
+                            No reusable question pools linked to this assessment yet. You can link curriculum pools or use individually assigned questions below.
+                          </span>
+                        </div>
+                      ) : (
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                            <thead>
+                              <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                                <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Pool</th>
+                                <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Target Section</th>
+                                <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Quota</th>
+                                <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Randomize</th>
+                                {assessmentDetail.status === 'DRAFT' && (
+                                  <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>Action</th>
+                                )}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {poolSources.map((ps) => (
+                                <tr key={ps.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                  <td style={{ padding: '10px 12px' }}>
+                                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{ps.pool_name}</div>
+                                    <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#64748B' }}>{ps.pool_code}</span>
+                                  </td>
+                                  <td style={{ padding: '10px 12px', color: '#334155' }}>
+                                    {ps.section_name ? (
+                                      <span style={{ backgroundColor: '#F1F5F9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                                        {ps.section_name} ({ps.section_code})
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#94A3B8' }}>All Sections / Dynamic</span>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0B2E6F' }}>
+                                    {ps.question_count} question(s)
+                                  </td>
+                                  <td style={{ padding: '10px 12px' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 600, color: ps.randomize ? '#16A34A' : '#64748B' }}>
+                                      {ps.randomize ? '✓ Yes' : 'No'}
+                                    </span>
+                                  </td>
+                                  {assessmentDetail.status === 'DRAFT' && (
+                                    <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUnlinkPool(ps.id)}
+                                        style={{
+                                          padding: '4px 8px',
+                                          backgroundColor: '#FEF2F2',
+                                          border: '1px solid #FECACA',
+                                          color: '#DC2626',
+                                          borderRadius: '4px',
+                                          fontSize: '11px',
+                                          fontWeight: 600,
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        Unlink
+                                      </button>
+                                    </td>
+                                  )}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Section Questions & Question Pool Management (Phase 2.1) */}
                     <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '16px', marginBottom: '16px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
@@ -3467,6 +3667,187 @@ export function AdminAssessmentsView({
                 Close Preview
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── LINK REUSABLE QUESTION POOL MODAL (PHASE 2.1) ─────────────── */}
+      {showLinkPoolModal && assessmentDetail && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '560px',
+              maxWidth: '92vw',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  Link Reusable Question Pool
+                </h3>
+                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                  Assign a question pool to supply questions for this assessment.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLinkPoolModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {linkPoolError && (
+              <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px 14px', borderRadius: '6px', marginBottom: '14px', fontSize: '12px' }}>
+                {linkPoolError}
+              </div>
+            )}
+
+            <form onSubmit={handleLinkPoolSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Select Question Pool *
+                </label>
+                {availableQuestionPools.length === 0 ? (
+                  <div style={{ padding: '12px', backgroundColor: '#FEF3C7', color: '#92400E', borderRadius: '6px', fontSize: '12px' }}>
+                    No active question pools available. Create a question pool in the Question Bank first.
+                  </div>
+                ) : (
+                  <select
+                    required
+                    value={linkPoolForm.pool_id}
+                    onChange={(e) => setLinkPoolForm({ ...linkPoolForm, pool_id: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      border: '1px solid #CBD5E1',
+                      borderRadius: '6px',
+                      outline: 'none',
+                      backgroundColor: '#FFFFFF',
+                    }}
+                  >
+                    <option value="">-- Choose a Question Pool --</option>
+                    {availableQuestionPools.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        [{p.code}] {p.name} ({p.questions_count} questions)
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Target Section Allocation (Optional)
+                </label>
+                <select
+                  value={linkPoolForm.section_id}
+                  onChange={(e) => setLinkPoolForm({ ...linkPoolForm, section_id: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    border: '1px solid #CBD5E1',
+                    borderRadius: '6px',
+                    outline: 'none',
+                    backgroundColor: '#FFFFFF',
+                  }}
+                >
+                  <option value="">-- All Sections / Assessment Level --</option>
+                  {(assessmentDetail.sections || []).map((sec) => (
+                    <option key={sec.section_id} value={String(sec.section_id)}>
+                      {sec.section_name} ({sec.section_code}) — Needs {sec.question_count} Qs
+                    </option>
+                  ))}
+                </select>
+                <div style={{ fontSize: '11px', color: '#64748B', marginTop: '3px' }}>
+                  Choose which curriculum section quota this pool contributes towards.
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Question Count to Draw (Quota)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={linkPoolForm.question_count}
+                  onChange={(e) => setLinkPoolForm({ ...linkPoolForm, question_count: Math.max(1, parseInt(e.target.value) || 1) })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    border: '1px solid #CBD5E1',
+                    borderRadius: '6px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                <input
+                  type="checkbox"
+                  id="randomizePoolCheck"
+                  checked={linkPoolForm.randomize}
+                  onChange={(e) => setLinkPoolForm({ ...linkPoolForm, randomize: e.target.checked })}
+                />
+                <label htmlFor="randomizePoolCheck" style={{ fontSize: '13px', color: '#334155', fontWeight: 600 }}>
+                  Randomize selection across candidates (Dynamic draw per student)
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowLinkPoolModal(false)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: '1px solid #CBD5E1',
+                    background: '#FFFFFF',
+                    color: '#475569',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={linkingPool || !linkPoolForm.pool_id}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: linkingPool || !linkPoolForm.pool_id ? '#94A3B8' : '#1455B8',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: linkingPool || !linkPoolForm.pool_id ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {linkingPool ? 'Linking...' : 'Link Question Pool →'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
