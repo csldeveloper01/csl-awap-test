@@ -17,6 +17,10 @@ from .models import (
     AssessmentPoolSource,
     AdminAccessGrant,
     RecoveryEvent,
+    Drive,
+    DriveAssessment,
+    DriveRegistration,
+    DriveInvitation,
 )
 
 
@@ -181,6 +185,8 @@ class AdminCollegeCreateUpdateSerializer(serializers.ModelSerializer):
 
 
 class AdminAssessmentAuditLogSerializer(serializers.ModelSerializer):
+    reversed_by_username = serializers.CharField(source="reversed_by.username", read_only=True, default="")
+
     class Meta:
         model = AssessmentAuditLog
         fields = [
@@ -191,6 +197,12 @@ class AdminAssessmentAuditLogSerializer(serializers.ModelSerializer):
             "performed_by_name",
             "timestamp",
             "details",
+            "is_reversible",
+            "reversal_status",
+            "previous_state",
+            "new_state",
+            "reversed_at",
+            "reversed_by_username",
         ]
 
 
@@ -216,6 +228,8 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
             "description",
             "status",
             "assessment_type",
+            "visibility",
+            "access_code",
             "is_open",
             "is_results_released",
             "results_released_at",
@@ -384,6 +398,8 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "assessment_type",
+            "visibility",
+            "access_code",
             "delivery_mode",
             "pdf_file",
             "duration_minutes",
@@ -964,6 +980,8 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     assessment_id = serializers.SerializerMethodField()
     assessment_title = serializers.SerializerMethodField()
     section_name = serializers.CharField(source="section.name", read_only=True)
+    pool_memberships = serializers.SerializerMethodField()
+    is_unassigned = serializers.SerializerMethodField()
 
     class Meta:
         model = QuestionBank
@@ -991,6 +1009,8 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             "assigned_assessments",
             "assessment_id",
             "assessment_title",
+            "pool_memberships",
+            "is_unassigned",
         ]
 
     section_id = serializers.IntegerField(source="section.id", read_only=True)
@@ -1011,6 +1031,18 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     def get_assessment_title(self, obj):
         assessments = self._get_assessments(obj)
         return assessments[0].title if assessments else ""
+
+    def get_pool_memberships(self, obj):
+        if not hasattr(obj, "_cached_pool_memberships"):
+            items = obj.pool_items.select_related("pool").filter(pool__is_active=True)
+            obj._cached_pool_memberships = [
+                {"id": str(item.pool.id), "name": item.pool.name, "code": item.pool.code}
+                for item in items
+            ]
+        return obj._cached_pool_memberships
+
+    def get_is_unassigned(self, obj):
+        return len(self.get_pool_memberships(obj)) == 0
 
     def validate_prompt(self, value):
         if not value or not value.strip():
@@ -1587,3 +1619,245 @@ class AdminRecoveryEventSerializer(serializers.ModelSerializer):
         if obj.attempt and obj.attempt.assessment:
             return obj.attempt.assessment.title
         return "CSL Assessment"
+
+
+class AdminDriveAssessmentSerializer(serializers.ModelSerializer):
+    assessment_id = serializers.UUIDField(source="assessment.id", read_only=True)
+    assessment_code = serializers.CharField(source="assessment.code", read_only=True)
+    assessment_title = serializers.CharField(source="assessment.title", read_only=True)
+    assessment_type = serializers.CharField(source="assessment.assessment_type", read_only=True)
+    delivery_mode = serializers.CharField(source="assessment.delivery_mode", read_only=True)
+    duration_minutes = serializers.IntegerField(source="assessment.duration_minutes", read_only=True)
+    total_marks = serializers.IntegerField(source="assessment.total_marks", read_only=True)
+    assessment_status = serializers.CharField(source="assessment.status", read_only=True)
+
+    class Meta:
+        model = DriveAssessment
+        fields = [
+            "id",
+            "drive",
+            "assessment",
+            "assessment_id",
+            "assessment_code",
+            "assessment_title",
+            "assessment_type",
+            "delivery_mode",
+            "duration_minutes",
+            "total_marks",
+            "assessment_status",
+            "display_order",
+            "is_required",
+            "registration_enabled",
+            "created_at",
+        ]
+
+
+class AdminDriveRegistrationSerializer(serializers.ModelSerializer):
+    candidate_id = serializers.UUIDField(source="candidate.id", read_only=True)
+    candidate_name = serializers.CharField(source="candidate.full_name", read_only=True)
+    candidate_register_number = serializers.CharField(source="candidate.register_number", read_only=True)
+    candidate_email = serializers.CharField(source="candidate.email", read_only=True)
+    candidate_college = serializers.CharField(source="candidate.college", read_only=True)
+    candidate_department = serializers.CharField(source="candidate.department", read_only=True)
+    drive_name = serializers.CharField(source="drive.name", read_only=True)
+
+    class Meta:
+        model = DriveRegistration
+        fields = [
+            "id",
+            "drive",
+            "drive_name",
+            "candidate",
+            "candidate_id",
+            "candidate_name",
+            "candidate_register_number",
+            "candidate_email",
+            "candidate_college",
+            "candidate_department",
+            "registration_status",
+            "registration_source",
+            "notes",
+            "registered_at",
+        ]
+
+
+class AdminDriveInvitationSerializer(serializers.ModelSerializer):
+    is_valid = serializers.SerializerMethodField()
+    drive_name = serializers.CharField(source="drive.name", read_only=True)
+
+    class Meta:
+        model = DriveInvitation
+        fields = [
+            "id",
+            "drive",
+            "drive_name",
+            "token_hash",
+            "access_code",
+            "label",
+            "expires_at",
+            "max_uses",
+            "usage_count",
+            "is_active",
+            "is_valid",
+            "created_at",
+        ]
+
+    def get_is_valid(self, obj):
+        return obj.is_valid()
+
+
+class AdminDriveListSerializer(serializers.ModelSerializer):
+    assessments_count = serializers.SerializerMethodField()
+    registrations_count = serializers.SerializerMethodField()
+    eligible_colleges_count = serializers.SerializerMethodField()
+    active_invitations_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Drive
+        fields = [
+            "id",
+            "name",
+            "code",
+            "description",
+            "status",
+            "visibility",
+            "start_date",
+            "end_date",
+            "registration_start",
+            "registration_end",
+            "assessments_count",
+            "registrations_count",
+            "eligible_colleges_count",
+            "active_invitations_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_assessments_count(self, obj):
+        return obj.drive_assessments.count()
+
+    def get_registrations_count(self, obj):
+        return obj.registrations.count()
+
+    def get_eligible_colleges_count(self, obj):
+        return obj.eligible_colleges.count()
+
+    def get_active_invitations_count(self, obj):
+        return obj.invitations.filter(is_active=True).count()
+
+
+class AdminDriveDetailSerializer(serializers.ModelSerializer):
+    drive_assessments = AdminDriveAssessmentSerializer(many=True, read_only=True)
+    eligible_colleges = serializers.SerializerMethodField()
+    registrations_count = serializers.SerializerMethodField()
+    invitations_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Drive
+        fields = [
+            "id",
+            "name",
+            "code",
+            "description",
+            "status",
+            "visibility",
+            "start_date",
+            "end_date",
+            "registration_start",
+            "registration_end",
+            "drive_assessments",
+            "eligible_colleges",
+            "registrations_count",
+            "invitations_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_eligible_colleges(self, obj):
+        return [
+            {"id": c.id, "name": c.name, "code": c.code, "location": c.location}
+            for c in obj.eligible_colleges.filter(is_active=True)
+        ]
+
+    def get_registrations_count(self, obj):
+        return obj.registrations.count()
+
+    def get_invitations_count(self, obj):
+        return obj.invitations.count()
+
+
+class AdminDriveCreateUpdateSerializer(serializers.ModelSerializer):
+    eligible_college_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        write_only=True,
+    )
+    assessment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        write_only=True,
+    )
+
+    class Meta:
+        model = Drive
+        fields = [
+            "id",
+            "name",
+            "code",
+            "description",
+            "status",
+            "visibility",
+            "start_date",
+            "end_date",
+            "registration_start",
+            "registration_end",
+            "eligible_college_ids",
+            "assessment_ids",
+        ]
+
+    def validate_code(self, value):
+        val = value.strip().upper()
+        qs = Drive.objects.filter(code__iexact=val)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(f"Drive with code '{val}' already exists.")
+        return val
+
+    def create(self, validated_data):
+        college_ids = validated_data.pop("eligible_college_ids", None)
+        assessment_ids = validated_data.pop("assessment_ids", None)
+        drive = Drive.objects.create(**validated_data)
+        if college_ids is not None:
+            drive.eligible_colleges.set(College.objects.filter(id__in=college_ids))
+        if assessment_ids:
+            for idx, a_id in enumerate(assessment_ids):
+                DriveAssessment.objects.create(
+                    drive=drive,
+                    assessment_id=a_id,
+                    display_order=idx + 1,
+                )
+        return drive
+
+    def update(self, instance, validated_data):
+        college_ids = validated_data.pop("eligible_college_ids", None)
+        assessment_ids = validated_data.pop("assessment_ids", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if college_ids is not None:
+            instance.eligible_colleges.set(College.objects.filter(id__in=college_ids))
+        if assessment_ids is not None:
+            existing_a_ids = set(instance.drive_assessments.values_list("assessment_id", flat=True))
+            new_a_ids = set(assessment_ids)
+            instance.drive_assessments.filter(assessment_id__in=(existing_a_ids - new_a_ids)).delete()
+            for idx, a_id in enumerate(assessment_ids):
+                da, created = DriveAssessment.objects.get_or_create(
+                    drive=instance,
+                    assessment_id=a_id,
+                    defaults={"display_order": idx + 1},
+                )
+                if not created and da.display_order != idx + 1:
+                    da.display_order = idx + 1
+                    da.save(update_fields=["display_order"])
+        return instance

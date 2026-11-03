@@ -26,6 +26,9 @@ class CandidateRegistrationSerializer(serializers.ModelSerializer):
     college_id = serializers.IntegerField(required=False, allow_null=True)
     phone_number = serializers.CharField(required=True, allow_blank=False)
     assessment_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    drive_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    invite_token = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    access_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
     class Meta:
         model = Candidate
@@ -40,6 +43,9 @@ class CandidateRegistrationSerializer(serializers.ModelSerializer):
             "year_of_study",
             "phone_number",
             "assessment_id",
+            "drive_code",
+            "invite_token",
+            "access_code",
         ]
 
     def validate_full_name(self, value):

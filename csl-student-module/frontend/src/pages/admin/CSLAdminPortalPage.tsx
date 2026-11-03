@@ -15,6 +15,13 @@ import { AdminAttemptReviewView } from './AdminAttemptReviewView';
 import { AdminResultsView } from './AdminResultsView';
 import { AdminIntegrityEventsView } from './AdminIntegrityEventsView';
 import { AdminUsersView } from './AdminUsersView';
+import { AdminDrivesView } from './AdminDrivesView';
+import { undoAdminAuditAction } from '../../api/admin';
+import {
+  ReassessStudentAccessModal,
+  ExportStudentDataModal,
+  ImportQuestionsCSVModal,
+} from '../../components/admin/QuickActionsModals';
 
 const MIN_DESKTOP_WIDTH = 1024;
 const MIN_DESKTOP_HEIGHT = 650;
@@ -25,6 +32,48 @@ export function CSLAdminPortalPage() {
   const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Collapsible Sidebars state (Persisted in localStorage)
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('csl_admin_sidebar_collapsed') === 'true';
+  });
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('csl_admin_right_collapsed') === 'true';
+  });
+
+  const toggleLeftSidebar = () => {
+    setLeftSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('csl_admin_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
+
+  const toggleRightPanel = () => {
+    setRightPanelCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('csl_admin_right_collapsed', String(next));
+      return next;
+    });
+  };
+
+  // Quick Action Modal states
+  const [showReassessModal, setShowReassessModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [undoToast, setUndoToast] = useState<string | null>(null);
+
+  const handleUndoAction = async (logId: number) => {
+    if (!window.confirm('Are you sure you want to revert this administrative action?')) return;
+    try {
+      const res = await undoAdminAuditAction(logId);
+      setUndoToast(res.message);
+      setTimeout(() => setUndoToast(null), 4000);
+      loadStatsData();
+    } catch (err: any) {
+      alert(err.response?.data?.error || err.response?.data?.detail || 'Failed to revert action.');
+    }
+  };
 
   // Viewport dimensions
   const [viewportDimensions, setViewportDimensions] = useState({
@@ -200,14 +249,15 @@ export function CSLAdminPortalPage() {
   }
 
   const navItems = [
-    { key: 'overview', label: 'Overview' },
-    { key: 'colleges', label: 'Colleges' },
-    { key: 'candidates', label: 'Candidates' },
-    { key: 'assessments', label: 'Assessments' },
-    { key: 'questions', label: 'Question Bank' },
-    { key: 'results', label: 'Results' },
-    { key: 'integrity', label: 'Integrity' },
-    { key: 'live', label: 'Live Sessions' },
+    { key: 'overview', label: 'Overview', icon: '📊' },
+    { key: 'colleges', label: 'Colleges', icon: '🏛️' },
+    { key: 'candidates', label: 'Candidates', icon: '🎓' },
+    { key: 'assessments', label: 'Assessments', icon: '📝' },
+    { key: 'drives', label: 'Drives', icon: '🚀' },
+    { key: 'questions', label: 'Question Bank', icon: '📚' },
+    { key: 'results', label: 'Results', icon: '📈' },
+    { key: 'integrity', label: 'Integrity', icon: '🛡️' },
+    { key: 'live', label: 'Live Sessions', icon: '🔴' },
   ];
 
   return (
@@ -221,21 +271,22 @@ export function CSLAdminPortalPage() {
         fontFamily: "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
       }}
     >
-      {/* ─── 1. DEEP BLUE LEFT SIDEBAR (Mockup 1-5) ───────────────────── */}
+      {/* ─── 1. DEEP BLUE LEFT SIDEBAR (Mockup 1-5, Collapsible) ───────────────────── */}
       <aside
         style={{
-          width: '210px',
-          minWidth: '210px',
-          maxWidth: '210px',
+          width: leftSidebarCollapsed ? '76px' : '210px',
+          minWidth: leftSidebarCollapsed ? '76px' : '210px',
+          maxWidth: leftSidebarCollapsed ? '76px' : '210px',
           backgroundColor: '#0D52D6',
           color: '#FFFFFF',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          padding: '20px 14px 20px 18px',
+          padding: leftSidebarCollapsed ? '20px 8px' : '20px 14px 20px 18px',
           boxSizing: 'border-box',
           position: 'relative',
           zIndex: 30,
+          transition: 'width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease, padding 0.2s ease',
         }}
       >
         <div>
@@ -265,36 +316,40 @@ export function CSLAdminPortalPage() {
               }}
             />
 
-            <div style={{ fontSize: '18px', fontWeight: 800, color: '#FFFFFF', lineHeight: 1.2 }}>
-              Admin
+            <div style={{ fontSize: leftSidebarCollapsed ? '14px' : '18px', fontWeight: 800, color: '#FFFFFF', lineHeight: 1.2, textAlign: leftSidebarCollapsed ? 'center' : 'left' }}>
+              {leftSidebarCollapsed ? '👤' : 'Admin'}
             </div>
-            <div
-              style={{
-                fontSize: '11px',
-                color: 'rgba(255, 255, 255, 0.65)',
-                margin: '2px 0 14px 0',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {adminUser.email || 'admin@email.com'}
-            </div>
+            {!leftSidebarCollapsed && (
+              <>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'rgba(255, 255, 255, 0.65)',
+                    margin: '2px 0 14px 0',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {adminUser.email || 'admin@email.com'}
+                </div>
 
-            <div
-              style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                borderRadius: '12px',
-                padding: '4px 10px',
-                fontSize: '10px',
-                fontWeight: 600,
-                color: 'rgba(255, 255, 255, 0.85)',
-                textAlign: 'center',
-                letterSpacing: '0.02em',
-              }}
-            >
-              Session Active
-            </div>
+                <div
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    borderRadius: '12px',
+                    padding: '4px 10px',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    color: 'rgba(255, 255, 255, 0.85)',
+                    textAlign: 'center',
+                    letterSpacing: '0.02em',
+                  }}
+                >
+                  Session Active
+                </div>
+              </>
+            )}
           </div>
 
           {/* Navigation Links */}
@@ -308,11 +363,15 @@ export function CSLAdminPortalPage() {
                 <button
                   key={item.key}
                   onClick={() => setActiveTab(item.key)}
+                  title={item.label}
                   style={{
-                    display: 'block',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
                     width: '100%',
-                    textAlign: 'left',
-                    padding: '9px 14px',
+                    justifyContent: leftSidebarCollapsed ? 'center' : 'flex-start',
+                    textAlign: leftSidebarCollapsed ? 'center' : 'left',
+                    padding: leftSidebarCollapsed ? '10px 0' : '9px 14px',
                     borderRadius: '12px',
                     fontSize: '14px',
                     fontWeight: isActive ? 800 : 600,
@@ -330,7 +389,8 @@ export function CSLAdminPortalPage() {
                     if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  {item.label}
+                  <span style={{ fontSize: '15px' }}>{item.icon}</span>
+                  {!leftSidebarCollapsed && <span>{item.label}</span>}
                 </button>
               );
             })}
@@ -338,7 +398,27 @@ export function CSLAdminPortalPage() {
         </div>
 
         {/* Bottom Circular Controls: Settings Gear & Logout */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', paddingLeft: '4px' }}>
+        <div style={{ display: 'flex', flexDirection: leftSidebarCollapsed ? 'column' : 'row', alignItems: 'center', gap: '10px', justifyContent: 'center' }}>
+          <button
+            onClick={toggleLeftSidebar}
+            title={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(255, 255, 255, 0.2)',
+              color: '#FFFFFF',
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              fontWeight: 800,
+              fontSize: '12px',
+            }}
+          >
+            {leftSidebarCollapsed ? '▶' : '◀'}
+          </button>
           <button
             onClick={() => setActiveTab('config')}
             title="System Configuration"
@@ -419,8 +499,27 @@ export function CSLAdminPortalPage() {
             admin/{activeTab === 'review' ? 'review' : activeTab}
           </div>
 
-          {/* Right Circular Icons */}
+          {/* Right Circular Icons & Right Panel Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button
+              onClick={toggleRightPanel}
+              title={rightPanelCollapsed ? 'Show Quick Actions' : 'Hide Quick Actions'}
+              style={{
+                backgroundColor: 'rgba(0,0,0,0.12)',
+                border: 'none',
+                borderRadius: '12px',
+                padding: '4px 10px',
+                fontSize: '12px',
+                fontWeight: 700,
+                color: '#1E293B',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              {rightPanelCollapsed ? '‹ Quick Actions' : 'Quick Actions ›'}
+            </button>
             <div
               title="User Directory"
               style={{
@@ -506,6 +605,8 @@ export function CSLAdminPortalPage() {
               />
             )}
 
+            {activeTab === 'drives' && <AdminDrivesView />}
+
             {activeTab === 'questions' && (
               <AdminQuestionsView initialAssessmentId={searchParams.get('assessmentId') || undefined} />
             )}
@@ -553,211 +654,271 @@ export function CSLAdminPortalPage() {
             )}
           </main>
 
-          {/* ─── 3. RIGHT SIDEBAR (Quick Actions & Previous Activities) ─── */}
-          <aside
-            style={{
-              width: '240px',
-              minWidth: '240px',
-              maxWidth: '240px',
-              backgroundColor: '#F8F9FA',
-              borderLeft: '1px solid #E2E8F0',
-              padding: '24px 18px',
-              boxSizing: 'border-box',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '24px',
-              overflowY: 'auto',
-            }}
-          >
-            {/* Quick Actions Container (Mockups 1-5) */}
-            <div
+          {/* ─── 3. RIGHT SIDEBAR (Quick Actions & Previous Activities, Collapsible) ─── */}
+          {!rightPanelCollapsed && (
+            <aside
               style={{
-                backgroundColor: '#DDE2EB',
-                borderRadius: '24px',
-                padding: '20px 16px',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
+                width: '250px',
+                minWidth: '250px',
+                maxWidth: '250px',
+                backgroundColor: '#F8F9FA',
+                borderLeft: '1px solid #E2E8F0',
+                padding: '24px 18px',
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '24px',
+                overflowY: 'auto',
+                transition: 'all 0.2s ease',
               }}
             >
+              {/* Quick Actions Container (Mockups 1-5) */}
               <div
                 style={{
-                  fontSize: '16px',
-                  fontWeight: 900,
-                  color: '#0F172A',
-                  marginBottom: '16px',
-                  letterSpacing: '-0.02em',
+                  backgroundColor: '#DDE2EB',
+                  borderRadius: '24px',
+                  padding: '20px 16px',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
                 }}
               >
-                Quick Actions
-              </div>
-
-              {/* 2x2 Button Grid */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 1fr)',
-                  gap: '12px',
-                }}
-              >
-                {/* 1. Add / Create */}
-                <button
-                  onClick={() => setActiveTab('assessments')}
-                  title="Create / Manage Assessments"
+                <div
                   style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1.5px solid #C7D0DE',
-                    borderRadius: '16px',
-                    height: '68px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                    transition: 'transform 0.1s ease',
+                    fontSize: '16px',
+                    fontWeight: 900,
+                    color: '#0F172A',
+                    marginBottom: '16px',
+                    letterSpacing: '-0.02em',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                 >
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                  </svg>
-                </button>
-
-                {/* 2. Download / Export */}
-                <button
-                  onClick={() => setActiveTab('colleges')}
-                  title="Export Data / Directory"
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1.5px solid #C7D0DE',
-                    borderRadius: '16px',
-                    height: '68px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                    transition: 'transform 0.1s ease',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                >
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="7 10 12 15 17 10"></polyline>
-                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                  </svg>
-                </button>
-
-                {/* 3. Live Proctoring Monitor */}
-                <button
-                  onClick={() => setActiveTab('live')}
-                  title="Live Assessment Telemetry"
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1.5px solid #C7D0DE',
-                    borderRadius: '16px',
-                    height: '68px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                    transition: 'transform 0.1s ease',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                >
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                    <line x1="12" y1="18" x2="12.01" y2="18"></line>
-                  </svg>
-                </button>
-
-                {/* 4. Home / Overview */}
-                <button
-                  onClick={() => setActiveTab('overview')}
-                  title="Dashboard Overview"
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1.5px solid #C7D0DE',
-                    borderRadius: '16px',
-                    height: '68px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                    transition: 'transform 0.1s ease',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                >
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            {/* Previous Activities Container (Mockups 1-5) */}
-            <div>
-              <div
-                style={{
-                  fontSize: '16px',
-                  fontWeight: 900,
-                  color: '#0F172A',
-                  marginBottom: '14px',
-                  letterSpacing: '-0.02em',
-                }}
-              >
-                Previous Activities
-              </div>
-
-              {stats?.recent_activities && stats.recent_activities.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {stats.recent_activities.map((act) => (
-                    <div
-                      key={act.id}
-                      style={{
-                        backgroundColor: '#CBD5E1',
-                        borderRadius: '8px',
-                        padding: '8px 10px',
-                        fontSize: '11px',
-                        color: '#1E293B',
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {act.action}
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#64748B', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{act.performed_by_name || 'Admin'}</span>
-                        <span>{act.created_at ? new Date(act.created_at).toLocaleTimeString() : 'Just now'}</span>
-                      </div>
-                    </div>
-                  ))}
+                  Quick Actions
                 </div>
-              ) : (
-                /* Grey Placeholder Bars Matching Mockup */
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
-                    <div
-                      key={i}
-                      style={{
-                        height: '14px',
-                        backgroundColor: '#CBD5E1',
-                        borderRadius: '4px',
-                        opacity: 0.8,
-                      }}
-                    />
-                  ))}
+
+                {/* 2x2 Button Grid */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: '12px',
+                  }}
+                >
+                  {/* 1. Add / Create Assessment */}
+                  <button
+                    onClick={() => setActiveTab('assessments')}
+                    title="Create New Assessment"
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #C7D0DE',
+                      borderRadius: '16px',
+                      height: '68px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
+                      transition: 'transform 0.1s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </button>
+
+                  {/* 2. Download / Export Student CSV */}
+                  <button
+                    onClick={() => setShowExportModal(true)}
+                    title="Export Student Data CSV"
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #C7D0DE',
+                      borderRadius: '16px',
+                      height: '68px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
+                      transition: 'transform 0.1s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                  </button>
+
+                  {/* 3. Reassess Student Access */}
+                  <button
+                    onClick={() => setShowReassessModal(true)}
+                    title="Reassess Student Access"
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #C7D0DE',
+                      borderRadius: '16px',
+                      height: '68px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
+                      transition: 'transform 0.1s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+                      <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                    </svg>
+                  </button>
+
+                  {/* 4. Import Questions CSV */}
+                  <button
+                    onClick={() => setShowImportModal(true)}
+                    title="Import Questions CSV"
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #C7D0DE',
+                      borderRadius: '16px',
+                      height: '68px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
+                      transition: 'transform 0.1s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                  </button>
                 </div>
-              )}
-            </div>
-          </aside>
+              </div>
+
+              {/* Previous Activities Container (Mockups 1-5) */}
+              <div>
+                <div
+                  style={{
+                    fontSize: '16px',
+                    fontWeight: 900,
+                    color: '#0F172A',
+                    marginBottom: '14px',
+                    letterSpacing: '-0.02em',
+                  }}
+                >
+                  Previous Activities
+                </div>
+
+                {stats?.recent_activities && stats.recent_activities.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {stats.recent_activities.map((act) => (
+                      <div
+                        key={act.id}
+                        style={{
+                          backgroundColor: '#CBD5E1',
+                          borderRadius: '8px',
+                          padding: '8px 10px',
+                          fontSize: '11px',
+                          color: '#1E293B',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                          <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: act.can_undo ? '120px' : '100%' }}>
+                            {act.action_display || act.action}
+                          </span>
+                          {act.can_undo && (
+                            <button
+                              onClick={() => handleUndoAction(act.id)}
+                              style={{
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: '#0052CC',
+                                color: '#FFFFFF',
+                                border: 'none',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                              title="Revert / Undo action"
+                            >
+                              ↩ Undo
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#64748B', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>{act.performed_by_name || 'Admin'}</span>
+                          <span>{act.created_at ? new Date(act.created_at).toLocaleTimeString() : 'Just now'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  /* Grey Placeholder Bars Matching Mockup */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
+                      <div
+                        key={i}
+                        style={{
+                          height: '14px',
+                          backgroundColor: '#CBD5E1',
+                          borderRadius: '4px',
+                          opacity: 0.8,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </aside>
+          )}
         </div>
       </div>
+
+      {/* Undo Toast Alert */}
+      {undoToast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            backgroundColor: '#0F172A',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
+            zIndex: 10000,
+            fontSize: '13px',
+            fontWeight: 600,
+          }}
+        >
+          {undoToast}
+        </div>
+      )}
+
+      {/* Quick Action Modals */}
+      <ReassessStudentAccessModal
+        isOpen={showReassessModal}
+        onClose={() => setShowReassessModal(false)}
+        onSuccess={loadStatsData}
+      />
+      <ExportStudentDataModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+      />
+      <ImportQuestionsCSVModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={loadStatsData}
+      />
     </div>
   );
 }

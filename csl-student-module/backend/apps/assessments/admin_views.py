@@ -29,6 +29,10 @@ from .models import (
     AssessmentPoolSource,
     AdminAccessGrant,
     RecoveryEvent,
+    Drive,
+    DriveAssessment,
+    DriveRegistration,
+    DriveInvitation,
 )
 from .admin_permissions import IsCSLAdminUser
 from .admin_serializers import (
@@ -56,6 +60,12 @@ from .admin_serializers import (
     AdminAssessmentPoolSourceSerializer,
     AdminAccessGrantSerializer,
     AdminRecoveryEventSerializer,
+    AdminDriveListSerializer,
+    AdminDriveDetailSerializer,
+    AdminDriveCreateUpdateSerializer,
+    AdminDriveAssessmentSerializer,
+    AdminDriveRegistrationSerializer,
+    AdminDriveInvitationSerializer,
 )
 from django.http import HttpResponse
 from .services import (
@@ -70,6 +80,7 @@ from .services import (
     unrelease_assessment_results,
     import_candidates_from_csv,
     log_assessment_audit,
+    undo_administrative_action,
 )
 
 
@@ -92,6 +103,8 @@ class AdminStatsView(APIView):
 
     def get(self, request):
         colleges_count = College.objects.count()
+        drives_count = Drive.objects.count()
+        active_drives_count = Drive.objects.filter(status=Drive.Status.ACTIVE).count()
         assessments_count = Assessment.objects.count()
         open_assessments_count = Assessment.objects.filter(status=Assessment.Status.OPEN).count()
         candidates_count = Candidate.objects.count()
@@ -107,52 +120,75 @@ class AdminStatsView(APIView):
         flagged_count = AssessmentAttempt.objects.filter(
             Q(state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW) | Q(is_flagged=True)
         ).count()
-        aptitude_count = QuestionBank.objects.filter(
-            section_type=QuestionBank.SectionType.APTITUDE, is_active=True
-        ).count()
-        coding_count = QuestionBank.objects.filter(
-            section_type=QuestionBank.SectionType.CODING, is_active=True
-        ).count()
+
         total_questions = QuestionBank.objects.count()
+        active_questions = QuestionBank.objects.filter(is_active=True).count()
+        unassigned_questions_count = QuestionBank.objects.filter(pool_items__isnull=True, is_active=True).count()
 
         pools_count = QuestionPool.objects.count()
         active_pools_count = QuestionPool.objects.filter(is_active=True).count()
         action_required_pools_count = (
             QuestionPool.objects.annotate(q_count=Count("items")).filter(q_count=0).count()
         )
+        pools_requiring_questions = (
+            QuestionPool.objects.annotate(q_count=Count("items")).filter(q_count__lt=10, is_active=True).count()
+        )
+
         integrity_events_count = IntegrityEvent.objects.count()
         unreviewed_integrity_count = IntegrityEvent.objects.filter(is_reviewed=False).count()
+        reviewed_integrity_count = IntegrityEvent.objects.filter(is_reviewed=True).count()
 
         recent_activities = []
-        for log in AssessmentAuditLog.objects.select_related("performed_by").order_by("-created_at")[:10]:
+        for log in AssessmentAuditLog.objects.select_related("performed_by").order_by("-timestamp")[:15]:
             recent_activities.append({
                 "id": log.id,
                 "action": log.action,
                 "action_display": log.get_action_display(),
                 "entity_type": log.entity_type,
                 "entity_id": str(log.entity_id),
-                "performed_by_name": log.performed_by.email if log.performed_by else "System",
-                "created_at": log.created_at.isoformat(),
+                "performed_by_name": log.performed_by_name or (log.performed_by.email if log.performed_by else "System"),
+                "created_at": log.timestamp.isoformat(),
+                "is_reversible": log.is_reversible,
+                "reversal_status": log.reversal_status,
+                "can_undo": log.is_reversible and log.reversal_status == AssessmentAuditLog.ReversalStatus.REVERSIBLE,
             })
 
         return Response({
             "colleges_count": colleges_count,
+            "drives_count": drives_count,
+            "active_drives_count": active_drives_count,
             "assessments_count": assessments_count,
             "open_assessments_count": open_assessments_count,
+            "active_assessments_count": open_assessments_count,
             "candidates_count": candidates_count,
             "attempts_count": attempts_count,
             "in_progress_count": in_progress_count,
             "submitted_count": submitted_count,
             "timed_out_count": timed_out_count,
             "flagged_count": flagged_count,
-            "aptitude_questions_count": aptitude_count,
-            "coding_questions_count": coding_count,
             "total_questions_count": total_questions,
             "pools_count": pools_count,
             "active_pools_count": active_pools_count,
             "action_required_pools_count": action_required_pools_count,
+            "unassigned_questions_count": unassigned_questions_count,
             "integrity_events_count": integrity_events_count,
             "unreviewed_integrity_count": unreviewed_integrity_count,
+            "question_bank_health": {
+                "total_questions": total_questions,
+                "active_questions": active_questions,
+                "total_pools": pools_count,
+                "active_pools": active_pools_count,
+                "unassigned_questions": unassigned_questions_count,
+                "pools_requiring_questions": pools_requiring_questions,
+                "status": "OK" if unassigned_questions_count == 0 else "Action Required",
+            },
+            "integrity_summary": {
+                "total_events": integrity_events_count,
+                "pending_review": unreviewed_integrity_count,
+                "reviewed": reviewed_integrity_count,
+                "flagged_attempts": flagged_count,
+                "status": "Action Required!" if unreviewed_integrity_count > 0 or flagged_count > 0 else "OK",
+            },
             "recent_activities": recent_activities,
         })
 
@@ -1261,6 +1297,20 @@ class AdminQuestionListView(APIView):
         if assessment_type:
             queryset = queryset.filter(assessment_type__iexact=assessment_type)
 
+        pool_id = request.query_params.get("pool_id", "").strip()
+        if pool_id:
+            try:
+                uuid.UUID(str(pool_id))
+                queryset = queryset.filter(pool_items__pool_id=pool_id)
+            except (ValueError, TypeError):
+                queryset = queryset.none()
+
+        unassigned = request.query_params.get("unassigned", "").strip().lower()
+        if unassigned in ["true", "1"]:
+            queryset = queryset.filter(pool_items__isnull=True)
+        elif unassigned in ["false", "0"]:
+            queryset = queryset.filter(pool_items__isnull=False).distinct()
+
         page = request.query_params.get("page")
         if page:
             from django.core.paginator import Paginator
@@ -1593,6 +1643,34 @@ class AdminQuestionImportCSVView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def post(self, request):
+        destination_mode = (request.data.get("destination_mode") or "GLOBAL_ONLY").upper()
+        pool_ids = request.data.get("pool_ids", [])
+        if isinstance(pool_ids, str):
+            try:
+                pool_ids = json.loads(pool_ids)
+            except Exception:
+                pool_ids = [pool_ids]
+        new_pool_name = (request.data.get("new_pool_name") or "").strip()
+
+        target_pools = []
+        if destination_mode in ["EXISTING_POOLS", "GLOBAL_AND_POOLS"] and pool_ids:
+            target_pools = list(QuestionPool.objects.filter(id__in=pool_ids, is_active=True))
+        elif destination_mode in ["NEW_POOL", "GLOBAL_AND_NEW_POOL"] and new_pool_name:
+            import re as _re
+            clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
+            new_code = clean_code
+            counter = 1
+            while QuestionPool.objects.filter(code=new_code).exists():
+                new_code = f"{clean_code[:8]}_{counter}"
+                counter += 1
+            created_pool = QuestionPool.objects.create(
+                name=new_pool_name,
+                code=new_code,
+                description=f"Created during CSV import on {timezone.now().strftime('%Y-%m-%d')}",
+                is_active=True,
+            )
+            target_pools.append(created_pool)
+
         assessment_id = request.data.get("assessment_id")
         assessment = None
         if assessment_id:
@@ -1746,6 +1824,22 @@ class AdminQuestionImportCSVView(APIView):
                 except Exception as e:
                     errors.append(f"Row {row_idx}: Database save error: {str(e)}")
 
+            if created_questions and target_pools:
+                for pool in target_pools:
+                    for q in created_questions:
+                        QuestionPoolItem.objects.get_or_create(pool=pool, question=q)
+                    log_assessment_audit(
+                        action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                        entity_type="QUESTION_POOL",
+                        entity_id=str(pool.id),
+                        user=request.user,
+                        details={
+                            "action": "CSV_IMPORT_POOL_ITEMS",
+                            "imported_count": len(created_questions),
+                            "pool_name": pool.name,
+                        },
+                    )
+
             if created_questions and assessment:
                 assessment.questions.add(*created_questions)
                 log_assessment_audit(
@@ -1765,11 +1859,100 @@ class AdminQuestionImportCSVView(APIView):
             "skipped_count": skipped_count,
             "error_count": len(errors),
             "errors": errors[:50],
+            "destination_mode": destination_mode,
+            "assigned_pools": [{"id": str(p.id), "name": p.name} for p in target_pools],
             "assessment_id": str(assessment.id) if assessment else None,
             "assessment_title": assessment.title if assessment else None,
             "total_pool_count": assessment.questions.count() if assessment else None,
-            "imported_to": "ASSESSMENT_POOL" if assessment else "QUESTION_BANK",
+            "imported_to": "QUESTION_POOLS" if target_pools else ("ASSESSMENT_POOL" if assessment else "QUESTION_BANK"),
         }, status=status.HTTP_200_OK if len(created_questions) > 0 or not errors else status.HTTP_400_BAD_REQUEST)
+
+
+class AdminQuestionBulkAssignPoolView(APIView):
+    """
+    Bulk assigns questions to one or more Question Pools.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        question_ids = request.data.get("question_ids", [])
+        if isinstance(question_ids, str):
+            try:
+                question_ids = json.loads(question_ids)
+            except Exception:
+                question_ids = [question_ids]
+
+        pool_ids = request.data.get("pool_ids", [])
+        if isinstance(pool_ids, str):
+            try:
+                pool_ids = json.loads(pool_ids)
+            except Exception:
+                pool_ids = [pool_ids]
+
+        new_pool_name = (request.data.get("new_pool_name") or "").strip()
+
+        if not question_ids:
+            return Response({"detail": "No questions selected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        questions = list(QuestionBank.objects.filter(id__in=question_ids))
+        if not questions:
+            return Response({"detail": "Selected questions not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        target_pools = []
+        if pool_ids:
+            valid_pool_uuids = []
+            for pid in pool_ids:
+                try:
+                    valid_pool_uuids.append(uuid.UUID(str(pid)))
+                except (ValueError, TypeError):
+                    pass
+            if valid_pool_uuids:
+                target_pools.extend(list(QuestionPool.objects.filter(id__in=valid_pool_uuids, is_active=True)))
+
+        if new_pool_name:
+            import re as _re
+            clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
+            new_code = clean_code
+            counter = 1
+            while QuestionPool.objects.filter(code=new_code).exists():
+                new_code = f"{clean_code[:8]}_{counter}"
+                counter += 1
+            created_pool = QuestionPool.objects.create(
+                name=new_pool_name,
+                code=new_code,
+                description=f"Created for bulk assignment on {timezone.now().strftime('%Y-%m-%d')}",
+                is_active=True,
+            )
+            target_pools.append(created_pool)
+
+        if not target_pools:
+            return Response(
+                {"detail": "Please select an existing pool or specify a new pool name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            for pool in target_pools:
+                for q in questions:
+                    QuestionPoolItem.objects.get_or_create(pool=pool, question=q)
+                log_assessment_audit(
+                    action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                    entity_type="QUESTION_POOL",
+                    entity_id=str(pool.id),
+                    user=request.user,
+                    details={
+                        "action": "BULK_ASSIGN",
+                        "assigned_count": len(questions),
+                        "pool_name": pool.name,
+                    },
+                )
+
+        return Response({
+            "success": True,
+            "assigned_count": len(questions),
+            "target_pools": [{"id": str(p.id), "name": p.name} for p in target_pools],
+            "message": f"Successfully assigned {len(questions)} question(s) to {len(target_pools)} pool(s).",
+        })
 
 
 class AdminQuestionBulkUpdateView(APIView):
@@ -3287,3 +3470,550 @@ class AdminRecoveryEventsListView(APIView):
 
         serializer = AdminRecoveryEventSerializer(qs[:100], many=True)
         return Response(serializer.data)
+
+
+class AdminDriveListCreateView(APIView):
+    """
+    List and create recruitment/campus placement Drives.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = Drive.objects.prefetch_related("drive_assessments", "eligible_colleges", "registrations", "invitations").all()
+        search = request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(code__icontains=search) | Q(description__icontains=search))
+        status_param = request.query_params.get("status", "").strip().upper()
+        if status_param and status_param in Drive.Status.values:
+            qs = qs.filter(status=status_param)
+        visibility_param = request.query_params.get("visibility", "").strip().upper()
+        if visibility_param and visibility_param in Drive.Visibility.values:
+            qs = qs.filter(visibility=visibility_param)
+
+        serializer = AdminDriveListSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = AdminDriveCreateUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            drive = serializer.save(created_by=request.user)
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.DRIVE_CREATED,
+                entity_type="DRIVE",
+                entity_id=str(drive.id),
+                user=request.user,
+                details={"name": drive.name, "code": drive.code, "status": drive.status},
+                is_reversible=False,
+            )
+
+        return Response(AdminDriveDetailSerializer(drive).data, status=status.HTTP_201_CREATED)
+
+
+class AdminDriveDetailView(APIView):
+    """
+    Retrieve, update or archive a specific Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive.objects.prefetch_related("drive_assessments__assessment", "eligible_colleges"), pk=pk)
+        return Response(AdminDriveDetailSerializer(drive).data)
+
+    def patch(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        prev_state = {
+            "name": drive.name,
+            "status": drive.status,
+            "visibility": drive.visibility,
+            "description": drive.description,
+        }
+        serializer = AdminDriveCreateUpdateSerializer(drive, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            updated_drive = serializer.save()
+            new_state = {
+                "name": updated_drive.name,
+                "status": updated_drive.status,
+                "visibility": updated_drive.visibility,
+                "description": updated_drive.description,
+            }
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.DRIVE_UPDATED,
+                entity_type="DRIVE",
+                entity_id=str(updated_drive.id),
+                user=request.user,
+                details={"updated_fields": list(request.data.keys())},
+                is_reversible=True,
+                previous_state=prev_state,
+                new_state=new_state,
+            )
+
+        return Response(AdminDriveDetailSerializer(updated_drive).data)
+
+    def delete(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        prev_status = drive.status
+        with transaction.atomic():
+            drive.status = Drive.Status.ARCHIVED
+            drive.save(update_fields=["status"])
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.DRIVE_ARCHIVED,
+                entity_type="DRIVE",
+                entity_id=str(drive.id),
+                user=request.user,
+                details={"previous_status": prev_status},
+                is_reversible=True,
+                previous_state={"status": prev_status},
+                new_state={"status": Drive.Status.ARCHIVED},
+            )
+        return Response({"success": True, "message": f"Drive '{drive.name}' archived."})
+
+
+class AdminDriveAssessmentsView(APIView):
+    """
+    Manage assessments linked to a drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        items = drive.drive_assessments.select_related("assessment").all()
+        return Response(AdminDriveAssessmentSerializer(items, many=True).data)
+
+    def post(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        assessment_id = request.data.get("assessment_id")
+        if not assessment_id:
+            return Response({"detail": "assessment_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        assessment = get_object_or_404(Assessment, pk=assessment_id)
+
+        display_order = request.data.get("display_order", drive.drive_assessments.count() + 1)
+        is_required = request.data.get("is_required", True)
+        reg_enabled = request.data.get("registration_enabled", True)
+
+        item, created = DriveAssessment.objects.update_or_create(
+            drive=drive,
+            assessment=assessment,
+            defaults={
+                "display_order": display_order,
+                "is_required": is_required,
+                "registration_enabled": reg_enabled,
+            },
+        )
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.DRIVE_ASSESSMENT_ADDED,
+            entity_type="DRIVE",
+            entity_id=str(drive.id),
+            user=request.user,
+            details={"assessment_id": str(assessment.id), "assessment_title": assessment.title},
+        )
+        return Response(AdminDriveAssessmentSerializer(item).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def delete(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        assessment_id = request.data.get("assessment_id") or request.query_params.get("assessment_id")
+        if not assessment_id:
+            return Response({"detail": "assessment_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        DriveAssessment.objects.filter(drive=drive, assessment_id=assessment_id).delete()
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.DRIVE_ASSESSMENT_REMOVED,
+            entity_type="DRIVE",
+            entity_id=str(drive.id),
+            user=request.user,
+            details={"assessment_id": str(assessment_id)},
+        )
+        return Response({"success": True, "message": "Assessment removed from drive."})
+
+
+class AdminDriveRegistrationsView(APIView):
+    """
+    List and manage candidate registrations for a Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        qs = drive.registrations.select_related("candidate", "candidate__college_ref").all()
+        status_param = request.query_params.get("status")
+        if status_param and status_param in DriveRegistration.Status.values:
+            qs = qs.filter(registration_status=status_param)
+        search = request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(
+                Q(candidate__full_name__icontains=search)
+                | Q(candidate__register_number__icontains=search)
+                | Q(candidate__email__icontains=search)
+                | Q(candidate__college__icontains=search)
+            )
+
+        serializer = AdminDriveRegistrationSerializer(qs[:200], many=True)
+        return Response(serializer.data)
+
+    def patch(self, request, pk):
+        registration_id = request.data.get("registration_id")
+        new_status = request.data.get("status")
+        if not registration_id or not new_status:
+            return Response({"detail": "registration_id and status are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reg = get_object_or_404(DriveRegistration, pk=registration_id, drive_id=pk)
+        reg.registration_status = new_status
+        if "notes" in request.data:
+            reg.notes = request.data["notes"]
+        reg.save()
+        return Response(AdminDriveRegistrationSerializer(reg).data)
+
+
+class AdminDriveInvitationsView(APIView):
+    """
+    Manage secure invitation tokens and access codes for a Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        qs = drive.invitations.all()
+        return Response(AdminDriveInvitationSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        import secrets
+        import hashlib
+
+        raw_token = secrets.token_urlsafe(24)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()[:32]
+        access_code = request.data.get("access_code") or f"DRV-{secrets.token_hex(3).upper()}"
+        label = request.data.get("label", "").strip()
+        expires_at = request.data.get("expires_at")
+        max_uses = request.data.get("max_uses")
+
+        inv = DriveInvitation.objects.create(
+            drive=drive,
+            token_hash=token_hash,
+            access_code=access_code.upper() if access_code else None,
+            label=label,
+            expires_at=expires_at or None,
+            max_uses=int(max_uses) if max_uses else None,
+            created_by=request.user,
+        )
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.DRIVE_INVITATION_CREATED,
+            entity_type="DRIVE",
+            entity_id=str(drive.id),
+            user=request.user,
+            details={"invitation_id": str(inv.id), "access_code": inv.access_code},
+        )
+        data = AdminDriveInvitationSerializer(inv).data
+        data["raw_token"] = token_hash
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, pk):
+        invitation_id = request.data.get("invitation_id") or request.query_params.get("invitation_id")
+        inv = get_object_or_404(DriveInvitation, pk=invitation_id, drive_id=pk)
+        inv.is_active = False
+        inv.save(update_fields=["is_active"])
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.DRIVE_INVITATION_REVOKED,
+            entity_type="DRIVE",
+            entity_id=str(pk),
+            user=request.user,
+            details={"invitation_id": str(inv.id)},
+        )
+        return Response({"success": True, "message": "Invitation revoked."})
+
+
+class AdminDriveEligibilityView(APIView):
+    """
+    Manage eligible colleges for a Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        colleges = drive.eligible_colleges.filter(is_active=True)
+        return Response([{"id": c.id, "name": c.name, "code": c.code, "location": c.location} for c in colleges])
+
+    def post(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        college_ids = request.data.get("college_ids", [])
+        drive.eligible_colleges.set(College.objects.filter(id__in=college_ids))
+        return Response({"success": True, "message": f"{len(college_ids)} college(s) assigned to drive."})
+
+
+class AdminDriveReportsView(APIView):
+    """
+    Analytics and reporting for a Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        drive = get_object_or_404(Drive, pk=pk)
+        reg_count = drive.registrations.count()
+        approved_count = drive.registrations.filter(registration_status=DriveRegistration.Status.APPROVED).count()
+        registered_count = drive.registrations.filter(registration_status=DriveRegistration.Status.REGISTERED).count()
+
+        assessment_ids = list(drive.drive_assessments.values_list("assessment_id", flat=True))
+        attempts_qs = AssessmentAttempt.objects.filter(assessment_id__in=assessment_ids, candidate__drive_registrations__drive=drive)
+        attempts_count = attempts_qs.count()
+        submitted_count = attempts_qs.filter(state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]).count()
+
+        return Response({
+            "drive_id": str(drive.id),
+            "drive_name": drive.name,
+            "total_registrations": reg_count,
+            "registered_candidates": registered_count,
+            "approved_candidates": approved_count,
+            "total_assessments": len(assessment_ids),
+            "total_attempts": attempts_count,
+            "completed_attempts": submitted_count,
+        })
+
+
+class AdminAuditLogUndoView(APIView):
+    """
+    Controlled Undo for reversible administrative operations.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        success, message, data = undo_administrative_action(log_id=pk, user=request.user)
+        if success:
+            return Response({"success": True, "message": message, "data": data}, status=status.HTTP_200_OK)
+        return Response({"success": False, "detail": message}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminExportCandidateDataCSVView(APIView):
+    """
+    Export candidate and attempt data to CSV with filtering and injection protection.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = Candidate.objects.select_related("college_ref").all()
+
+        college_id = request.query_params.get("college_id")
+        if college_id:
+            qs = qs.filter(college_ref_id=college_id)
+
+        drive_id = request.query_params.get("drive_id")
+        if drive_id:
+            qs = qs.filter(drive_registrations__drive_id=drive_id)
+
+        assessment_id = request.query_params.get("assessment_id")
+        if assessment_id:
+            qs = qs.filter(attempts__assessment_id=assessment_id)
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(
+                Q(full_name__icontains=search)
+                | Q(register_number__icontains=search)
+                | Q(email__icontains=search)
+            )
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="csl_candidates_export.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "Candidate ID",
+            "Full Name",
+            "Register Number",
+            "Email",
+            "Phone Number",
+            "Institution",
+            "Department",
+            "Year of Study",
+            "Attempts Count",
+            "Last Score",
+            "Registered Date",
+        ])
+
+        def sanitize(val):
+            s = str(val or "").strip()
+            if s and s[0] in ["=", "+", "-", "@"]:
+                return f"'{s}"
+            return s
+
+        for cand in qs.prefetch_related("attempts")[:2000]:
+            last_attempt = cand.attempts.order_by("-created_at").first()
+            last_score = f"{last_attempt.score}/{last_attempt.max_score}" if last_attempt and last_attempt.score is not None else "N/A"
+            writer.writerow([
+                sanitize(cand.id),
+                sanitize(cand.full_name),
+                sanitize(cand.register_number),
+                sanitize(cand.email),
+                sanitize(cand.phone_number),
+                sanitize(cand.college_ref.name if cand.college_ref else cand.college),
+                sanitize(cand.department),
+                sanitize(cand.year_of_study),
+                cand.attempts.count(),
+                sanitize(last_score),
+                cand.created_at.strftime("%Y-%m-%d %H:%M"),
+            ])
+
+        return response
+
+
+class AdminStudentAccessReassessView(APIView):
+    """
+    Unified Quick Action: search student/attempt and apply RETRIEVE_ACCESS,
+    REASSIGN_NEW_ATTEMPT, EXTRA_RECOVERY, or UNLOCK_FLAGGED.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        candidate_id = request.data.get("candidate_id")
+        identifier = request.data.get("identifier", "").strip()
+        assessment_id = request.data.get("assessment_id")
+        action_type = request.data.get("action_type", "").upper()
+        reason = request.data.get("reason", "Administrative Quick Action")
+
+        candidate = None
+        if candidate_id:
+            candidate = Candidate.objects.filter(id=candidate_id).first()
+        elif identifier:
+            candidate = (
+                Candidate.objects.filter(email__iexact=identifier).first()
+                or Candidate.objects.filter(register_number__iexact=identifier).first()
+            )
+
+        if not candidate:
+            return Response({"detail": "Candidate not found. Please provide valid candidate_id, email, or register number."}, status=status.HTTP_404_NOT_FOUND)
+
+        assessment = None
+        if assessment_id:
+            assessment = Assessment.objects.filter(id=assessment_id).first()
+
+        attempt = None
+        if assessment:
+            attempt = candidate.attempts.filter(assessment=assessment).order_by("-created_at").first()
+        else:
+            attempt = candidate.attempts.order_by("-created_at").first()
+            if attempt:
+                assessment = attempt.assessment
+
+        if not attempt and action_type in ["RETRIEVE_ACCESS", "EXTRA_RECOVERY", "UNLOCK_FLAGGED"]:
+            return Response({"detail": "No previous attempt found for this candidate to modify access."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if action_type == "RETRIEVE_ACCESS":
+                if attempt.state in [AssessmentAttempt.State.TIMED_OUT, AssessmentAttempt.State.FLAGGED_FOR_REVIEW, AssessmentAttempt.State.ABANDONED]:
+                    attempt.state = AssessmentAttempt.State.IN_PROGRESS
+                    attempt.is_flagged = False
+                    attempt.save(update_fields=["state", "is_flagged"])
+
+                grant = AdminAccessGrant.objects.create(
+                    candidate=candidate,
+                    assessment=assessment,
+                    grant_type=AdminAccessGrant.GrantType.RETRIEVE_ACCESS,
+                    authorized_by=request.user,
+                    reason=reason,
+                )
+                attempt.recovery_count = max(0, attempt.recovery_count - 1)
+                attempt.save(update_fields=["recovery_count"])
+
+                return Response({
+                    "success": True,
+                    "action_applied": "RETRIEVE_ACCESS",
+                    "attempt_id": str(attempt.id),
+                    "new_state": attempt.state,
+                    "message": f"Access retrieved for {candidate.full_name}.",
+                })
+
+            elif action_type == "REASSIGN_NEW_ATTEMPT":
+                if not assessment:
+                    return Response({"detail": "assessment_id is required to authorize a new attempt."}, status=status.HTTP_400_BAD_REQUEST)
+
+                grant = AdminAccessGrant.objects.create(
+                    candidate=candidate,
+                    assessment=assessment,
+                    grant_type=AdminAccessGrant.GrantType.REASSIGN_NEW_ATTEMPT,
+                    authorized_by=request.user,
+                    reason=reason,
+                )
+                assessment.eligible_candidates.add(candidate)
+
+                return Response({
+                    "success": True,
+                    "action_applied": "REASSIGN_NEW_ATTEMPT",
+                    "candidate_id": str(candidate.id),
+                    "assessment_id": str(assessment.id),
+                    "message": f"New attempt authorized for {candidate.full_name} on '{assessment.title}'.",
+                })
+
+            elif action_type == "EXTRA_RECOVERY":
+                additional = int(request.data.get("additional_recovery_attempts", 1))
+                grant = AdminAccessGrant.objects.create(
+                    candidate=candidate,
+                    assessment=assessment,
+                    grant_type=AdminAccessGrant.GrantType.EXTRA_RECOVERY,
+                    authorized_by=request.user,
+                    reason=f"{reason} (+{additional} recoveries)",
+                )
+                attempt.recovery_count = max(0, attempt.recovery_count - additional)
+                attempt.save(update_fields=["recovery_count"])
+
+                return Response({
+                    "success": True,
+                    "action_applied": "EXTRA_RECOVERY",
+                    "attempt_id": str(attempt.id),
+                    "remaining_recoveries_granted": additional,
+                    "message": f"Added {additional} extra recovery attempt(s) for {candidate.full_name}.",
+                })
+
+            elif action_type == "UNLOCK_FLAGGED":
+                attempt.is_flagged = False
+                if attempt.state == AssessmentAttempt.State.FLAGGED_FOR_REVIEW:
+                    attempt.state = AssessmentAttempt.State.IN_PROGRESS
+                attempt.save(update_fields=["is_flagged", "state"])
+
+                AdminAccessGrant.objects.create(
+                    candidate=candidate,
+                    assessment=assessment,
+                    grant_type=AdminAccessGrant.GrantType.UNLOCK_FLAGGED,
+                    authorized_by=request.user,
+                    reason=reason,
+                )
+
+                return Response({
+                    "success": True,
+                    "action_applied": "UNLOCK_FLAGGED",
+                    "attempt_id": str(attempt.id),
+                    "new_state": attempt.state,
+                    "message": f"Integrity flag cleared for {candidate.full_name}.",
+                })
+
+            else:
+                return Response(
+                    {"detail": f"Unsupported action_type '{action_type}'. Valid choices: RETRIEVE_ACCESS, REASSIGN_NEW_ATTEMPT, EXTRA_RECOVERY, UNLOCK_FLAGGED."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+
+class AdminCollegeImportOfficialView(APIView):
+    """
+    Ingests the verified Tamil Nadu institution dataset into the College directory.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        from django.core.management import call_command
+        import io
+        out = io.StringIO()
+        try:
+            call_command("import_tamil_nadu_colleges", stdout=out)
+            output = out.getvalue()
+            total_verified = College.objects.filter(is_verified=True).count()
+            return Response({
+                "success": True,
+                "message": output.strip(),
+                "total_verified_colleges": total_verified,
+            })
+        except Exception as e:
+            return Response({"success": False, "detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

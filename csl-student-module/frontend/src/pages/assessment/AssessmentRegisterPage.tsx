@@ -1,5 +1,5 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   registerCandidate,
@@ -7,6 +7,7 @@ import {
   getCandidateAssessments,
   recoverStudentAttempt,
   requestInstitutionAddition,
+  resolveAccessCode,
   type RegistrationPayload,
   type CollegeOption,
   type CandidateAssessmentItem,
@@ -99,6 +100,22 @@ function validatePhone(raw: string): string {
 
 export function AssessmentRegisterPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const driveParam = searchParams.get('drive') || '';
+  const codeParam = searchParams.get('code') || '';
+  const tokenParam = searchParams.get('token') || '';
+  const assessmentParam = searchParams.get('assessment') || '';
+
+  const [driveCode, setDriveCode] = useState(driveParam);
+  const [accessCode, setAccessCode] = useState(codeParam);
+  const [inviteToken, setInviteToken] = useState(tokenParam);
+  const [assessmentId] = useState(assessmentParam);
+  const [resolvedInfo, setResolvedInfo] = useState<{ name?: string; type?: string; code?: string } | null>(null);
+  const [codeResolutionError, setCodeResolutionError] = useState<string | null>(null);
+  const [manualCodeInput, setManualCodeInput] = useState('');
+  const [resolvingCode, setResolvingCode] = useState(false);
+  const [showCodeSection, setShowCodeSection] = useState(Boolean(codeParam || driveParam));
 
   // Registration form state
   const [formData, setFormData] = useState<RegistrationPayload>({
@@ -148,6 +165,32 @@ export function AssessmentRegisterPage() {
   const [submittingCollegeRequest, setSubmittingCollegeRequest] = useState(false);
   const [collegeRequestSuccess, setCollegeRequestSuccess] = useState('');
   const [collegeRequestError, setCollegeRequestError] = useState('');
+
+  // Resolve initial Drive or Access Code from query params
+  useEffect(() => {
+    const initialCode = codeParam || driveParam;
+    if (initialCode) {
+      setResolvingCode(true);
+      resolveAccessCode(initialCode)
+        .then((res) => {
+          if (res.valid) {
+            setResolvedInfo({ name: res.name || res.title, type: res.type, code: res.code });
+            if (res.type === 'DRIVE' || res.type === 'DRIVE_INVITATION') {
+              setDriveCode(res.drive?.code || res.code);
+            }
+            if (res.invite_token) {
+              setInviteToken(res.invite_token);
+            }
+          }
+        })
+        .catch(() => {
+          setCodeResolutionError('Invalid or expired access code.');
+        })
+        .finally(() => {
+          setResolvingCode(false);
+        });
+    }
+  }, [codeParam, driveParam]);
 
   // Fetch active colleges on mount
   useEffect(() => {
@@ -307,6 +350,31 @@ export function AssessmentRegisterPage() {
     }
   };
 
+  const handleVerifyManualCode = async () => {
+    if (!manualCodeInput.trim()) return;
+    setResolvingCode(true);
+    setCodeResolutionError(null);
+    try {
+      const res = await resolveAccessCode(manualCodeInput.trim());
+      if (res.valid) {
+        setResolvedInfo({ name: res.name || res.title, type: res.type, code: res.code });
+        setAccessCode(res.code);
+        if (res.type === 'DRIVE' || res.type === 'DRIVE_INVITATION') {
+          setDriveCode(res.drive?.code || res.code);
+        }
+        if (res.invite_token) {
+          setInviteToken(res.invite_token);
+        }
+      } else {
+        setCodeResolutionError('The access code is not active or has reached maximum usage.');
+      }
+    } catch {
+      setCodeResolutionError('Could not verify access code. Please check and try again.');
+    } finally {
+      setResolvingCode(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (loading) return;
@@ -349,6 +417,10 @@ export function AssessmentRegisterPage() {
       department: formData.department.trim(),
       year_of_study: formData.year_of_study,
       phone_number: formData.phone_number.trim(),
+      drive_code: driveCode || undefined,
+      access_code: accessCode || undefined,
+      invite_token: inviteToken || undefined,
+      assessment_id: assessmentId || undefined,
     };
 
     try {
@@ -1426,6 +1498,104 @@ export function AssessmentRegisterPage() {
             Recover Session →
           </button>
         </div>
+
+        {/* Drive / Access Code Banner & Verification Box */}
+        {resolvedInfo ? (
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#EFF6FF',
+              border: '1px solid #BFDBFE',
+              borderRadius: '12px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#1E40AF' }}>
+                {resolvedInfo.type === 'DRIVE' ? 'RECRUITMENT DRIVE REGISTRATION' : 'SPECIAL ACCESS INVITE'}
+              </div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#0F172A' }}>
+                {resolvedInfo.name} ({resolvedInfo.code})
+              </div>
+            </div>
+            <span style={{ fontSize: '12px', color: '#16A34A', fontWeight: 700 }}>✓ Verified</span>
+          </div>
+        ) : (
+          <div style={{ marginBottom: '16px' }}>
+            {!showCodeSection ? (
+              <button
+                type="button"
+                onClick={() => setShowCodeSection(true)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#0052CC',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                Have a Drive Code or Assessment Invite? Click here
+              </button>
+            ) : (
+              <div
+                style={{
+                  padding: '12px',
+                  backgroundColor: '#F8FAFC',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '12px',
+                }}
+              >
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Enter Access Code or Drive Code
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    value={manualCodeInput}
+                    onChange={(e) => setManualCodeInput(e.target.value.toUpperCase())}
+                    placeholder="e.g. TN2026MEGA"
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #CBD5E1',
+                      fontSize: '13px',
+                      fontFamily: 'monospace',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleVerifyManualCode}
+                    disabled={resolvingCode || !manualCodeInput.trim()}
+                    style={{
+                      backgroundColor: '#0052CC',
+                      color: '#FFFFFF',
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {resolvingCode ? 'Checking...' : 'Verify'}
+                  </button>
+                </div>
+                {codeResolutionError && (
+                  <div style={{ fontSize: '11px', color: '#DC2626', marginTop: '6px' }}>
+                    {codeResolutionError}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} noValidate style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px' }}>
           <div>

@@ -661,8 +661,9 @@ class Phase21WorkflowTests(TestCase):
         
         # Hard deletion is blocked by PROTECT constraint on AttemptQuestionSnapshot
         from django.db.models import ProtectedError
+        snap_q = attempt.question_snapshots.first().question
         with self.assertRaises(ProtectedError):
-            pool_q1.delete()
+            snap_q.delete()
 
         # Soft archive/deactivate question
         pool_q1.is_active = False

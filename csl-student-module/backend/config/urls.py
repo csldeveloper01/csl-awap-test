@@ -19,6 +19,8 @@ from django.urls import path, include
 from django.http import JsonResponse
 from django.db import connection
 
+from apps.assessments.views import PublicDriveDetailView, ResolveAccessCodeView
+
 logger = logging.getLogger(__name__)
 
 def health_check(request):
@@ -42,6 +44,8 @@ urlpatterns = [
     path('api/student/activities/', include('apps.activities.urls')),
     path('api/assessment/', include('apps.assessments.urls')),
     path('api/csl-admin/', include('apps.assessments.admin_urls')),
+    path('api/drives/<str:code_or_id>/public/', PublicDriveDetailView.as_view(), name='root-public-drive-detail'),
+    path('api/resolve-code/', ResolveAccessCodeView.as_view(), name='root-resolve-code'),
 ]
 
 

@@ -22,6 +22,10 @@ from .models import (
     AssessmentConfig,
     QuestionBank,
     RecoveryEvent,
+    Drive,
+    DriveAssessment,
+    DriveRegistration,
+    DriveInvitation,
 )
 from .serializers import (
     CandidateRegistrationSerializer,
@@ -275,6 +279,10 @@ class CandidateRegisterView(APIView):
         college_name = data.get("college", "").strip()
         reg_no = data["register_number"].strip().upper()
         phone_no = data.get("phone_number", "").strip()
+        drive_code = (data.get("drive_code") or "").strip()
+        invite_token = (data.get("invite_token") or "").strip()
+        access_code = (data.get("access_code") or "").strip()
+        target_assessment_id = data.get("assessment_id")
 
         # Resolve College entity
         college_obj = None
@@ -295,6 +303,53 @@ class CandidateRegisterView(APIView):
                 {"college": ["Please select a valid institution from the list."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        target_drive = None
+        invitation_obj = None
+
+        if invite_token:
+            invitation_obj = (
+                DriveInvitation.objects.filter(token_hash=invite_token, is_active=True).first()
+                or DriveInvitation.objects.filter(access_code__iexact=invite_token, is_active=True).first()
+            )
+            if not invitation_obj:
+                return Response({"invite_token": ["Invalid or inactive invitation token."]}, status=status.HTTP_400_BAD_REQUEST)
+            if not invitation_obj.is_valid():
+                return Response({"invite_token": ["This invitation has expired or reached its maximum usage limit."]}, status=status.HTTP_400_BAD_REQUEST)
+            target_drive = invitation_obj.drive
+
+        if access_code:
+            inv_by_code = DriveInvitation.objects.filter(access_code__iexact=access_code, is_active=True).first()
+            if inv_by_code:
+                if not inv_by_code.is_valid():
+                    return Response({"access_code": ["This access code has expired or reached its maximum usage limit."]}, status=status.HTTP_400_BAD_REQUEST)
+                invitation_obj = inv_by_code
+                target_drive = inv_by_code.drive
+            else:
+                assessment_by_code = Assessment.objects.filter(access_code__iexact=access_code).first()
+                if assessment_by_code:
+                    target_assessment_id = str(assessment_by_code.id)
+
+        if drive_code and not target_drive:
+            target_drive = Drive.objects.filter(code__iexact=drive_code).first()
+            if not target_drive:
+                return Response({"drive_code": [f"Drive with code '{drive_code}' not found."]}, status=status.HTTP_404_NOT_FOUND)
+
+        if target_drive:
+            now = timezone.now()
+            if target_drive.registration_start and now < target_drive.registration_start:
+                return Response({"detail": f"Registration for drive '{target_drive.name}' has not opened yet."}, status=status.HTTP_403_FORBIDDEN)
+            if target_drive.registration_end and now > target_drive.registration_end:
+                return Response({"detail": f"Registration for drive '{target_drive.name}' has closed."}, status=status.HTTP_403_FORBIDDEN)
+            if target_drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
+                return Response({"detail": f"Drive '{target_drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
+
+            if target_drive.eligible_colleges.exists():
+                if not college_obj or not target_drive.eligible_colleges.filter(id=college_obj.id).exists():
+                    return Response({"college": [f"Your institution is not eligible for drive '{target_drive.name}'."]}, status=status.HTTP_403_FORBIDDEN)
+
+            if target_drive.visibility == Drive.Visibility.INVITE_ONLY and not invitation_obj:
+                return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
             # Check existing candidate by email, or by college + register number
@@ -425,6 +480,23 @@ class CandidateRegisterView(APIView):
                         already_completed = completed_attempts.exists()
                         last_completed = completed_attempts.order_by("-created_at").first()
 
+                if target_drive:
+                    reg_source = DriveRegistration.Source.PUBLIC_URL
+                    if invitation_obj:
+                        reg_source = DriveRegistration.Source.INVITE_LINK if invite_token else DriveRegistration.Source.ACCESS_CODE
+                    drive_reg, created_reg = DriveRegistration.objects.get_or_create(
+                        drive=target_drive,
+                        candidate=existing_candidate,
+                        defaults={"registration_source": reg_source, "registration_status": DriveRegistration.Status.REGISTERED},
+                    )
+                    if invitation_obj and created_reg:
+                        invitation_obj.usage_count += 1
+                        invitation_obj.save(update_fields=["usage_count"])
+                    for da in target_drive.drive_assessments.filter(registration_enabled=True).select_related("assessment"):
+                        a = da.assessment
+                        if not a.eligible_colleges.exists() or (college_obj and a.eligible_colleges.filter(id=college_obj.id).exists()):
+                            a.eligible_candidates.add(existing_candidate)
+
                 if active_attempt:
                     registration_status = "IN_PROGRESS"
                 elif already_completed:
@@ -449,6 +521,9 @@ class CandidateRegisterView(APIView):
                         "college": existing_candidate.college,
                         "college_id": existing_candidate.college_ref_id,
                         "registration_status": registration_status,
+                        "drive_id": str(target_drive.id) if target_drive else None,
+                        "drive_name": target_drive.name if target_drive else None,
+                        "drive_code": target_drive.code if target_drive else None,
                         "is_active_attempt": bool(active_attempt),
                         "already_completed": already_completed and not bool(active_attempt),
                         "attempt_id": str(active_attempt.id if active_attempt else (last_completed.id if (already_completed and last_completed) else "")),
@@ -503,6 +578,24 @@ class CandidateRegisterView(APIView):
                     is_active=True,
                 )
 
+                if target_drive:
+                    reg_source = DriveRegistration.Source.PUBLIC_URL
+                    if invitation_obj:
+                        reg_source = DriveRegistration.Source.INVITE_LINK if invite_token else DriveRegistration.Source.ACCESS_CODE
+                    DriveRegistration.objects.create(
+                        drive=target_drive,
+                        candidate=candidate,
+                        registration_source=reg_source,
+                        registration_status=DriveRegistration.Status.REGISTERED,
+                    )
+                    if invitation_obj:
+                        invitation_obj.usage_count += 1
+                        invitation_obj.save(update_fields=["usage_count"])
+                    for da in target_drive.drive_assessments.filter(registration_enabled=True).select_related("assessment"):
+                        a = da.assessment
+                        if not a.eligible_colleges.exists() or (college_obj and a.eligible_colleges.filter(id=college_obj.id).exists()):
+                            a.eligible_candidates.add(candidate)
+
         token = generate_candidate_token(str(candidate.id))
 
         return Response(
@@ -512,6 +605,9 @@ class CandidateRegisterView(APIView):
                 "full_name": candidate.full_name,
                 "college": candidate.college,
                 "college_id": candidate.college_ref_id,
+                "drive_id": str(target_drive.id) if target_drive else None,
+                "drive_name": target_drive.name if target_drive else None,
+                "drive_code": target_drive.code if target_drive else None,
                 "registration_status": "NEW_REGISTRATION",
                 "is_active_attempt": False,
                 "already_completed": False,
@@ -519,6 +615,112 @@ class CandidateRegisterView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class PublicDriveDetailView(APIView):
+    """
+    Public metadata for a drive during registration.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, code_or_id):
+        drive = (
+            Drive.objects.filter(code__iexact=code_or_id).first()
+            or Drive.objects.filter(id=code_or_id).first()
+        )
+        if not drive:
+            return Response({"detail": "Drive not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        is_registration_open = True
+        if drive.status not in [Drive.Status.ACTIVE, Drive.Status.UPCOMING]:
+            is_registration_open = False
+        if drive.registration_start and now < drive.registration_start:
+            is_registration_open = False
+        if drive.registration_end and now > drive.registration_end:
+            is_registration_open = False
+
+        assessments_list = []
+        for da in drive.drive_assessments.filter(registration_enabled=True).select_related("assessment"):
+            assessments_list.append({
+                "id": str(da.assessment.id),
+                "code": da.assessment.code,
+                "title": da.assessment.title,
+                "duration_minutes": da.assessment.duration_minutes,
+                "total_marks": da.assessment.total_marks,
+                "is_required": da.is_required,
+            })
+
+        return Response({
+            "id": str(drive.id),
+            "code": drive.code,
+            "name": drive.name,
+            "description": drive.description,
+            "status": drive.status,
+            "visibility": drive.visibility,
+            "registration_start": drive.registration_start.isoformat() if drive.registration_start else None,
+            "registration_end": drive.registration_end.isoformat() if drive.registration_end else None,
+            "is_registration_open": is_registration_open,
+            "assessments": assessments_list,
+        })
+
+
+class ResolveAccessCodeView(APIView):
+    """
+    Validates an invite access code or token and returns the corresponding Drive or Assessment.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        code = request.data.get("code", "").strip()
+        if not code:
+            return Response({"detail": "Access code or token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Check DriveInvitation token or access code
+        inv = (
+            DriveInvitation.objects.filter(access_code__iexact=code, is_active=True).first()
+            or DriveInvitation.objects.filter(token_hash=code, is_active=True).first()
+        )
+        if inv:
+            if not inv.is_valid():
+                return Response({"detail": "This invitation has expired or reached its maximum usage limit."}, status=status.HTTP_400_BAD_REQUEST)
+            drive = inv.drive
+            return Response({
+                "type": "DRIVE",
+                "drive_id": str(drive.id),
+                "drive_code": drive.code,
+                "drive_name": drive.name,
+                "visibility": drive.visibility,
+                "message": f"Invitation verified for {drive.name}.",
+            })
+
+        # 2. Check Assessment access code
+        assessment = Assessment.objects.filter(access_code__iexact=code).first()
+        if assessment:
+            return Response({
+                "type": "ASSESSMENT",
+                "assessment_id": str(assessment.id),
+                "assessment_code": assessment.code,
+                "assessment_title": assessment.title,
+                "visibility": assessment.visibility,
+                "message": f"Access code verified for '{assessment.title}'.",
+            })
+
+        # 3. Check Drive code directly
+        drive = Drive.objects.filter(code__iexact=code).first()
+        if drive:
+            if drive.visibility == Drive.Visibility.INVITE_ONLY:
+                return Response({"detail": "This drive is invite-only. A valid invitation token or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                "type": "DRIVE",
+                "drive_id": str(drive.id),
+                "drive_code": drive.code,
+                "drive_name": drive.name,
+                "visibility": drive.visibility,
+                "message": f"Drive found: {drive.name}.",
+            })
+
+        return Response({"detail": "Invalid access code or token."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class StartAssessmentView(APIView):

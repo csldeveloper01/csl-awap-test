@@ -295,6 +295,10 @@ class Assessment(models.Model):
         MCQ = "MCQ", "Multiple Choice (MCQ)"
         PDF_CODING = "PDF_CODING", "PDF Assessment Mode"
 
+    class Visibility(models.TextChoices):
+        PUBLIC = "PUBLIC", "Public (Open Registration)"
+        INVITE_ONLY = "INVITE_ONLY", "Invite Only"
+
     class ClosePolicy(models.TextChoices):
         ALLOW_FINISH = "ALLOW_FINISH", "Allow In-Progress Attempts to Finish"
         STRICT_CUTOFF = "STRICT_CUTOFF", "Strict Cutoff (Terminate Active Attempts)"
@@ -316,6 +320,20 @@ class Assessment(models.Model):
         default=DeliveryMode.MCQ,
         db_index=True,
         help_text="Assessment delivery mode: MCQ or PDF_CODING",
+    )
+    visibility = models.CharField(
+        max_length=20,
+        choices=Visibility.choices,
+        default=Visibility.PUBLIC,
+        db_index=True,
+        help_text="Registration visibility: PUBLIC or INVITE_ONLY",
+    )
+    access_code = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Optional invite access code for candidates",
     )
 
     # Independent configuration parameters
@@ -594,6 +612,191 @@ class Candidate(models.Model):
 
     def __str__(self):
         return f"{self.full_name} ({self.register_number} - {self.college})"
+
+
+class Drive(models.Model):
+    """
+    Organized recruitment drive, campus placement, or institutional examination event
+    that groups multiple assessments with unified scheduling and candidate registrations.
+    """
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        UPCOMING = "UPCOMING", "Upcoming"
+        ACTIVE = "ACTIVE", "Active"
+        COMPLETED = "COMPLETED", "Completed"
+        ARCHIVED = "ARCHIVED", "Archived"
+
+    class Visibility(models.TextChoices):
+        PUBLIC = "PUBLIC", "Public"
+        INVITE_ONLY = "INVITE_ONLY", "Invite Only"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, help_text="Drive title (e.g. Campus Recruitment 2026)")
+    code = models.CharField(max_length=64, unique=True, db_index=True, help_text="Unique drive code")
+    description = models.TextField(blank=True, default="", help_text="Detailed description and instructions")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    visibility = models.CharField(max_length=20, choices=Visibility.choices, default=Visibility.PUBLIC, db_index=True)
+
+    start_date = models.DateTimeField(null=True, blank=True, help_text="Drive operational start timestamp")
+    end_date = models.DateTimeField(null=True, blank=True, help_text="Drive operational end timestamp")
+    registration_start = models.DateTimeField(null=True, blank=True, help_text="Candidate registration window start")
+    registration_end = models.DateTimeField(null=True, blank=True, help_text="Candidate registration window end")
+
+    assessments = models.ManyToManyField(
+        "Assessment",
+        through="DriveAssessment",
+        blank=True,
+        related_name="drives",
+        help_text="Assessments included in this drive",
+    )
+    eligible_colleges = models.ManyToManyField(
+        College,
+        blank=True,
+        related_name="eligible_drives",
+        help_text="Optional colleges eligible for this drive",
+    )
+
+    created_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_drives",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Drive"
+        verbose_name_plural = "Drives"
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
+class DriveAssessment(models.Model):
+    """
+    Through model connecting Drive and Assessment with sequencing and registration controls.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    drive = models.ForeignKey(
+        Drive,
+        on_delete=models.CASCADE,
+        related_name="drive_assessments",
+    )
+    assessment = models.ForeignKey(
+        Assessment,
+        on_delete=models.CASCADE,
+        related_name="assessment_drives",
+    )
+    display_order = models.PositiveIntegerField(default=0, help_text="Display order sequence within the drive")
+    is_required = models.BooleanField(default=True, help_text="Whether this assessment is mandatory in the drive")
+    registration_enabled = models.BooleanField(default=True, help_text="Whether registrations for this assessment are enabled in this drive")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["display_order", "created_at"]
+        unique_together = [("drive", "assessment")]
+        verbose_name = "Drive Assessment"
+        verbose_name_plural = "Drive Assessments"
+
+    def __str__(self):
+        return f"{self.drive.name} -> {self.assessment.title}"
+
+
+class DriveRegistration(models.Model):
+    """
+    Represents candidate registration for a specific Drive.
+    """
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending Review"
+        REGISTERED = "REGISTERED", "Registered"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+        CANCELLED = "CANCELLED", "Cancelled"
+
+    class Source(models.TextChoices):
+        PUBLIC_URL = "PUBLIC_URL", "Public URL"
+        INVITE_LINK = "INVITE_LINK", "Drive Invitation Link"
+        ACCESS_CODE = "ACCESS_CODE", "Direct Access Code"
+        ADMIN_ASSIGNED = "ADMIN_ASSIGNED", "Admin Assigned"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    drive = models.ForeignKey(
+        Drive,
+        on_delete=models.CASCADE,
+        related_name="registrations",
+    )
+    candidate = models.ForeignKey(
+        Candidate,
+        on_delete=models.CASCADE,
+        related_name="drive_registrations",
+    )
+    registration_status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.REGISTERED,
+        db_index=True,
+    )
+    registration_source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.PUBLIC_URL,
+    )
+    notes = models.TextField(blank=True, default="")
+    registered_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-registered_at"]
+        unique_together = [("drive", "candidate")]
+        verbose_name = "Drive Registration"
+        verbose_name_plural = "Drive Registrations"
+
+    def __str__(self):
+        return f"{self.candidate.full_name} -> {self.drive.name} ({self.registration_status})"
+
+
+class DriveInvitation(models.Model):
+    """
+    Manages drive invitation tokens and access codes for invite-only drives.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    drive = models.ForeignKey(
+        Drive,
+        on_delete=models.CASCADE,
+        related_name="invitations",
+    )
+    token_hash = models.CharField(max_length=128, db_index=True, help_text="Cryptographic hash or unique invitation token")
+    access_code = models.CharField(max_length=32, blank=True, null=True, db_index=True, help_text="Short access code for direct entry")
+    label = models.CharField(max_length=120, blank=True, default="", help_text="Optional label (e.g. 'Batch 1')")
+    expires_at = models.DateTimeField(null=True, blank=True, help_text="Optional expiration timestamp")
+    max_uses = models.PositiveIntegerField(null=True, blank=True, help_text="Maximum allowed redemptions (null = unlimited)")
+    usage_count = models.PositiveIntegerField(default=0, help_text="Count of successful registrations using this invitation")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_drive_invitations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Drive Invitation"
+        verbose_name_plural = "Drive Invitations"
+
+    def is_valid(self) -> bool:
+        from django.utils import timezone
+        if not self.is_active:
+            return False
+        if self.expires_at and timezone.now() > self.expires_at:
+            return False
+        if self.max_uses is not None and self.usage_count >= self.max_uses:
+            return False
+        return True
 
 
 class AssessmentAttempt(models.Model):
@@ -990,9 +1193,24 @@ class AssessmentAuditLog(models.Model):
         QUESTION_POOL_UPDATED = "QUESTION_POOL_UPDATED", "Question Pool Updated"
         QUESTION_POOL_DELETED = "QUESTION_POOL_DELETED", "Question Pool Deleted"
         ADMIN_ACCESS_GRANTED = "ADMIN_ACCESS_GRANTED", "Admin Access Grant Created"
+        DRIVE_CREATED = "DRIVE_CREATED", "Drive Created"
+        DRIVE_UPDATED = "DRIVE_UPDATED", "Drive Updated"
+        DRIVE_ARCHIVED = "DRIVE_ARCHIVED", "Drive Archived"
+        DRIVE_DELETED = "DRIVE_DELETED", "Drive Deleted"
+        DRIVE_ASSESSMENT_ADDED = "DRIVE_ASSESSMENT_ADDED", "Assessment Added to Drive"
+        DRIVE_ASSESSMENT_REMOVED = "DRIVE_ASSESSMENT_REMOVED", "Assessment Removed from Drive"
+        DRIVE_INVITATION_CREATED = "DRIVE_INVITATION_CREATED", "Drive Invitation Created"
+        DRIVE_INVITATION_REVOKED = "DRIVE_INVITATION_REVOKED", "Drive Invitation Revoked"
+        ACTION_REVERSED = "ACTION_REVERSED", "Administrative Action Reversed / Undone"
+
+    class ReversalStatus(models.TextChoices):
+        NOT_REVERSIBLE = "NOT_REVERSIBLE", "Not Reversible"
+        REVERSIBLE = "REVERSIBLE", "Reversible"
+        REVERSED = "REVERSED", "Reversed"
+        FAILED = "FAILED", "Reversal Failed"
 
     action = models.CharField(max_length=40, choices=Action.choices, db_index=True)
-    entity_type = models.CharField(max_length=30, db_index=True, help_text="ASSESSMENT, COLLEGE, CANDIDATE")
+    entity_type = models.CharField(max_length=30, db_index=True, help_text="ASSESSMENT, COLLEGE, CANDIDATE, DRIVE")
     entity_id = models.CharField(max_length=100, db_index=True)
     performed_by = models.ForeignKey(
         "users.User",
@@ -1004,6 +1222,32 @@ class AssessmentAuditLog(models.Model):
     performed_by_name = models.CharField(max_length=150, blank=True, default="")
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     details = models.JSONField(blank=True, default=dict)
+
+    # Undo and Reversibility infrastructure
+    is_reversible = models.BooleanField(default=False, db_index=True)
+    reversal_status = models.CharField(
+        max_length=20,
+        choices=ReversalStatus.choices,
+        default=ReversalStatus.NOT_REVERSIBLE,
+        db_index=True,
+    )
+    previous_state = models.JSONField(blank=True, default=dict)
+    new_state = models.JSONField(blank=True, default=dict)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reversed_audit_logs",
+    )
+    reversed_by_log = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reversal_events",
+    )
 
     class Meta:
         ordering = ["-timestamp"]

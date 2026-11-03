@@ -15,6 +15,8 @@ from .views import (
     SyncAnswersView,
     CandidateAttemptPdfDownloadView,
     StudentInstitutionRequestView,
+    PublicDriveDetailView,
+    ResolveAccessCodeView,
 )
 
 urlpatterns = [
@@ -22,6 +24,8 @@ urlpatterns = [
     path("request-college/", StudentInstitutionRequestView.as_view(), name="student-request-college"),
     path("candidate-assessments/", CandidateEligibleAssessmentsView.as_view(), name="candidate-eligible-assessments"),
     path("register/", CandidateRegisterView.as_view(), name="assessment-register"),
+    path("drives/<str:code_or_id>/public/", PublicDriveDetailView.as_view(), name="public-drive-detail"),
+    path("resolve-code/", ResolveAccessCodeView.as_view(), name="resolve-access-code"),
     path("recover/", StudentAttemptRecoveryView.as_view(), name="assessment-recover"),
     path("start/", StartAssessmentView.as_view(), name="assessment-start"),
     path("attempts/<uuid:attempt_id>/", AttemptStateView.as_view(), name="assessment-attempt-state"),

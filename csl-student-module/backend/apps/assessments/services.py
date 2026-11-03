@@ -25,13 +25,29 @@ from .tokens import verify_attempt_ownership
 
 logger = logging.getLogger(__name__)
 
-def log_assessment_audit(action: str, entity_type: str, entity_id: str, user=None, details=None):
+def log_assessment_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user=None,
+    details=None,
+    is_reversible: bool = False,
+    previous_state: dict = None,
+    new_state: dict = None,
+):
     """
-    Persists an immutable audit log entry for administrative actions.
+    Persists an immutable audit log entry for administrative actions,
+    with snapshot states for safe reversible Undo operations.
     """
     user_name = "System"
     if user and getattr(user, "is_authenticated", False):
         user_name = user.get_full_name() or user.username or "Administrator"
+
+    reversal_status = (
+        AssessmentAuditLog.ReversalStatus.REVERSIBLE
+        if is_reversible
+        else AssessmentAuditLog.ReversalStatus.NOT_REVERSIBLE
+    )
 
     return AssessmentAuditLog.objects.create(
         action=action,
@@ -40,7 +56,119 @@ def log_assessment_audit(action: str, entity_type: str, entity_id: str, user=Non
         performed_by=user if (user and getattr(user, "is_authenticated", False)) else None,
         performed_by_name=user_name,
         details=details or {},
+        is_reversible=is_reversible,
+        reversal_status=reversal_status,
+        previous_state=previous_state or {},
+        new_state=new_state or {},
     )
+
+
+def undo_administrative_action(log_id: int, user):
+    """
+    Executes a controlled, safe compensating action to reverse a previous administrative operation.
+    Enforces business rules and records a new audit event.
+    """
+    from django.utils import timezone
+    from .models import Assessment, College, QuestionBank, QuestionPool, QuestionPoolItem, Drive
+
+    log = AssessmentAuditLog.objects.filter(id=log_id).first()
+    if not log:
+        return False, f"Audit log record #{log_id} not found.", {}
+
+    if not log.is_reversible:
+        return False, f"Action '{log.get_action_display()}' is not reversible.", {}
+
+    if log.reversal_status == AssessmentAuditLog.ReversalStatus.REVERSED:
+        return False, f"Action #{log_id} has already been reversed.", {}
+
+    prev = log.previous_state or {}
+    success = False
+    message = ""
+    reversal_details = {"original_log_id": log.id, "original_action": log.action}
+
+    with transaction.atomic():
+        if log.action in [AssessmentAuditLog.Action.ASSESSMENT_UPDATED, AssessmentAuditLog.Action.ASSESSMENT_CREATED]:
+            assessment = Assessment.objects.filter(id=log.entity_id).first()
+            if not assessment:
+                return False, f"Target assessment '{log.entity_id}' no longer exists.", {}
+            for field in ["title", "description", "status", "duration_minutes", "total_marks", "close_policy", "visibility", "access_code"]:
+                if field in prev:
+                    setattr(assessment, field, prev[field])
+            assessment.save()
+            success = True
+            message = f"Assessment '{assessment.title}' restored to previous state."
+            reversal_details["restored_fields"] = list(prev.keys())
+
+        elif log.action == AssessmentAuditLog.Action.ASSESSMENT_ARCHIVED:
+            assessment = Assessment.objects.filter(id=log.entity_id).first()
+            if not assessment:
+                return False, f"Target assessment '{log.entity_id}' no longer exists.", {}
+            prev_status = prev.get("status", Assessment.Status.DRAFT)
+            assessment.status = prev_status
+            assessment.save(update_fields=["status"])
+            success = True
+            message = f"Assessment '{assessment.title}' unarchived (status restored to {prev_status})."
+
+        elif log.action == AssessmentAuditLog.Action.COLLEGE_ASSIGNED:
+            assessment = Assessment.objects.filter(id=log.entity_id).first()
+            college_id = log.details.get("college_id") or prev.get("college_id")
+            if assessment and college_id:
+                assessment.eligible_colleges.remove(college_id)
+                success = True
+                message = f"College assignment removed from assessment '{assessment.title}'."
+
+        elif log.action == AssessmentAuditLog.Action.COLLEGE_REMOVED:
+            assessment = Assessment.objects.filter(id=log.entity_id).first()
+            college_id = log.details.get("college_id") or prev.get("college_id")
+            if assessment and college_id:
+                assessment.eligible_colleges.add(college_id)
+                success = True
+                message = f"College assignment restored to assessment '{assessment.title}'."
+
+        elif log.action in [AssessmentAuditLog.Action.QUESTION_ARCHIVED, AssessmentAuditLog.Action.QUESTION_UNARCHIVED]:
+            question = QuestionBank.objects.filter(id=log.entity_id).first()
+            if not question:
+                return False, f"Question #{log.entity_id} no longer exists.", {}
+            question.is_archived = prev.get("is_archived", False)
+            question.is_active = prev.get("is_active", True)
+            question.save(update_fields=["is_archived", "is_active"])
+            success = True
+            message = f"Question #{question.id} archive state reversed."
+
+        elif log.action in [AssessmentAuditLog.Action.DRIVE_UPDATED, AssessmentAuditLog.Action.DRIVE_ARCHIVED]:
+            drive = Drive.objects.filter(id=log.entity_id).first()
+            if not drive:
+                return False, f"Drive '{log.entity_id}' no longer exists.", {}
+            for field in ["name", "status", "visibility", "description"]:
+                if field in prev:
+                    setattr(drive, field, prev[field])
+            drive.save()
+            success = True
+            message = f"Drive '{drive.name}' restored to previous state."
+
+        else:
+            return False, f"Reversal handler not defined for action '{log.action}'.", {}
+
+        if success:
+            reversal_event = AssessmentAuditLog.objects.create(
+                action=AssessmentAuditLog.Action.ACTION_REVERSED,
+                entity_type=log.entity_type,
+                entity_id=log.entity_id,
+                performed_by=user if (user and getattr(user, "is_authenticated", False)) else None,
+                performed_by_name=(user.get_full_name() or user.username) if user else "System",
+                details=reversal_details,
+                is_reversible=False,
+                reversal_status=AssessmentAuditLog.ReversalStatus.NOT_REVERSIBLE,
+            )
+            log.reversal_status = AssessmentAuditLog.ReversalStatus.REVERSED
+            log.reversed_at = timezone.now()
+            log.reversed_by = user if (user and getattr(user, "is_authenticated", False)) else None
+            log.reversed_by_log = reversal_event
+            log.save(update_fields=["reversal_status", "reversed_at", "reversed_by", "reversed_by_log"])
+
+            return True, message, {"reversal_log_id": reversal_event.id}
+
+    return False, "Failed to reverse action.", {}
 
 
 def get_or_create_default_config():

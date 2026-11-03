@@ -15,7 +15,7 @@ import {
   createAdminSection,
   assignAdminAssessmentQuestions,
   getAdminQuestionPools,
-  manageAdminQuestionPoolItems,
+  bulkAssignQuestionsToPool,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
@@ -123,7 +123,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [loading, setLoading] = useState(true);
 
   // Sub-navigation: Question Bank vs Reusable Question Pools (Phase 2.1 Default: POOLS directory)
-  const [activeSubTab, setActiveSubTab] = useState<'BANK' | 'POOLS'>('POOLS');
+  const [activeSubTab, setActiveSubTab] = useState<'BANK' | 'POOLS' | 'UNASSIGNED'>('POOLS');
   const [questionPools, setQuestionPools] = useState<AdminQuestionPool[]>([]);
 
   // Phase 2.1 Question Bank modals state
@@ -210,6 +210,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         is_active: activeFilter || undefined,
         search: search || undefined,
         assessment_id: assessmentFilter || undefined,
+        unassigned: activeSubTab === 'UNASSIGNED' ? true : undefined,
       });
 
       // Ensure frontend filter matches custom sections accurately
@@ -264,7 +265,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
   useEffect(() => {
     loadQuestions();
-  }, [sectionFilter, difficultyFilter, activeFilter, assessmentFilter]);
+  }, [activeSubTab, sectionFilter, difficultyFilter, activeFilter, assessmentFilter]);
 
   const handleOpenCreateSection = () => {
     setCreateSectionForm({ name: '', code: '', description: '' });
@@ -315,9 +316,10 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       setAssigningToPool(true);
       setPoolAssignError('');
       try {
-        for (const poolId of selectedPoolIds) {
-          await manageAdminQuestionPoolItems(poolId, targetQuestionIdsForPool, 'add');
-        }
+        await bulkAssignQuestionsToPool({
+          question_ids: targetQuestionIdsForPool,
+          pool_ids: selectedPoolIds,
+        });
         alert(`Successfully added ${targetQuestionIdsForPool.length} question(s) to ${selectedPoolIds.length} question pool(s).`);
         setShowPoolAssignModal(false);
         getAdminQuestionPools().then(setQuestionPools).catch(() => {});
@@ -723,6 +725,26 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               {questionPools.length}
             </span>
           )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('UNASSIGNED')}
+          style={{
+            padding: '8px 18px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 700,
+            backgroundColor: activeSubTab === 'UNASSIGNED' ? '#1455B8' : '#F8FAFC',
+            color: activeSubTab === 'UNASSIGNED' ? '#FFFFFF' : '#475569',
+            border: activeSubTab === 'UNASSIGNED' ? 'none' : '1px solid #CBD5E1',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: activeSubTab === 'UNASSIGNED' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
+          }}
+        >
+          <span>⚡ Unassigned Questions</span>
         </button>
       </div>
 
@@ -1573,26 +1595,41 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       <div style={{ fontSize: '11px', color: '#64748B' }}>
                         A: {q.option_a.slice(0, 24)} | B: {q.option_b.slice(0, 24)} | C: {q.option_c.slice(0, 24)} | D: {q.option_d.slice(0, 24)}
                       </div>
-                      {q.assigned_assessments && q.assigned_assessments.length > 0 && (
+                      {q.pool_memberships && q.pool_memberships.length > 0 ? (
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
-                          {q.assigned_assessments.map((ass) => (
+                          {q.pool_memberships.map((pool) => (
                             <span
-                              key={ass.id}
+                              key={pool.id}
                               style={{
                                 fontSize: '10px',
                                 fontWeight: 700,
-                                backgroundColor: '#F5F8FF',
-                                color: '#0B2E6F',
-                                border: '1px solid #DCE4F2',
+                                backgroundColor: '#EEF2FF',
+                                color: '#4338CA',
+                                border: '1px solid #C7D2FE',
                                 padding: '1px 6px',
                                 borderRadius: '4px',
                               }}
-                              title={ass.title}
+                              title={`Pool: ${pool.name}`}
                             >
-                              {ass.code}
+                              📦 {pool.name}
                             </span>
                           ))}
                         </div>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            backgroundColor: '#FEF3C7',
+                            color: '#92400E',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            marginTop: '4px',
+                            display: 'inline-block',
+                          }}
+                        >
+                          ⚡ Unassigned
+                        </span>
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>

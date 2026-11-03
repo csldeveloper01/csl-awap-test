@@ -98,6 +98,10 @@ export interface RegistrationPayload {
   department: string;
   year_of_study: string;
   phone_number: string;
+  assessment_id?: string;
+  drive_code?: string;
+  invite_token?: string;
+  access_code?: string;
 }
 
 export interface RegisterResponse {
@@ -401,5 +405,51 @@ export const requestInstitutionAddition = async (data: {
   state?: string;
 }): Promise<{ message: string; success: boolean }> => {
   const res = await assessmentApi.post<{ message: string; success: boolean }>('/request-college/', data);
+  return res.data;
+};
+
+// ─── PHASE 2.2 PUBLIC DRIVE & ACCESS CODE RESOLUTION ──────────────────────────
+
+export interface PublicDriveAssessment {
+  id: string;
+  code: string;
+  title: string;
+  duration_minutes: number;
+  total_marks: number;
+  is_required: boolean;
+}
+
+export interface PublicDriveInfo {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  status: string;
+  start_date: string | null;
+  end_date: string | null;
+  registration_start: string | null;
+  registration_end: string | null;
+  assessments: PublicDriveAssessment[];
+}
+
+export const fetchPublicDrive = async (codeOrId: string): Promise<PublicDriveInfo> => {
+  const res = await assessmentApi.get<PublicDriveInfo>(`/drives/${codeOrId}/public/`);
+  return res.data;
+};
+
+export interface ResolveAccessCodeResult {
+  valid: boolean;
+  type: 'ASSESSMENT' | 'DRIVE' | 'DRIVE_INVITATION';
+  target_id: string;
+  name?: string;
+  title?: string;
+  code: string;
+  invite_token?: string;
+  drive?: PublicDriveInfo;
+  assessment?: any;
+}
+
+export const resolveAccessCode = async (code: string): Promise<ResolveAccessCodeResult> => {
+  const res = await assessmentApi.post<ResolveAccessCodeResult>('/resolve-code/', { code });
   return res.data;
 };

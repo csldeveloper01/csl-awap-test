@@ -41,10 +41,13 @@ export interface AdminUser {
 
 export interface AdminStats {
   colleges_count: number;
+  active_colleges_count?: number;
   assessments_count: number;
+  active_assessments_count?: number;
   open_assessments_count: number;
   candidates_count: number;
   attempts_count: number;
+  active_attempts_count?: number;
   in_progress_count: number;
   submitted_count: number;
   timed_out_count: number;
@@ -52,11 +55,32 @@ export interface AdminStats {
   aptitude_questions_count: number;
   coding_questions_count: number;
   total_questions_count: number;
+  unassigned_questions_count?: number;
   pools_count?: number;
   active_pools_count?: number;
   action_required_pools_count?: number;
+  drives_count?: number;
+  active_drives_count?: number;
+  drive_registrations_count?: number;
   integrity_events_count?: number;
   unreviewed_integrity_count?: number;
+  question_bank_health?: {
+    total_pools: number;
+    active_pools: number;
+    empty_pools: number;
+    low_pools: number;
+    sufficient_pools: number;
+    unassigned_questions: number;
+    overall_status: string;
+    action_required_count: number;
+  };
+  integrity_summary?: {
+    total_events: number;
+    unreviewed_count: number;
+    high_severity_count: number;
+    flagged_attempts: number;
+    status: string;
+  };
   recent_activities?: {
     id: number;
     action: string;
@@ -65,6 +89,9 @@ export interface AdminStats {
     entity_id: string;
     performed_by_name: string;
     created_at: string;
+    is_reversible?: boolean;
+    can_undo?: boolean;
+    reversal_status?: string;
   }[];
 }
 
@@ -224,6 +251,8 @@ export interface AdminQuestion {
   assessment_id?: string;
   assessment_title?: string;
   assigned_assessments?: { id: string; code: string; title: string }[];
+  pool_memberships?: { id: string; name: string; code: string }[];
+  is_unassigned?: boolean;
   is_active: boolean;
   is_archived?: boolean;
   can_be_deleted?: boolean;
@@ -685,6 +714,8 @@ export async function getAdminQuestions(params?: {
   search?: string;
   assessment_id?: string;
   assessment_type?: string;
+  unassigned?: boolean;
+  pool_id?: string;
 }): Promise<AdminQuestion[]> {
   const res = await adminApi.get<AdminQuestion[]>('/questions/', { params });
   return res.data;
@@ -1192,3 +1223,265 @@ export async function clearAdminSystemCache(): Promise<{
   const res = await adminApi.post('/system/clear-cache/');
   return res.data;
 }
+
+// ─── PHASE 2.2 DRIVE MANAGEMENT ───────────────────────────────────────────
+
+export interface AdminDriveAssessment {
+  id: number;
+  drive: string;
+  assessment: string;
+  assessment_title: string;
+  assessment_code: string;
+  assessment_duration: number;
+  assessment_total_marks: number;
+  assessment_is_open: boolean;
+  display_order: number;
+  is_required: boolean;
+  registration_enabled: boolean;
+  created_at: string;
+}
+
+export interface AdminDriveRegistration {
+  id: number;
+  drive: string;
+  candidate: string;
+  candidate_name: string;
+  candidate_register_number: string;
+  candidate_email: string;
+  candidate_college_name: string;
+  registration_status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ATTENDED';
+  registration_source: string;
+  notes?: string;
+  registered_at: string;
+}
+
+export interface AdminDriveInvitation {
+  id: string;
+  drive: string;
+  access_code: string;
+  label: string;
+  expires_at: string | null;
+  max_uses: number | null;
+  usage_count: number;
+  is_active: boolean;
+  is_valid: boolean;
+  created_at: string;
+}
+
+export interface AdminDrive {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | 'CLOSED';
+  visibility: 'PUBLIC' | 'INVITE_ONLY';
+  start_date: string | null;
+  end_date: string | null;
+  registration_start: string | null;
+  registration_end: string | null;
+  assessments_count: number;
+  registrations_count: number;
+  colleges_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminDriveDetail extends AdminDrive {
+  drive_assessments: AdminDriveAssessment[];
+  eligible_colleges: { id: number; name: string; code: string }[];
+  invitations: AdminDriveInvitation[];
+}
+
+export async function fetchAdminDrives(params?: { search?: string; status?: string }): Promise<AdminDrive[]> {
+  const res = await adminApi.get('/drives/', { params });
+  return res.data;
+}
+
+export async function createAdminDrive(payload: Partial<AdminDrive> & { eligible_college_ids?: number[] }): Promise<AdminDrive> {
+  const res = await adminApi.post('/drives/', payload);
+  return res.data;
+}
+
+export async function fetchAdminDriveDetail(id: string): Promise<AdminDriveDetail> {
+  const res = await adminApi.get(`/drives/${id}/`);
+  return res.data;
+}
+
+export async function updateAdminDrive(id: string, payload: Partial<AdminDrive> & { eligible_college_ids?: number[] }): Promise<AdminDriveDetail> {
+  const res = await adminApi.put(`/drives/${id}/`, payload);
+  return res.data;
+}
+
+export async function archiveAdminDrive(id: string): Promise<{ message: string; drive: AdminDrive }> {
+  const res = await adminApi.delete(`/drives/${id}/`);
+  return res.data;
+}
+
+export async function fetchAdminDriveAssessments(driveId: string): Promise<AdminDriveAssessment[]> {
+  const res = await adminApi.get(`/drives/${driveId}/assessments/`);
+  return res.data;
+}
+
+export async function addAdminDriveAssessment(
+  driveId: string,
+  payload: { assessment_id: string; display_order?: number; is_required?: boolean; registration_enabled?: boolean }
+): Promise<AdminDriveAssessment> {
+  const res = await adminApi.post(`/drives/${driveId}/assessments/`, payload);
+  return res.data;
+}
+
+export async function removeAdminDriveAssessment(driveId: string, assessmentId: string): Promise<{ message: string }> {
+  const res = await adminApi.delete(`/drives/${driveId}/assessments/`, { data: { assessment_id: assessmentId } });
+  return res.data;
+}
+
+export async function fetchAdminDriveRegistrations(
+  driveId: string,
+  params?: { status?: string; search?: string }
+): Promise<AdminDriveRegistration[]> {
+  const res = await adminApi.get(`/drives/${driveId}/registrations/`, { params });
+  return res.data;
+}
+
+export async function updateAdminDriveRegistrationStatus(
+  driveId: string,
+  registrationId: number,
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ATTENDED',
+  notes?: string
+): Promise<AdminDriveRegistration> {
+  const res = await adminApi.patch(`/drives/${driveId}/registrations/`, {
+    registration_id: registrationId,
+    status,
+    notes,
+  });
+  return res.data;
+}
+
+export async function fetchAdminDriveInvitations(driveId: string): Promise<AdminDriveInvitation[]> {
+  const res = await adminApi.get(`/drives/${driveId}/invitations/`);
+  return res.data;
+}
+
+export async function createAdminDriveInvitation(
+  driveId: string,
+  payload: { access_code?: string; label?: string; expires_at?: string | null; max_uses?: number | null }
+): Promise<AdminDriveInvitation> {
+  const res = await adminApi.post(`/drives/${driveId}/invitations/`, payload);
+  return res.data;
+}
+
+export async function revokeAdminDriveInvitation(driveId: string, invitationId: string): Promise<{ message: string }> {
+  const res = await adminApi.delete(`/drives/${driveId}/invitations/`, { data: { invitation_id: invitationId } });
+  return res.data;
+}
+
+export async function fetchAdminDriveEligibility(driveId: string): Promise<{
+  drive_id: string;
+  drive_name: string;
+  has_restrictions: boolean;
+  eligible_colleges_count: number;
+  eligible_colleges: { id: number; name: string; code: string; location?: string }[];
+  all_colleges: { id: number; name: string; code: string }[];
+}> {
+  const res = await adminApi.get(`/drives/${driveId}/eligibility/`);
+  return res.data;
+}
+
+export async function updateAdminDriveEligibility(
+  driveId: string,
+  collegeIds: number[]
+): Promise<{ message: string; eligible_colleges_count: number }> {
+  const res = await adminApi.post(`/drives/${driveId}/eligibility/`, { college_ids: collegeIds });
+  return res.data;
+}
+
+export async function fetchAdminDriveReports(driveId: string): Promise<{
+  drive_id: string;
+  drive_name: string;
+  total_registered: number;
+  attended_count: number;
+  registration_status_breakdown: Record<string, number>;
+  assessments_count: number;
+  assessments_breakdown: Array<{
+    assessment_id: string;
+    assessment_title: string;
+    assessment_code: string;
+    total_candidates: number;
+    attempts_count: number;
+    completed_count: number;
+    in_progress_count: number;
+  }>;
+}> {
+  const res = await adminApi.get(`/drives/${driveId}/reports/`);
+  return res.data;
+}
+
+// ─── PHASE 2.2 AUDIT UNDO & QUICK ACTIONS ───────────────────────────────────
+
+export async function undoAdminAuditAction(logId: number): Promise<{
+  message: string;
+  log_id: number;
+  reversed_action: string;
+  status: string;
+}> {
+  const res = await adminApi.post(`/audit-logs/${logId}/undo/`);
+  return res.data;
+}
+
+export async function reassessAdminStudentAccess(payload: {
+  candidate_id?: string;
+  register_number?: string;
+  assessment_id?: string;
+  action: 'RETRIEVE_ACCESS' | 'REASSIGN_NEW_ATTEMPT' | 'EXTRA_RECOVERY' | 'UNLOCK_FLAGGED';
+  reason: string;
+  extra_time_minutes?: number;
+}): Promise<{
+  message: string;
+  action: string;
+  grant_id?: number;
+  attempt_id?: string;
+  candidate_id?: string;
+  state?: string;
+  access_url?: string;
+}> {
+  const res = await adminApi.post('/candidates/reassess-access/', payload);
+  return res.data;
+}
+
+export async function bulkAssignQuestionsToPool(payload: {
+  question_ids: number[];
+  pool_ids?: string[];
+  new_pool_name?: string;
+}): Promise<{
+  message: string;
+  assigned_count: number;
+  pools_count: number;
+  target_pools: { id: string; name: string }[];
+}> {
+  const res = await adminApi.post('/questions/bulk-assign-pool/', payload);
+  return res.data;
+}
+
+export async function importOfficialTamilNaduColleges(): Promise<{
+  message: string;
+  total_records: number;
+  created: number;
+  updated: number;
+}> {
+  const res = await adminApi.post('/colleges/import-official/');
+  return res.data;
+}
+
+export async function exportCandidateDataCsv(filters?: {
+  college_id?: number | string;
+  assessment_id?: string;
+  drive_id?: string;
+  state?: string;
+}): Promise<Blob> {
+  const res = await adminApi.get('/candidates/export-data-csv/', {
+    params: filters,
+    responseType: 'blob',
+  });
+  return res.data;
+}
+

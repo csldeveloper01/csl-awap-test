@@ -60,6 +60,18 @@ from .admin_views import (
     AdminAssessmentPoolSourcesView,
     AdminAccessGrantListView,
     AdminRecoveryEventsListView,
+    AdminDriveListCreateView,
+    AdminDriveDetailView,
+    AdminDriveAssessmentsView,
+    AdminDriveRegistrationsView,
+    AdminDriveInvitationsView,
+    AdminDriveEligibilityView,
+    AdminDriveReportsView,
+    AdminAuditLogUndoView,
+    AdminExportCandidateDataCSVView,
+    AdminStudentAccessReassessView,
+    AdminQuestionBulkAssignPoolView,
+    AdminCollegeImportOfficialView,
 )
 
 urlpatterns = [
@@ -68,6 +80,15 @@ urlpatterns = [
     path("users/", AdminUserManagementView.as_view(), name="admin-users"),
     path("users/<int:user_id>/", AdminUserDetailView.as_view(), name="admin-user-detail"),
     path("system/clear-cache/", AdminClearCacheView.as_view(), name="admin-system-clear-cache"),
+
+    # Drives Management
+    path("drives/", AdminDriveListCreateView.as_view(), name="admin-drives"),
+    path("drives/<uuid:pk>/", AdminDriveDetailView.as_view(), name="admin-drive-detail"),
+    path("drives/<uuid:pk>/assessments/", AdminDriveAssessmentsView.as_view(), name="admin-drive-assessments"),
+    path("drives/<uuid:pk>/registrations/", AdminDriveRegistrationsView.as_view(), name="admin-drive-registrations"),
+    path("drives/<uuid:pk>/invitations/", AdminDriveInvitationsView.as_view(), name="admin-drive-invitations"),
+    path("drives/<uuid:pk>/eligibility/", AdminDriveEligibilityView.as_view(), name="admin-drive-eligibility"),
+    path("drives/<uuid:pk>/reports/", AdminDriveReportsView.as_view(), name="admin-drive-reports"),
     
     # Colleges
     path("colleges/", AdminCollegeListView.as_view(), name="admin-colleges"),
@@ -77,6 +98,7 @@ urlpatterns = [
     path("colleges/<int:pk>/import-candidates/", AdminCollegeImportCandidatesView.as_view(), name="admin-college-import-candidates"),
     path("colleges/<int:pk>/merge/", AdminCollegeMergeView.as_view(), name="admin-college-merge"),
     path("colleges/import-directory/", AdminCollegeImportDirectoryView.as_view(), name="admin-college-import-directory"),
+    path("colleges/import-official/", AdminCollegeImportOfficialView.as_view(), name="admin-colleges-import-official"),
 
     # Assessments
     path("assessments/", AdminAssessmentListView.as_view(), name="admin-assessments"),
@@ -94,12 +116,14 @@ urlpatterns = [
     path("assessments/<uuid:pk>/upload-pdf/", AdminAssessmentUploadPdfView.as_view(), name="admin-assessment-upload-pdf"),
     path("assessments/<uuid:pk>/pdf/", AdminAssessmentPdfDownloadView.as_view(), name="admin-assessment-pdf-download"),
 
-    # Candidates
+    # Candidates & Quick Actions
     path("candidates/", AdminCandidateListView.as_view(), name="admin-candidates"),
     path("candidates/export-csv/", AdminCandidateExportCSVView.as_view(), name="admin-candidates-export-csv"),
+    path("candidates/export-data-csv/", AdminExportCandidateDataCSVView.as_view(), name="admin-candidates-export-data-csv"),
     path("candidates/bulk-delete/", AdminCandidateBulkDeleteView.as_view(), name="admin-candidates-bulk-delete"),
     path("candidates/<uuid:candidate_id>/", AdminCandidateDetailView.as_view(), name="admin-candidate-detail"),
     path("candidates/<uuid:pk>/reassign/", AdminCandidateReassignAttemptView.as_view(), name="admin-candidate-reassign"),
+    path("candidates/reassess-access/", AdminStudentAccessReassessView.as_view(), name="admin-candidates-reassess-access"),
     path("candidates/<uuid:candidate_id>/toggle-status/", AdminCandidateToggleStatusView.as_view(), name="admin-candidate-toggle-status"),
 
     # Questions
@@ -111,6 +135,7 @@ urlpatterns = [
     path("questions/bulk-update/", AdminQuestionBulkUpdateView.as_view(), name="admin-questions-bulk-update"),
     path("questions/bulk-delete/", AdminQuestionBulkDeleteView.as_view(), name="admin-questions-bulk-delete"),
     path("questions/import-csv/", AdminQuestionImportCSVView.as_view(), name="admin-question-import-csv"),
+    path("questions/bulk-assign-pool/", AdminQuestionBulkAssignPoolView.as_view(), name="admin-questions-bulk-assign-pool"),
 
     # Reusable Sections Library
     path("sections/", AdminSectionListCreateView.as_view(), name="admin-sections-list-create"),
@@ -141,6 +166,7 @@ urlpatterns = [
     path("integrity-events/bulk-delete/", AdminIntegrityEventBulkDeleteView.as_view(), name="admin-integrity-events-bulk-delete"),
     path("integrity-events/<int:pk>/review/", AdminIntegrityEventReviewActionView.as_view(), name="admin-integrity-event-review"),
 
-    # Audit Logs
+    # Audit Logs & Undo
     path("audit-logs/", AdminGlobalAuditLogsView.as_view(), name="admin-audit-logs"),
+    path("audit-logs/<int:pk>/undo/", AdminAuditLogUndoView.as_view(), name="admin-audit-log-undo"),
 ]

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getAdminStats, type AdminStats } from '../../api/admin';
 import { OdometerCard } from '../../components/admin/OdometerCard';
+import { MetricCardSkeleton } from '../../components/admin/SkeletonLoaders';
 
 interface AdminOverviewViewProps {
   onNavigateTab: (tab: string) => void;
@@ -30,8 +31,35 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: '64px', textAlign: 'center', color: '#64748B' }}>
-        <div style={{ fontSize: '15px', fontWeight: 700 }}>Loading system statistics...</div>
+      <div style={{ maxWidth: '1080px' }}>
+        <h1
+          style={{
+            fontSize: '44px',
+            fontWeight: 900,
+            color: '#0F172A',
+            margin: '0 0 28px 0',
+            letterSpacing: '-0.03em',
+            lineHeight: 1.1,
+          }}
+        >
+          Welcome<br />Admin
+        </h1>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: '16px',
+            marginBottom: '32px',
+          }}
+        >
+          {Array.from({ length: 8 }).map((_, idx) => (
+            <MetricCardSkeleton key={idx} />
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
+          <div style={{ height: '180px', backgroundColor: '#E2E8F0', borderRadius: '24px', opacity: 0.6 }} className="animate-pulse" />
+          <div style={{ height: '180px', backgroundColor: '#E2E8F0', borderRadius: '24px', opacity: 0.6 }} className="animate-pulse" />
+        </div>
       </div>
     );
   }
@@ -188,11 +216,11 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
                   padding: '6px 14px',
                   fontSize: '12px',
                   fontWeight: 800,
-                  color: '#0F172A',
+                  color: stats.question_bank_health?.overall_status?.includes('Required') ? '#DC2626' : '#16A34A',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
                 }}
               >
-                Status: OK
+                Status: {stats.question_bank_health?.overall_status || 'OK'}
               </div>
             </div>
           </div>
