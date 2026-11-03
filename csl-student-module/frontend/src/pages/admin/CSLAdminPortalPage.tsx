@@ -17,6 +17,27 @@ import { AdminIntegrityEventsView } from './AdminIntegrityEventsView';
 import { AdminUsersView } from './AdminUsersView';
 import { AdminDrivesView } from './AdminDrivesView';
 import { undoAdminAuditAction } from '../../api/admin';
+import { AccessibleModal } from '../../components/admin/AccessibleModal';
+import {
+  OverviewIcon,
+  CollegesIcon,
+  CandidatesIcon,
+  AssessmentsIcon,
+  DrivesIcon,
+  QuestionBankIcon,
+  ResultsIcon,
+  IntegrityIcon,
+  LiveSessionsIcon,
+  SettingsIcon,
+  LogoutIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  DownloadIcon,
+  DeviceIcon,
+  HomeIcon,
+  UndoIcon,
+} from '../../components/common/Icons';
 import {
   ReassessStudentAccessModal,
   ExportStudentDataModal,
@@ -40,6 +61,34 @@ export function CSLAdminPortalPage() {
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('csl_admin_right_collapsed') === 'true';
   });
+  const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('csl_admin_right_width');
+    const num = saved ? parseInt(saved, 10) : 270;
+    return !isNaN(num) && num >= 220 && num <= 420 ? num : 270;
+  });
+  const [isDraggingRight, setIsDraggingRight] = useState(false);
+
+  const handleDividerPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setIsDraggingRight(true);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleDividerPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingRight) return;
+    const newWidth = Math.max(220, Math.min(420, window.innerWidth - e.clientX));
+    setRightPanelWidth(newWidth);
+    localStorage.setItem('csl_admin_right_width', String(newWidth));
+  };
+
+  const handleDividerPointerUp = (e: React.PointerEvent) => {
+    if (isDraggingRight) {
+      setIsDraggingRight(false);
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
 
   const toggleLeftSidebar = () => {
     setLeftSidebarCollapsed((prev) => {
@@ -63,15 +112,27 @@ export function CSLAdminPortalPage() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [undoToast, setUndoToast] = useState<string | null>(null);
 
-  const handleUndoAction = async (logId: number) => {
-    if (!window.confirm('Are you sure you want to revert this administrative action?')) return;
+  // Undo Confirmation Dialog state
+  const [pendingUndoAct, setPendingUndoAct] = useState<{ id: number; action_display?: string } | null>(null);
+  const [undoing, setUndoing] = useState(false);
+
+  const handleOpenUndoConfirm = (act: { id: number; action_display?: string }) => {
+    setPendingUndoAct(act);
+  };
+
+  const handleConfirmUndo = async () => {
+    if (!pendingUndoAct) return;
+    setUndoing(true);
     try {
-      const res = await undoAdminAuditAction(logId);
+      const res = await undoAdminAuditAction(pendingUndoAct.id);
       setUndoToast(res.message);
+      setPendingUndoAct(null);
       setTimeout(() => setUndoToast(null), 4000);
       loadStatsData();
     } catch (err: any) {
       alert(err.response?.data?.error || err.response?.data?.detail || 'Failed to revert action.');
+    } finally {
+      setUndoing(false);
     }
   };
 
@@ -201,9 +262,72 @@ export function CSLAdminPortalPage() {
         <div style={{ textAlign: 'center', color: '#FFFFFF', fontWeight: 700 }}>
           <div style={{ fontSize: '15px' }}>Verifying Administrator Session...</div>
         </div>
-      </div>
-    );
-  }
+        {/* Undo Action Confirmation Modal */}
+      <AccessibleModal
+        isOpen={!!pendingUndoAct}
+        onClose={() => setPendingUndoAct(null)}
+        title="Confirm Operation Rollback"
+        description="Controlled undo will revert this administrative action and record a compensating audit log entry."
+        size="sm"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#FEF3C7',
+              borderRadius: '12px',
+              border: '1px solid #FDE68A',
+              color: '#92400E',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Action to Revert:</strong> {pendingUndoAct?.action_display || 'Administrative operation'}
+            <p style={{ margin: '6px 0 0', fontSize: '12px' }}>
+              Are you sure you want to rollback this change? This action will restore the previous record state atomically.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setPendingUndoAct(null)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#475569',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={undoing}
+              onClick={handleConfirmUndo}
+              style={{
+                padding: '8px 18px',
+                borderRadius: '8px',
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: undoing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {undoing ? 'Reverting...' : 'Confirm Rollback'}
+            </button>
+          </div>
+        </div>
+      </AccessibleModal>
+    </div>
+  );
+}
 
   if (!isDesktopEligible) {
     return (
@@ -240,24 +364,87 @@ export function CSLAdminPortalPage() {
             Current resolution: {viewportDimensions.width} × {viewportDimensions.height} px
           </div>
         </div>
-      </div>
-    );
-  }
+        {/* Undo Action Confirmation Modal */}
+      <AccessibleModal
+        isOpen={!!pendingUndoAct}
+        onClose={() => setPendingUndoAct(null)}
+        title="Confirm Operation Rollback"
+        description="Controlled undo will revert this administrative action and record a compensating audit log entry."
+        size="sm"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#FEF3C7',
+              borderRadius: '12px',
+              border: '1px solid #FDE68A',
+              color: '#92400E',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Action to Revert:</strong> {pendingUndoAct?.action_display || 'Administrative operation'}
+            <p style={{ margin: '6px 0 0', fontSize: '12px' }}>
+              Are you sure you want to rollback this change? This action will restore the previous record state atomically.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setPendingUndoAct(null)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#475569',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={undoing}
+              onClick={handleConfirmUndo}
+              style={{
+                padding: '8px 18px',
+                borderRadius: '8px',
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: undoing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {undoing ? 'Reverting...' : 'Confirm Rollback'}
+            </button>
+          </div>
+        </div>
+      </AccessibleModal>
+    </div>
+  );
+}
 
   if (!adminUser) {
     return <AdminLoginPage onLoginSuccess={handleLoginSuccess} />;
   }
 
   const navItems = [
-    { key: 'overview', label: 'Overview', icon: '📊' },
-    { key: 'colleges', label: 'Colleges', icon: '🏛️' },
-    { key: 'candidates', label: 'Candidates', icon: '🎓' },
-    { key: 'assessments', label: 'Assessments', icon: '📝' },
-    { key: 'drives', label: 'Drives', icon: '🚀' },
-    { key: 'questions', label: 'Question Bank', icon: '📚' },
-    { key: 'results', label: 'Results', icon: '📈' },
-    { key: 'integrity', label: 'Integrity', icon: '🛡️' },
-    { key: 'live', label: 'Live Sessions', icon: '🔴' },
+    { key: 'overview', label: 'Overview', icon: <OverviewIcon size={18} /> },
+    { key: 'colleges', label: 'Colleges', icon: <CollegesIcon size={18} /> },
+    { key: 'candidates', label: 'Candidates', icon: <CandidatesIcon size={18} /> },
+    { key: 'assessments', label: 'Assessments', icon: <AssessmentsIcon size={18} /> },
+    { key: 'drives', label: 'Drives', icon: <DrivesIcon size={18} /> },
+    { key: 'questions', label: 'Question Bank', icon: <QuestionBankIcon size={18} /> },
+    { key: 'results', label: 'Results', icon: <ResultsIcon size={18} /> },
+    { key: 'integrity', label: 'Integrity', icon: <IntegrityIcon size={18} /> },
+    { key: 'live', label: 'Live Sessions', icon: <LiveSessionsIcon size={18} /> },
   ];
 
   return (
@@ -289,6 +476,36 @@ export function CSLAdminPortalPage() {
           transition: 'width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease, padding 0.2s ease',
         }}
       >
+        {/* Floating Center Collapse Button */}
+        <button
+          type="button"
+          onClick={toggleLeftSidebar}
+          title={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          aria-label={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          style={{
+            position: 'absolute',
+            top: '50%',
+            right: '-14px',
+            transform: 'translateY(-50%)',
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            backgroundColor: '#072C77',
+            color: '#FFFFFF',
+            border: '2px solid #FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            zIndex: 50,
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
+            transition: 'all 0.15s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0052CC')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#072C77')}
+        >
+          {leftSidebarCollapsed ? <ChevronRightIcon size={14} /> : <ChevronLeftIcon size={14} />}
+        </button>
         <div>
           {/* Top Admin Active Session Card */}
           <div
@@ -389,7 +606,7 @@ export function CSLAdminPortalPage() {
                     if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  <span style={{ fontSize: '15px' }}>{item.icon}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{item.icon}</span>
                   {!leftSidebarCollapsed && <span>{item.label}</span>}
                 </button>
               );
@@ -398,28 +615,9 @@ export function CSLAdminPortalPage() {
         </div>
 
         {/* Bottom Circular Controls: Settings Gear & Logout */}
-        <div style={{ display: 'flex', flexDirection: leftSidebarCollapsed ? 'column' : 'row', alignItems: 'center', gap: '10px', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: leftSidebarCollapsed ? 'column' : 'row', alignItems: 'center', gap: '12px', justifyContent: 'center' }}>
           <button
-            onClick={toggleLeftSidebar}
-            title={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '50%',
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
-              color: '#FFFFFF',
-              border: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              fontWeight: 800,
-              fontSize: '12px',
-            }}
-          >
-            {leftSidebarCollapsed ? '▶' : '◀'}
-          </button>
-          <button
+            type="button"
             onClick={() => setActiveTab('config')}
             title="System Configuration"
             style={{
@@ -436,13 +634,11 @@ export function CSLAdminPortalPage() {
               boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
+            <SettingsIcon size={20} />
           </button>
 
           <button
+            type="button"
             onClick={handleLogout}
             title="Sign Out"
             style={{
@@ -459,11 +655,7 @@ export function CSLAdminPortalPage() {
               boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-              <polyline points="16 17 21 12 16 7"></polyline>
-              <line x1="21" y1="12" x2="9" y2="12"></line>
-            </svg>
+            <LogoutIcon size={20} />
           </button>
         </div>
       </aside>
@@ -654,13 +846,48 @@ export function CSLAdminPortalPage() {
             )}
           </main>
 
-          {/* ─── 3. RIGHT SIDEBAR (Quick Actions & Previous Activities, Collapsible) ─── */}
+          {/* Draggable Resize Divider */}
+          {!rightPanelCollapsed && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize Quick Access Panel"
+              onPointerDown={handleDividerPointerDown}
+              onPointerMove={handleDividerPointerMove}
+              onPointerUp={handleDividerPointerUp}
+              onPointerCancel={handleDividerPointerUp}
+              title="Drag to resize panel"
+              style={{
+                width: '8px',
+                cursor: 'col-resize',
+                backgroundColor: isDraggingRight ? '#0052CC' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none',
+                touchAction: 'none',
+                zIndex: 25,
+                transition: 'background-color 0.15s ease',
+              }}
+            >
+              <div
+                style={{
+                  width: '3px',
+                  height: '32px',
+                  borderRadius: '2px',
+                  backgroundColor: isDraggingRight ? '#FFFFFF' : '#CBD5E1',
+                }}
+              />
+            </div>
+          )}
+
+          {/* 3. RIGHT SIDEBAR (Quick Actions & Previous Activities, Collapsible & Resizable) */}
           {!rightPanelCollapsed && (
             <aside
               style={{
-                width: '250px',
-                minWidth: '250px',
-                maxWidth: '250px',
+                width: `${rightPanelWidth}px`,
+                minWidth: `${rightPanelWidth}px`,
+                maxWidth: `${rightPanelWidth}px`,
                 backgroundColor: '#F8F9FA',
                 borderLeft: '1px solid #E2E8F0',
                 padding: '24px 18px',
@@ -669,7 +896,7 @@ export function CSLAdminPortalPage() {
                 flexDirection: 'column',
                 gap: '24px',
                 overflowY: 'auto',
-                transition: 'all 0.2s ease',
+                transition: isDraggingRight ? 'none' : 'width 0.2s ease',
               }}
             >
               {/* Quick Actions Container (Mockups 1-5) */}
@@ -703,6 +930,7 @@ export function CSLAdminPortalPage() {
                 >
                   {/* 1. Add / Create Assessment */}
                   <button
+                    type="button"
                     onClick={() => setActiveTab('assessments')}
                     title="Create New Assessment"
                     style={{
@@ -720,14 +948,12 @@ export function CSLAdminPortalPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
                     onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="12" y1="5" x2="12" y2="19"></line>
-                      <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
+                    <PlusIcon size={28} color="#0F172A" />
                   </button>
 
                   {/* 2. Download / Export Student CSV */}
                   <button
+                    type="button"
                     onClick={() => setShowExportModal(true)}
                     title="Export Student Data CSV"
                     style={{
@@ -745,15 +971,12 @@ export function CSLAdminPortalPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
                     onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="7 10 12 15 17 10"></polyline>
-                      <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
+                    <DownloadIcon size={26} color="#0F172A" />
                   </button>
 
-                  {/* 3. Reassess Student Access */}
+                  {/* 3. Reassess Student Access / Device Monitoring */}
                   <button
+                    type="button"
                     onClick={() => setShowReassessModal(true)}
                     title="Reassess Student Access"
                     style={{
@@ -771,16 +994,14 @@ export function CSLAdminPortalPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
                     onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                      <line x1="12" y1="18" x2="12.01" y2="18"></line>
-                    </svg>
+                    <DeviceIcon size={26} color="#0F172A" />
                   </button>
 
-                  {/* 4. Import Questions CSV */}
+                  {/* 4. Home / Overview */}
                   <button
-                    onClick={() => setShowImportModal(true)}
-                    title="Import Questions CSV"
+                    type="button"
+                    onClick={() => setActiveTab('overview')}
+                    title="Return to Overview Dashboard"
                     style={{
                       backgroundColor: '#FFFFFF',
                       border: '1.5px solid #C7D0DE',
@@ -796,10 +1017,7 @@ export function CSLAdminPortalPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
                     onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
+                    <HomeIcon size={26} color="#0F172A" />
                   </button>
                 </div>
               </div>
@@ -837,9 +1055,13 @@ export function CSLAdminPortalPage() {
                           </span>
                           {act.can_undo && (
                             <button
-                              onClick={() => handleUndoAction(act.id)}
+                              type="button"
+                              onClick={() => handleOpenUndoConfirm(act)}
                               style={{
-                                padding: '2px 6px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '2px 8px',
                                 borderRadius: '4px',
                                 backgroundColor: '#0052CC',
                                 color: '#FFFFFF',
@@ -850,7 +1072,7 @@ export function CSLAdminPortalPage() {
                               }}
                               title="Revert / Undo action"
                             >
-                              ↩ Undo
+                              <UndoIcon size={11} color="#FFFFFF" /> Undo
                             </button>
                           )}
                         </div>
@@ -919,6 +1141,69 @@ export function CSLAdminPortalPage() {
         onClose={() => setShowImportModal(false)}
         onSuccess={loadStatsData}
       />
+      {/* Undo Action Confirmation Modal */}
+      <AccessibleModal
+        isOpen={!!pendingUndoAct}
+        onClose={() => setPendingUndoAct(null)}
+        title="Confirm Operation Rollback"
+        description="Controlled undo will revert this administrative action and record a compensating audit log entry."
+        size="sm"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#FEF3C7',
+              borderRadius: '12px',
+              border: '1px solid #FDE68A',
+              color: '#92400E',
+              fontSize: '13px',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>Action to Revert:</strong> {pendingUndoAct?.action_display || 'Administrative operation'}
+            <p style={{ margin: '6px 0 0', fontSize: '12px' }}>
+              Are you sure you want to rollback this change? This action will restore the previous record state atomically.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setPendingUndoAct(null)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#475569',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={undoing}
+              onClick={handleConfirmUndo}
+              style={{
+                padding: '8px 18px',
+                borderRadius: '8px',
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: undoing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {undoing ? 'Reverting...' : 'Confirm Rollback'}
+            </button>
+          </div>
+        </div>
+      </AccessibleModal>
     </div>
   );
 }

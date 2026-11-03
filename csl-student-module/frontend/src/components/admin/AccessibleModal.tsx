@@ -1,14 +1,24 @@
 import React, { useEffect, useRef } from 'react';
+import { CloseIcon } from '../common/Icons';
 
-interface AccessibleModalProps {
+export interface AccessibleModalProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
   description?: string;
   children: React.ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   maxWidth?: string;
   closeOnBackdropClick?: boolean;
 }
+
+const SIZE_MAP: Record<string, string> = {
+  sm: '440px',
+  md: '580px',
+  lg: '760px',
+  xl: '980px',
+  full: '96vw',
+};
 
 export function AccessibleModal({
   isOpen,
@@ -16,78 +26,99 @@ export function AccessibleModal({
   title,
   description,
   children,
-  maxWidth = '640px',
+  size = 'md',
+  maxWidth,
   closeOnBackdropClick = true,
 }: AccessibleModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const prevOpenRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+
+  // Keep latest onClose callback without re-triggering effects
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (isOpen) {
-      previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
+      if (!prevOpenRef.current) {
+        // Modal just opened: save active element and focus inside
+        previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
 
-      // Prevent body scrolling
-      document.body.style.overflow = 'hidden';
+        // Prevent body scrolling
+        document.body.style.overflow = 'hidden';
 
-      // Focus first focusable element inside modal or modal container itself
-      const timer = setTimeout(() => {
-        if (modalRef.current) {
-          const focusable = modalRef.current.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusable.length > 0) {
-            focusable[0].focus();
-          } else {
-            modalRef.current.focus();
-          }
-        }
-      }, 50);
-
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onClose();
-          return;
-        }
-
-        if (e.key === 'Tab') {
-          if (!modalRef.current) return;
-          const focusable = modalRef.current.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusable.length === 0) return;
-
-          const first = focusable[0];
-          const last = focusable[focusable.length - 1];
-
-          if (e.shiftKey) {
-            if (document.activeElement === first) {
-              e.preventDefault();
-              last.focus();
-            }
-          } else {
-            if (document.activeElement === last) {
-              e.preventDefault();
-              first.focus();
+        const timer = setTimeout(() => {
+          if (modalRef.current) {
+            const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+              'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            );
+            if (focusable.length > 0) {
+              focusable[0].focus();
+            } else {
+              modalRef.current.focus();
             }
           }
-        }
-      };
+        }, 50);
 
-      window.addEventListener('keydown', handleKeyDown);
-
-      return () => {
-        clearTimeout(timer);
-        window.removeEventListener('keydown', handleKeyDown);
+        prevOpenRef.current = true;
+        return () => clearTimeout(timer);
+      }
+    } else {
+      if (prevOpenRef.current) {
+        prevOpenRef.current = false;
         document.body.style.overflow = '';
         if (previouslyFocusedElementRef.current) {
           previouslyFocusedElementRef.current.focus();
         }
-      };
+      }
     }
-  }, [isOpen, onClose]);
+  }, [isOpen]);
+
+  // Global keydown listeners for Escape & Tab focus-trap
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+
+      if (e.key === 'Tab') {
+        if (!modalRef.current) return;
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const resolvedMaxWidth = maxWidth || SIZE_MAP[size] || '640px';
+  const isFull = size === 'full';
 
   return (
     <div
@@ -101,8 +132,8 @@ export function AccessibleModal({
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 9999,
-        padding: '16px',
-        animation: 'fadeIn 0.15s ease-out',
+        padding: isFull ? '12px' : '16px',
+        animation: 'cslModalFadeIn 0.15s ease-out',
       }}
       onClick={(e) => {
         if (closeOnBackdropClick && e.target === e.currentTarget) {
@@ -110,6 +141,15 @@ export function AccessibleModal({
         }
       }}
     >
+      <style>{`
+        @keyframes cslModalFadeIn {
+          from { opacity: 0; transform: scale(0.98); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          * { animation: none !important; transition: none !important; }
+        }
+      `}</style>
       <div
         ref={modalRef}
         role="dialog"
@@ -119,10 +159,11 @@ export function AccessibleModal({
         tabIndex={-1}
         style={{
           backgroundColor: '#FFFFFF',
-          borderRadius: '24px',
+          borderRadius: isFull ? '16px' : '24px',
           width: '100%',
-          maxWidth,
-          maxHeight: '90vh',
+          maxWidth: resolvedMaxWidth,
+          height: isFull ? '94vh' : undefined,
+          maxHeight: isFull ? '94vh' : '90vh',
           display: 'flex',
           flexDirection: 'column',
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05)',
@@ -137,7 +178,7 @@ export function AccessibleModal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '20px 24px',
+            padding: '18px 24px',
             borderBottom: '1px solid #E2E8F0',
             backgroundColor: '#F8FAFC',
           }}
@@ -147,7 +188,7 @@ export function AccessibleModal({
               id="accessible-modal-title"
               style={{
                 margin: 0,
-                fontSize: '20px',
+                fontSize: '18px',
                 fontWeight: 700,
                 color: '#0F172A',
                 letterSpacing: '-0.02em',
@@ -159,8 +200,8 @@ export function AccessibleModal({
               <p
                 id="accessible-modal-desc"
                 style={{
-                  margin: '4px 0 0',
-                  fontSize: '13px',
+                  margin: '3px 0 0',
+                  fontSize: '12px',
                   color: '#64748B',
                 }}
               >
@@ -177,15 +218,13 @@ export function AccessibleModal({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: '36px',
-              height: '36px',
+              width: '32px',
+              height: '32px',
               borderRadius: '50%',
               border: '1px solid #E2E8F0',
               backgroundColor: '#FFFFFF',
               color: '#64748B',
               cursor: 'pointer',
-              fontSize: '18px',
-              fontWeight: 'bold',
               transition: 'background-color 0.15s, color 0.15s',
             }}
             onMouseEnter={(e) => {
@@ -197,7 +236,7 @@ export function AccessibleModal({
               e.currentTarget.style.color = '#64748B';
             }}
           >
-            ✕
+            <CloseIcon size={16} />
           </button>
         </div>
 

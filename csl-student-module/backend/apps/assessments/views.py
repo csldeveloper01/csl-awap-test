@@ -46,6 +46,7 @@ from .services import (
 from .tokens import (
     CandidateAssessmentAuthentication,
     generate_candidate_token,
+    decode_candidate_token,
     get_authorized_candidate,
     verify_attempt_ownership,
 )
@@ -257,6 +258,134 @@ class StudentAttemptRecoveryView(APIView):
                 "delivery_mode": attempt.assessment.delivery_mode if attempt.assessment else "MCQ",
                 "remaining_seconds": attempt.get_remaining_seconds(),
             },
+        })
+
+
+class DriveLinkCandidateView(APIView):
+    """
+    Allows existing registered candidates (either authenticated via candidate session token
+    or verified via registration number + email/phone) to link their profile to a Drive
+    without creating duplicate candidate records or re-entering registration forms.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        drive_code = (request.data.get("drive_code") or "").strip()
+        access_code = (request.data.get("access_code") or "").strip()
+        invite_token = (request.data.get("invite_token") or "").strip()
+        reg_number = (request.data.get("register_number") or "").strip().upper()
+        verification_factor = (request.data.get("verification_factor") or "").strip().lower()
+        candidate_token = (request.data.get("token") or "").strip()
+
+        # 1. Resolve Candidate
+        candidate = None
+        auth_header = request.headers.get("Authorization", "")
+        token_to_check = candidate_token
+        if auth_header.startswith("Bearer "):
+            token_to_check = auth_header.split(" ", 1)[1].strip()
+        elif "X-Assessment-Token" in request.headers:
+            token_to_check = request.headers["X-Assessment-Token"].strip()
+
+        if token_to_check:
+            try:
+                data = decode_candidate_token(token_to_check)
+                candidate_id = data.get("candidate_id")
+                candidate = Candidate.objects.filter(id=candidate_id, is_active=True).first()
+            except Exception:
+                pass
+
+        if not candidate and reg_number and verification_factor:
+            candidate = (
+                Candidate.objects.filter(register_number=reg_number, email__iexact=verification_factor, is_active=True).first()
+                or Candidate.objects.filter(register_number=reg_number, phone_number=verification_factor, is_active=True).first()
+            )
+
+        if not candidate:
+            return Response(
+                {"detail": "Candidate profile not recognized. Please sign in with your Register Number and registered Email/Mobile."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # 2. Resolve Drive and Invitation
+        target_drive = None
+        invitation_obj = None
+
+        if invite_token:
+            invitation_obj = (
+                DriveInvitation.objects.filter(token_hash=invite_token, is_active=True).first()
+                or DriveInvitation.objects.filter(access_code__iexact=invite_token, is_active=True).first()
+            )
+            if not invitation_obj:
+                return Response({"detail": "Invalid or inactive invitation token."}, status=status.HTTP_400_BAD_REQUEST)
+            if not invitation_obj.is_valid():
+                return Response({"detail": "This invitation has expired or reached its maximum usage limit."}, status=status.HTTP_400_BAD_REQUEST)
+            target_drive = invitation_obj.drive
+
+        if access_code and not target_drive:
+            inv_by_code = DriveInvitation.objects.filter(access_code__iexact=access_code, is_active=True).first()
+            if inv_by_code:
+                if not inv_by_code.is_valid():
+                    return Response({"detail": "This access code has expired or reached its maximum usage limit."}, status=status.HTTP_400_BAD_REQUEST)
+                invitation_obj = inv_by_code
+                target_drive = inv_by_code.drive
+            else:
+                target_drive = Drive.objects.filter(code__iexact=access_code).first()
+
+        if drive_code and not target_drive:
+            target_drive = Drive.objects.filter(code__iexact=drive_code).first()
+
+        if not target_drive:
+            return Response({"detail": "Recruitment drive not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # 3. Validate Drive Lifecycle
+        now = timezone.now()
+        if target_drive.registration_start and now < target_drive.registration_start:
+            return Response({"detail": f"Registration for drive '{target_drive.name}' has not opened yet."}, status=status.HTTP_403_FORBIDDEN)
+        if target_drive.registration_end and now > target_drive.registration_end:
+            return Response({"detail": f"Registration for drive '{target_drive.name}' has closed."}, status=status.HTTP_403_FORBIDDEN)
+        if target_drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
+            return Response({"detail": f"Drive '{target_drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
+
+        college_obj = candidate.college_ref
+        if target_drive.eligible_colleges.exists():
+            if not college_obj or not target_drive.eligible_colleges.filter(id=college_obj.id).exists():
+                return Response({"detail": f"Your institution is not eligible for drive '{target_drive.name}'."}, status=status.HTTP_403_FORBIDDEN)
+
+        if target_drive.visibility == Drive.Visibility.INVITE_ONLY and not invitation_obj:
+            return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 4. Atomically link Candidate to Drive and Drive Assessments
+        with transaction.atomic():
+            reg_source = DriveRegistration.Source.PUBLIC_URL
+            if invitation_obj:
+                reg_source = DriveRegistration.Source.INVITE_LINK if invite_token else DriveRegistration.Source.ACCESS_CODE
+            drive_reg, created_reg = DriveRegistration.objects.get_or_create(
+                drive=target_drive,
+                candidate=candidate,
+                defaults={"registration_source": reg_source, "registration_status": DriveRegistration.Status.REGISTERED},
+            )
+            if invitation_obj and created_reg:
+                invitation_obj.usage_count += 1
+                invitation_obj.save(update_fields=["usage_count"])
+
+            for da in target_drive.drive_assessments.filter(registration_enabled=True).select_related("assessment"):
+                a = da.assessment
+                if not a.eligible_colleges.exists() or (college_obj and a.eligible_colleges.filter(id=college_obj.id).exists()):
+                    a.eligible_candidates.add(candidate)
+
+            token = generate_candidate_token(str(candidate.id))
+
+        return Response({
+            "success": True,
+            "message": f"Successfully linked your account to {target_drive.name}.",
+            "candidate_id": str(candidate.id),
+            "full_name": candidate.full_name,
+            "register_number": candidate.register_number,
+            "college": candidate.college,
+            "drive_id": str(target_drive.id),
+            "drive_name": target_drive.name,
+            "drive_code": target_drive.code,
+            "assessment_token": token,
         })
 
 

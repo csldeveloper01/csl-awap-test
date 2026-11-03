@@ -13,6 +13,7 @@ import {
   type AdminSection,
 } from '../../api/admin';
 import { OdometerCard } from '../../components/admin/OdometerCard';
+import { generateCodeFromTitle } from '../../utils/codeGenerator';
 
 interface AdminQuestionPoolsViewProps {
   onCreateQuestion?: () => void;
@@ -48,6 +49,7 @@ export function AdminQuestionPoolsView({
     is_active: true,
   });
   const [submittingForm, setSubmittingForm] = useState(false);
+  const [useCustomCode, setUseCustomCode] = useState(false);
   const [formError, setFormError] = useState('');
 
   // Manage Questions Modal / Drawer
@@ -97,12 +99,14 @@ export function AdminQuestionPoolsView({
       description: '',
       is_active: true,
     });
+    setUseCustomCode(false);
     setFormError('');
     setShowFormModal(true);
   };
 
   const handleOpenEditModal = (pool: AdminQuestionPool) => {
     setEditingPool(pool);
+    setUseCustomCode(true);
     setFormData({
       name: pool.name,
       code: pool.code,
@@ -920,7 +924,14 @@ export function AdminQuestionPoolsView({
                   required
                   placeholder="e.g. Core Java Assessment Pool"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFormData((prev) => ({
+                      ...prev,
+                      name: val,
+                      code: useCustomCode ? prev.code : generateCodeFromTitle(val, 24),
+                    }));
+                  }}
                   style={{
                     width: '100%',
                     padding: '8px 12px',
@@ -933,9 +944,26 @@ export function AdminQuestionPoolsView({
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Unique Code *
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                    Unique Code *
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={useCustomCode}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseCustomCode(checked);
+                        if (!checked) {
+                          setFormData((prev) => ({ ...prev, code: generateCodeFromTitle(prev.name, 24) }));
+                        }
+                      }}
+                      style={{ accentColor: '#0052CC', cursor: 'pointer' }}
+                    />
+                    Custom
+                  </label>
+                </div>
                 <input
                   type="text"
                   required
@@ -950,6 +978,7 @@ export function AdminQuestionPoolsView({
                     border: '1px solid #CBD5E1',
                     borderRadius: '6px',
                     boxSizing: 'border-box',
+                    backgroundColor: useCustomCode ? '#FFFFFF' : '#F8FAFC',
                   }}
                 />
               </div>

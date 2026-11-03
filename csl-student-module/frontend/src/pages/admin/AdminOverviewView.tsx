@@ -204,7 +204,7 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
                 }}
               >
                 <span style={{ fontSize: '36px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                  {String(stats.pools_count ?? stats.assessments_count ?? 0).padStart(2, '0')}
+                  {String(stats.total_questions_count ?? 0).padStart(2, '0')}
                 </span>
               </div>
 
@@ -216,12 +216,16 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
                   padding: '6px 14px',
                   fontSize: '12px',
                   fontWeight: 800,
-                  color: stats.question_bank_health?.overall_status?.includes('Required') ? '#DC2626' : '#16A34A',
+                  color: stats.question_bank_health?.overall_status?.includes('Required') || (stats.unassigned_questions_count && stats.unassigned_questions_count > 0) ? '#D97706' : '#16A34A',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
                 }}
               >
-                Status: {stats.question_bank_health?.overall_status || 'OK'}
+                Status: {stats.question_bank_health?.overall_status || (stats.unassigned_questions_count && stats.unassigned_questions_count > 0 ? 'Unassigned Items' : 'OK')}
               </div>
+            </div>
+
+            <div style={{ fontSize: '11px', color: '#475569', fontWeight: 600, marginBottom: '14px' }}>
+              Global Questions: {stats.total_questions_count ?? 0} | Pools: {stats.pools_count ?? 0} | Unassigned: {stats.unassigned_questions_count ?? 0}
             </div>
           </div>
 

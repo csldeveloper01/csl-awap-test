@@ -8,6 +8,7 @@ import {
   type AdminAssessment,
   fetchAdminDrives,
   createAdminDrive,
+  updateAdminDrive,
   fetchAdminDriveDetail,
   archiveAdminDrive,
   addAdminDriveAssessment,
@@ -24,6 +25,8 @@ import {
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { AccessibleModal } from '../../components/admin/AccessibleModal';
 import { FoldedCardSkeleton, MetricCardSkeleton } from '../../components/admin/SkeletonLoaders';
+import { generateCodeFromTitle } from '../../utils/codeGenerator';
+import { SearchIcon, PlusIcon } from '../../components/common/Icons';
 
 interface AdminDrivesViewProps {
   colleges?: AdminCollege[];
@@ -38,6 +41,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
 
   // Create Drive Modal State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [useCustomCode, setUseCustomCode] = useState(false);
   const [createForm, setCreateForm] = useState({
     name: '',
     code: '',
@@ -51,6 +55,24 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
     eligible_college_ids: [] as number[],
   });
   const [creating, setCreating] = useState(false);
+
+  // Edit Drive Modal State
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingDrive, setEditingDrive] = useState<AdminDrive | AdminDriveDetail | null>(null);
+  const [editUseCustomCode, setEditUseCustomCode] = useState(true);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    code: '',
+    description: '',
+    visibility: 'PUBLIC' as 'PUBLIC' | 'INVITE_ONLY',
+    status: 'ACTIVE' as 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | 'CLOSED',
+    start_date: '',
+    end_date: '',
+    registration_start: '',
+    registration_end: '',
+    eligible_college_ids: [] as number[],
+  });
+  const [updating, setUpdating] = useState(false);
 
   // Manage Drive Modal State
   const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
@@ -204,6 +226,55 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
       showToast(err.response?.data?.error || err.response?.data?.code?.[0] || 'Failed to create drive.');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleOpenEdit = (drive: AdminDrive | AdminDriveDetail) => {
+    setEditingDrive(drive);
+    setEditForm({
+      name: drive.name,
+      code: drive.code,
+      description: drive.description || '',
+      visibility: drive.visibility,
+      status: drive.status,
+      start_date: drive.start_date ? drive.start_date.slice(0, 16) : '',
+      end_date: drive.end_date ? drive.end_date.slice(0, 16) : '',
+      registration_start: drive.registration_start ? drive.registration_start.slice(0, 16) : '',
+      registration_end: drive.registration_end ? drive.registration_end.slice(0, 16) : '',
+      eligible_college_ids: [],
+    });
+    setEditUseCustomCode(true);
+    setIsEditOpen(true);
+  };
+
+  const handleUpdateDrive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDrive) return;
+    if (!editForm.name.trim() || !editForm.code.trim()) {
+      showToast('Name and code are required.');
+      return;
+    }
+
+    setUpdating(true);
+    try {
+      const updated = await updateAdminDrive(editingDrive.id, {
+        ...editForm,
+        start_date: editForm.start_date ? new Date(editForm.start_date).toISOString() : null,
+        end_date: editForm.end_date ? new Date(editForm.end_date).toISOString() : null,
+        registration_start: editForm.registration_start ? new Date(editForm.registration_start).toISOString() : null,
+        registration_end: editForm.registration_end ? new Date(editForm.registration_end).toISOString() : null,
+      });
+      showToast(`Drive "${updated.name}" updated successfully.`);
+      setIsEditOpen(false);
+      setEditingDrive(null);
+      loadDrives();
+      if (selectedDriveId === editingDrive.id) {
+        setDriveDetail(updated);
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.error || err.response?.data?.detail || 'Failed to update drive.');
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -367,7 +438,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
             gap: '8px',
           }}
         >
-          <span style={{ fontSize: '18px' }}>+</span> Create New Drive
+          <PlusIcon size={16} /> Create New Drive
         </button>
       </div>
 
@@ -403,7 +474,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
-          <span style={{ color: '#0052CC', fontSize: '18px' }}>🔍</span>
+          <SearchIcon size={18} color="#0052CC" />
           <input
             type="text"
             placeholder="Search by Drive Name, Code or Description..."
@@ -593,6 +664,21 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                 >
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button
+                      onClick={() => handleOpenEdit(drive)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid #CBD5E1',
+                        backgroundColor: '#FFFFFF',
+                        color: '#0F172A',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
                       onClick={() => handleArchiveDrive(drive.id, drive.name)}
                       style={{
                         padding: '6px 12px',
@@ -669,7 +755,14 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                 required
                 placeholder="e.g. Tamil Nadu State Mega Campus Drive 2026"
                 value={createForm.name}
-                onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setCreateForm((prev) => ({
+                    ...prev,
+                    name: val,
+                    code: useCustomCode ? prev.code : generateCodeFromTitle(val),
+                  }));
+                }}
                 style={{
                   width: '100%',
                   padding: '10px 14px',
@@ -681,13 +774,30 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
               />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-                Drive Code *
-              </label>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                  Drive Code *
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={useCustomCode}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setUseCustomCode(checked);
+                      if (!checked) {
+                        setCreateForm((prev) => ({ ...prev, code: generateCodeFromTitle(prev.name) }));
+                      }
+                    }}
+                    style={{ accentColor: '#0052CC', cursor: 'pointer' }}
+                  />
+                  Custom
+                </label>
+              </div>
               <input
                 type="text"
                 required
-                placeholder="TN2026MEGA"
+                placeholder="TN-2026-MEGA"
                 value={createForm.code}
                 onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
                 style={{
@@ -698,6 +808,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                   fontSize: '14px',
                   fontFamily: 'monospace',
                   boxSizing: 'border-box',
+                  backgroundColor: useCustomCode ? '#FFFFFF' : '#F8FAFC',
                 }}
               />
             </div>
@@ -838,6 +949,269 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
               }}
             >
               {creating ? 'Creating...' : 'Create Drive'}
+            </button>
+          </div>
+        </form>
+      </AccessibleModal>
+
+      {/* EDIT DRIVE MODAL */}
+      <AccessibleModal
+        isOpen={isEditOpen}
+        onClose={() => {
+          setIsEditOpen(false);
+          setEditingDrive(null);
+        }}
+        title={editingDrive ? `Edit Drive: ${editingDrive.name}` : 'Edit Drive'}
+        description="Update drive name, code, status, operational dates, and visibility configuration."
+        maxWidth="650px"
+      >
+        <form onSubmit={handleUpdateDrive} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Drive Name *
+              </label>
+              <input
+                type="text"
+                required
+                value={editForm.name}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setEditForm((prev) => ({
+                    ...prev,
+                    name: val,
+                    code: editUseCustomCode ? prev.code : generateCodeFromTitle(val),
+                  }));
+                }}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                  Drive Code *
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={editUseCustomCode}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setEditUseCustomCode(checked);
+                      if (!checked) {
+                        setEditForm((prev) => ({ ...prev, code: generateCodeFromTitle(prev.name) }));
+                      }
+                    }}
+                    style={{ accentColor: '#0052CC', cursor: 'pointer' }}
+                  />
+                  Custom
+                </label>
+              </div>
+              <input
+                type="text"
+                required
+                value={editForm.code}
+                onChange={(e) => setEditForm({ ...editForm, code: e.target.value.toUpperCase() })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  fontFamily: 'monospace',
+                  boxSizing: 'border-box',
+                  backgroundColor: editUseCustomCode ? '#FFFFFF' : '#F8FAFC',
+                }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+              Description
+            </label>
+            <textarea
+              rows={2}
+              placeholder="Candidate instructions, target batch years, and job profiles..."
+              value={editForm.description}
+              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+              style={{
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                border: '1px solid #CBD5E1',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Visibility
+              </label>
+              <select
+                value={editForm.visibility}
+                onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value as any })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <option value="PUBLIC">Public (Open for direct candidate link)</option>
+                <option value="INVITE_ONLY">Invite Only (Requires access code / token)</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Status
+              </label>
+              <select
+                value={editForm.status}
+                onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <option value="ACTIVE">Active</option>
+                <option value="DRAFT">Draft</option>
+                <option value="CLOSED">Closed</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Drive Start Date
+              </label>
+              <input
+                type="datetime-local"
+                value={editForm.start_date}
+                onChange={(e) => setEditForm({ ...editForm, start_date: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Drive End Date
+              </label>
+              <input
+                type="datetime-local"
+                value={editForm.end_date}
+                onChange={(e) => setEditForm({ ...editForm, end_date: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Registration Opens
+              </label>
+              <input
+                type="datetime-local"
+                value={editForm.registration_start}
+                onChange={(e) => setEditForm({ ...editForm, registration_start: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Registration Closes
+              </label>
+              <input
+                type="datetime-local"
+                value={editForm.registration_end}
+                onChange={(e) => setEditForm({ ...editForm, registration_end: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setIsEditOpen(false);
+                setEditingDrive(null);
+              }}
+              style={{
+                padding: '10px 18px',
+                borderRadius: '10px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#475569',
+                fontWeight: 600,
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={updating}
+              style={{
+                padding: '10px 22px',
+                borderRadius: '10px',
+                backgroundColor: '#0052CC',
+                color: '#FFFFFF',
+                fontWeight: 600,
+                fontSize: '14px',
+                border: 'none',
+                cursor: updating ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {updating ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -989,6 +1363,28 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                     Students can visit this link directly or enter access code{' '}
                     <strong style={{ fontFamily: 'monospace' }}>{driveDetail.code}</strong> on the registration portal.
                   </p>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEdit(driveDetail)}
+                    style={{
+                      padding: '8px 18px',
+                      borderRadius: '8px',
+                      border: '1px solid #CBD5E1',
+                      backgroundColor: '#FFFFFF',
+                      color: '#0F172A',
+                      fontWeight: 600,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    Edit Drive Details
+                  </button>
                 </div>
               </div>
             )}

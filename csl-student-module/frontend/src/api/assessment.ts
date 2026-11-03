@@ -453,3 +453,36 @@ export const resolveAccessCode = async (code: string): Promise<ResolveAccessCode
   const res = await assessmentApi.post<ResolveAccessCodeResult>('/resolve-code/', { code });
   return res.data;
 };
+
+
+export interface DriveLinkPayload {
+  drive_code?: string;
+  access_code?: string;
+  invite_token?: string;
+  register_number?: string;
+  verification_factor?: string;
+  token?: string;
+}
+
+export interface DriveLinkResponse {
+  success: boolean;
+  message: string;
+  candidate_id: string;
+  full_name: string;
+  register_number: string;
+  college: string;
+  drive_id: string;
+  drive_name: string;
+  drive_code: string;
+  assessment_token: string;
+}
+
+export const linkCandidateToDrive = async (payload: DriveLinkPayload): Promise<DriveLinkResponse> => {
+  const res = await assessmentApi.post<DriveLinkResponse>('/drive-link/', payload);
+  if (res.data.assessment_token) {
+    sessionStorage.setItem('csl_assessment_token', res.data.assessment_token);
+    sessionStorage.setItem('assessment_token', res.data.assessment_token);
+    localStorage.setItem('csl_assessment_token', res.data.assessment_token);
+  }
+  return res.data;
+};

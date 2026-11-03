@@ -337,3 +337,56 @@ class Phase22WorkflowTests(TestCase):
         self.assertIn("Tamil Nadu colleges ingested successfully", out.getvalue())
         self.assertTrue(College.objects.filter(code="IITM", is_verified=True).exists())
         self.assertTrue(College.objects.filter(code="CIT", is_verified=True).exists())
+
+    def test_drive_link_existing_candidate_flows(self):
+        """Verify existing candidates can link to drives without profile duplication."""
+        drive1 = Drive.objects.create(
+            name="Tamil Nadu Super Drive",
+            code="TNSUPER",
+            status=Drive.Status.ACTIVE,
+            visibility=Drive.Visibility.PUBLIC,
+        )
+        DriveAssessment.objects.create(drive=drive1, assessment=self.assessment)
+
+        cand = Candidate.objects.create(
+            full_name="Meenakshi S",
+            register_number="710022104099",
+            email="meenakshi@psgtech.edu",
+            phone_number="9876543210",
+            college_ref=self.college,
+            college=self.college.name,
+        )
+        initial_cand_count = Candidate.objects.count()
+
+        # 1. Unauthenticated Fast Link via reg_number + email
+        res1 = self.client.post("/api/assessment/drive-link/", {
+            "drive_code": drive1.code,
+            "register_number": "710022104099",
+            "verification_factor": "meenakshi@psgtech.edu",
+        })
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertTrue(res1.data["success"])
+        self.assertEqual(Candidate.objects.count(), initial_cand_count)
+        self.assertTrue(DriveRegistration.objects.filter(drive=drive1, candidate=cand).exists())
+        self.assertTrue(self.assessment.eligible_candidates.filter(id=cand.id).exists())
+
+        token = res1.data["assessment_token"]
+
+        # 2. Authenticated Fast Link with another drive using token
+        drive2 = Drive.objects.create(
+            name="Tier 2 Pooled Drive",
+            code="TIER2POOL",
+            status=Drive.Status.ACTIVE,
+            visibility=Drive.Visibility.PUBLIC,
+        )
+        DriveAssessment.objects.create(drive=drive2, assessment=self.assessment)
+
+        res2 = self.client.post(
+            "/api/assessment/drive-link/",
+            {"drive_code": "TIER2POOL"},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertTrue(res2.data["success"])
+        self.assertEqual(Candidate.objects.count(), initial_cand_count)
+        self.assertTrue(DriveRegistration.objects.filter(drive=drive2, candidate=cand).exists())

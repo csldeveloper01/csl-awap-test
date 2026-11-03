@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
 import { OdometerCard } from '../../components/admin/OdometerCard';
+import { generateCodeFromTitle } from '../../utils/codeGenerator';
 import {
   getAdminAssessments,
   getAdminAssessmentDetail,
@@ -180,6 +181,7 @@ export function AdminAssessmentsView({
 
   // PDF Assessment Mode State
   const [createDeliveryMode, setCreateDeliveryMode] = useState<'MCQ' | 'PDF_CODING'>('MCQ');
+  const [createUseCustomCode, setCreateUseCustomCode] = useState(false);
   const [createPdfFile, setCreatePdfFile] = useState<File | null>(null);
 
   const [editDeliveryMode, setEditDeliveryMode] = useState<'MCQ' | 'PDF_CODING'>('MCQ');
@@ -2145,20 +2147,7 @@ export function AdminAssessmentsView({
             )}
 
             <form onSubmit={handleCreateSubmit}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px', marginBottom: '14px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                    Assessment Code *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. CSL-DIAG-02"
-                    value={createForm.code}
-                    onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }}
-                  />
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '14px', marginBottom: '14px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
                     Title *
@@ -2168,8 +2157,54 @@ export function AdminAssessmentsView({
                     required
                     placeholder="e.g. CSL Diagnostic Assessment — Phase 2"
                     value={createForm.title}
-                    onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCreateForm((prev) => ({
+                        ...prev,
+                        title: val,
+                        code: createUseCustomCode ? prev.code : generateCodeFromTitle(val, 20),
+                      }));
+                    }}
                     style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>
+                      Code *
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={createUseCustomCode}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setCreateUseCustomCode(checked);
+                          if (!checked) {
+                            setCreateForm((prev) => ({ ...prev, code: generateCodeFromTitle(prev.title, 20) }));
+                          }
+                        }}
+                        style={{ accentColor: '#0052CC', cursor: 'pointer' }}
+                      />
+                      Custom
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. CSL-DIAG-02"
+                    value={createForm.code}
+                    onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #CBD5E1',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                      textTransform: 'uppercase',
+                      backgroundColor: createUseCustomCode ? '#FFFFFF' : '#F8FAFC',
+                    }}
                   />
                 </div>
               </div>

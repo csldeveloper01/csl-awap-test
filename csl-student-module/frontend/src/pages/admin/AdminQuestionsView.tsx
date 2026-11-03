@@ -691,7 +691,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
             boxShadow: activeSubTab === 'BANK' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
           }}
         >
-          <span>📚 Question Bank</span>
+          <span>Question Bank</span>
         </button>
         <button
           type="button"
@@ -711,7 +711,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
             boxShadow: activeSubTab === 'POOLS' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
           }}
         >
-          <span>📦 Reusable Question Pools</span>
+          <span>Reusable Question Pools</span>
           {questionPools.length > 0 && (
             <span
               style={{
@@ -744,7 +744,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
             boxShadow: activeSubTab === 'UNASSIGNED' ? '0 2px 4px rgba(20, 85, 184, 0.2)' : 'none',
           }}
         >
-          <span>⚡ Unassigned Questions</span>
+          <span>Unassigned Questions</span>
         </button>
       </div>
 
@@ -1295,7 +1295,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 gap: '4px',
               }}
             >
-              <span>🎯 Assign to Pool ({selectedIds.length})</span>
+              <span>Assign to Pool ({selectedIds.length})</span>
             </button>
 
             <button
@@ -1611,7 +1611,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                               }}
                               title={`Pool: ${pool.name}`}
                             >
-                              📦 {pool.name}
+                              {pool.name}
                             </span>
                           ))}
                         </div>
@@ -1628,7 +1628,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                             display: 'inline-block',
                           }}
                         >
-                          ⚡ Unassigned
+                          Unassigned
                         </span>
                       )}
                     </td>
@@ -2733,7 +2733,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 }}
                 style={{ padding: '8px 18px', backgroundColor: '#7C3AED', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
               >
-                🎯 Assign to Pool
+                Assign to Pool
               </button>
               <button
                 type="button"

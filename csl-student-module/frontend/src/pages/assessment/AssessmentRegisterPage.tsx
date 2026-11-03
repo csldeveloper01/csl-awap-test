@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   registerCandidate,
+  linkCandidateToDrive,
   getStudentColleges,
   getCandidateAssessments,
   recoverStudentAttempt,
@@ -157,6 +158,14 @@ export function AssessmentRegisterPage() {
   const [collegeSearch, setCollegeSearch] = useState('');
   const [isCollegeDropdownOpen, setIsCollegeDropdownOpen] = useState(false);
   const [showRequestCollegeModal, setShowRequestCollegeModal] = useState(false);
+  // Existing Account / Fast Link Mode
+  const [regMode, setRegMode] = useState<'new' | 'existing'>('new');
+  const [existingRollNo, setExistingRollNo] = useState('');
+  const [existingVerification, setExistingVerification] = useState('');
+  const [linkingExisting, setLinkingExisting] = useState(false);
+  const [linkExistingError, setLinkExistingError] = useState('');
+  const [linkExistingSuccess, setLinkExistingSuccess] = useState('');
+
   const [requestCollegeForm, setRequestCollegeForm] = useState({
     institution_name: '',
     city: '',
@@ -463,6 +472,37 @@ export function AssessmentRegisterPage() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFastLinkExisting = async (e: FormEvent) => {
+    e.preventDefault();
+    setLinkExistingError('');
+    setLinkExistingSuccess('');
+    if (!existingRollNo.trim() || !existingVerification.trim()) {
+      setLinkExistingError('Both your Register Number and Verification Factor (Email or Mobile Phone) are required.');
+      return;
+    }
+    const targetCode = driveCode || manualCodeInput || accessCode;
+    if (!targetCode && !inviteToken) {
+      setLinkExistingError('A valid Drive Code, Access Code, or Invite Link is required to link.');
+      return;
+    }
+    setLinkingExisting(true);
+    try {
+      const res = await linkCandidateToDrive({
+        drive_code: driveCode || manualCodeInput || undefined,
+        access_code: accessCode || manualCodeInput || undefined,
+        invite_token: inviteToken || undefined,
+        register_number: existingRollNo.trim(),
+        verification_factor: existingVerification.trim(),
+      });
+      setLinkExistingSuccess(res.message);
+      await handleFetchAssessments();
+    } catch (err: any) {
+      setLinkExistingError(err?.response?.data?.detail || 'Unable to link account. Please verify your credentials or register as a new student.');
+    } finally {
+      setLinkingExisting(false);
     }
   };
 
@@ -1597,6 +1637,166 @@ export function AssessmentRegisterPage() {
           </div>
         )}
 
+        {/* Registration Mode Selector */}
+        <div
+          style={{
+            display: 'flex',
+            backgroundColor: '#F1F5F9',
+            borderRadius: '12px',
+            padding: '4px',
+            marginBottom: '20px',
+            gap: '4px',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => { setRegMode('new'); setLinkExistingError(''); }}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              borderRadius: '9px',
+              border: 'none',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              backgroundColor: regMode === 'new' ? '#0D52D6' : 'transparent',
+              color: regMode === 'new' ? '#FFFFFF' : '#475569',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            New Student Registration
+          </button>
+          <button
+            type="button"
+            onClick={() => { setRegMode('existing'); setError(''); }}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              borderRadius: '9px',
+              border: 'none',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              backgroundColor: regMode === 'existing' ? '#0D52D6' : 'transparent',
+              color: regMode === 'existing' ? '#FFFFFF' : '#475569',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Already Registered? Fast Link
+          </button>
+        </div>
+
+        {regMode === 'existing' ? (
+          <form onSubmit={handleFastLinkExisting} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+            <div
+              style={{
+                padding: '14px 18px',
+                backgroundColor: '#EFF6FF',
+                borderRadius: '12px',
+                border: '1px solid #BFDBFE',
+                fontSize: '13px',
+                color: '#1E40AF',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Fast Account Linking:</strong> Already registered with CSL? Enter your Register Number and registered Email or Phone. We will link this drive directly to your existing account without losing any historical data or creating duplicate records.
+            </div>
+
+            {linkExistingError && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  backgroundColor: '#FEE2E2',
+                  border: '1px solid #FCA5A5',
+                  borderRadius: '10px',
+                  color: '#B91C1C',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                }}
+              >
+                {linkExistingError}
+              </div>
+            )}
+
+            {linkExistingSuccess && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  backgroundColor: '#DCFCE7',
+                  border: '1px solid #86EFAC',
+                  borderRadius: '10px',
+                  color: '#15803D',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                }}
+              >
+                {linkExistingSuccess}
+              </div>
+            )}
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Register / Roll Number *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. 710022104088"
+                value={existingRollNo}
+                onChange={(e) => setExistingRollNo(e.target.value.toUpperCase())}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Registered Email or Mobile Number *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. student@college.edu or 9876543210"
+                value={existingVerification}
+                onChange={(e) => setExistingVerification(e.target.value.toLowerCase())}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={linkingExisting}
+              style={{
+                width: '100%',
+                padding: '12px 20px',
+                backgroundColor: '#0D52D6',
+                color: '#FFFFFF',
+                borderRadius: '12px',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '14px',
+                cursor: linkingExisting ? 'not-allowed' : 'pointer',
+                marginTop: '8px',
+                boxShadow: '0 4px 12px rgba(13, 82, 214, 0.25)',
+              }}
+            >
+              {linkingExisting ? 'Verifying & Linking Account...' : 'Link Account & Enter Assessment'}
+            </button>
+          </form>
+        ) : (
         <form onSubmit={handleSubmit} noValidate style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px' }}>
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -2058,6 +2258,7 @@ export function AssessmentRegisterPage() {
             {loading ? 'Validating Registration...' : 'Register & Continue to Assessment →'}
           </button>
         </form>
+        )}
         </div>
 
         {/* Institution Addition Request Modal (Requirement 3) */}
