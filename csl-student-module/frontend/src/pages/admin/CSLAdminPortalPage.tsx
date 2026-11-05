@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../api';
-import { getAdminMe, getAdminStats, type AdminUser, type AdminStats } from '../../api/admin';
+import { getAdminMe, getAdminStats, getAdminAssessments, getAdminColleges, type AdminUser, type AdminStats, type AdminAssessment, type AdminCollege } from '../../api/admin';
 import { queryClient } from '../../main';
 import { AdminLoginPage } from './AdminLoginPage';
 import { AdminOverviewView } from './AdminOverviewView';
@@ -53,6 +53,36 @@ export function CSLAdminPortalPage() {
   const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Portal-level shared assessments and colleges (Phase 2.2.4)
+  const [portalAssessments, setPortalAssessments] = useState<AdminAssessment[]>([]);
+  const [portalColleges, setPortalColleges] = useState<AdminCollege[]>([]);
+
+  const loadPortalAssessmentsAndColleges = async () => {
+    try {
+      const [assData, colData] = await Promise.all([
+        getAdminAssessments().catch((e) => {
+          console.error('Failed to load assessments for portal', e);
+          return [] as AdminAssessment[];
+        }),
+        getAdminColleges().catch((e) => {
+          console.error('Failed to load colleges for portal', e);
+          return [] as AdminCollege[];
+        }),
+      ]);
+      setPortalAssessments(assData);
+      setPortalColleges(colData);
+    } catch (err: any) {
+      console.error('Failed to load assessments collection', err);
+    } finally {}
+  };
+
+  useEffect(() => {
+    if (adminUser) {
+      loadPortalAssessmentsAndColleges();
+    }
+  }, [adminUser]);
+
 
   // Collapsible Sidebars state (Persisted in localStorage)
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState<boolean>(() => {
@@ -797,7 +827,13 @@ export function CSLAdminPortalPage() {
               />
             )}
 
-            {activeTab === 'drives' && <AdminDrivesView />}
+            {activeTab === 'drives' && (
+              <AdminDrivesView
+                assessments={portalAssessments}
+                colleges={portalColleges}
+                onRefreshAssessments={loadPortalAssessmentsAndColleges}
+              />
+            )}
 
             {activeTab === 'questions' && (
               <AdminQuestionsView initialAssessmentId={searchParams.get('assessmentId') || undefined} />

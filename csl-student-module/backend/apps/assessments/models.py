@@ -1251,6 +1251,7 @@ class AssessmentAuditLog(models.Model):
         DRIVE_INVITATION_CREATED = "DRIVE_INVITATION_CREATED", "Drive Invitation Created"
         DRIVE_INVITATION_REVOKED = "DRIVE_INVITATION_REVOKED", "Drive Invitation Revoked"
         ACTION_REVERSED = "ACTION_REVERSED", "Administrative Action Reversed / Undone"
+        INSTITUTION_REQUESTED = "INSTITUTION_REQUESTED", "Student Institution Requested"
 
     class ReversalStatus(models.TextChoices):
         NOT_REVERSIBLE = "NOT_REVERSIBLE", "Not Reversible"

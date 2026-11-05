@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
+  getAdminAssessments,
   type AdminDrive,
   type AdminDriveDetail,
   type AdminDriveRegistration,
@@ -31,9 +32,47 @@ import { SearchIcon, PlusIcon } from '../../components/common/Icons';
 interface AdminDrivesViewProps {
   colleges?: AdminCollege[];
   assessments?: AdminAssessment[];
+  onRefreshAssessments?: () => void;
 }
 
-export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrivesViewProps) {
+export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAssessments }: AdminDrivesViewProps) {
+  const [internalAssessments, setInternalAssessments] = useState<AdminAssessment[]>(assessments);
+  const [internalColleges, setInternalColleges] = useState<AdminCollege[]>(colleges);
+
+  useEffect(() => {
+    if (assessments && assessments.length > 0) {
+      setInternalAssessments(assessments);
+    }
+  }, [assessments]);
+
+  useEffect(() => {
+    if (colleges && colleges.length > 0) {
+      setInternalColleges(colleges);
+    }
+  }, [colleges]);
+
+  const loadFallbackAssessments = async () => {
+    try {
+      const data = await getAdminAssessments();
+      setInternalAssessments(data);
+    } catch (err) {
+      console.error('Failed to load assessments in AdminDrivesView', err);
+    } finally {}
+  };
+
+  useEffect(() => {
+    if (!assessments || assessments.length === 0) {
+      loadFallbackAssessments();
+    }
+  }, []);
+
+  const effectiveAssessments = useMemo(() => {
+    return internalAssessments && internalAssessments.length > 0 ? internalAssessments : assessments;
+  }, [internalAssessments, assessments]);
+
+  const effectiveColleges = useMemo(() => {
+    return internalColleges && internalColleges.length > 0 ? internalColleges : colleges;
+  }, [internalColleges, colleges]);
   const [drives, setDrives] = useState<AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -71,8 +110,10 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
     registration_start: '',
     registration_end: '',
     eligible_college_ids: [] as number[],
+    assessment_ids: [] as string[],
   });
   const [updating, setUpdating] = useState(false);
+  const [editAssessmentToAdd, setEditAssessmentToAdd] = useState('');
 
   // Manage Drive Modal State
   const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
@@ -235,22 +276,34 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
     }
   };
 
-  const handleOpenEdit = (drive: AdminDrive | AdminDriveDetail) => {
-    setEditingDrive(drive);
-    setEditForm({
-      name: drive.name,
-      code: drive.code,
-      description: drive.description || '',
-      visibility: drive.visibility,
-      status: drive.status,
-      start_date: drive.start_date ? drive.start_date.slice(0, 16) : '',
-      end_date: drive.end_date ? drive.end_date.slice(0, 16) : '',
-      registration_start: drive.registration_start ? drive.registration_start.slice(0, 16) : '',
-      registration_end: drive.registration_end ? drive.registration_end.slice(0, 16) : '',
-      eligible_college_ids: [],
-    });
-    setEditUseCustomCode(true);
-    setIsEditOpen(true);
+  const handleOpenEdit = async (drive: AdminDrive | AdminDriveDetail) => {
+    setLoadingDetail(true);
+    try {
+      const detail = await fetchAdminDriveDetail(drive.id);
+      setEditingDrive(detail);
+      const assignedAssessmentIds = detail.drive_assessments?.map((da) => da.assessment) || [];
+      const assignedCollegeIds = detail.eligible_colleges?.map((c) => c.id) || [];
+      setEditForm({
+        name: detail.name,
+        code: detail.code,
+        description: detail.description || '',
+        visibility: detail.visibility,
+        status: detail.status,
+        start_date: detail.start_date ? detail.start_date.slice(0, 16) : '',
+        end_date: detail.end_date ? detail.end_date.slice(0, 16) : '',
+        registration_start: detail.registration_start ? detail.registration_start.slice(0, 16) : '',
+        registration_end: detail.registration_end ? detail.registration_end.slice(0, 16) : '',
+        eligible_college_ids: assignedCollegeIds,
+        assessment_ids: assignedAssessmentIds,
+      });
+      setEditAssessmentToAdd('');
+      setEditUseCustomCode(true);
+      setIsEditOpen(true);
+    } catch (err: any) {
+      showToast('Failed to fetch full drive details.');
+    } finally {
+      setLoadingDetail(false);
+    }
   };
 
   const handleUpdateDrive = async (e: React.FormEvent) => {
@@ -264,11 +317,17 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
     setUpdating(true);
     try {
       const updated = await updateAdminDrive(editingDrive.id, {
-        ...editForm,
+        name: editForm.name,
+        code: editForm.code,
+        description: editForm.description,
+        visibility: editForm.visibility,
+        status: editForm.status,
         start_date: editForm.start_date ? new Date(editForm.start_date).toISOString() : null,
         end_date: editForm.end_date ? new Date(editForm.end_date).toISOString() : null,
         registration_start: editForm.registration_start ? new Date(editForm.registration_start).toISOString() : null,
         registration_end: editForm.registration_end ? new Date(editForm.registration_end).toISOString() : null,
+        eligible_college_ids: editForm.eligible_college_ids,
+        assessment_ids: editForm.assessment_ids,
       });
       showToast(`Drive "${updated.name}" updated successfully.`);
       setIsEditOpen(false);
@@ -276,6 +335,9 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
       loadDrives();
       if (selectedDriveId === editingDrive.id) {
         setDriveDetail(updated);
+      }
+      if (onRefreshAssessments) {
+        onRefreshAssessments();
       }
     } catch (err: any) {
       showToast(err.response?.data?.error || err.response?.data?.detail || 'Failed to update drive.');
@@ -1208,6 +1270,169 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
             </div>
           </div>
 
+          {/* Associated Assessments in Edit Modal */}
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px', backgroundColor: '#F8FAFC' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>
+                  Associated Assessments ({editForm.assessment_ids.length} linked)
+                </label>
+                <div style={{ fontSize: '11px', color: '#64748B' }}>
+                  Drives pool multiple assessments together. Removing an association does not delete the assessment.
+                </div>
+              </div>
+              {onRefreshAssessments && (
+                <button
+                  type="button"
+                  onClick={onRefreshAssessments}
+                  style={{ fontSize: '11px', color: '#0052CC', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  ⟳ Refresh Assessment List
+                </button>
+              )}
+            </div>
+
+            {/* Assessment Attach Row */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <select
+                value={editAssessmentToAdd}
+                onChange={(e) => setEditAssessmentToAdd(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '13px',
+                  backgroundColor: '#FFFFFF',
+                }}
+              >
+                <option value="">Select assessment to associate...</option>
+                {effectiveAssessments
+                  .filter((a) => !editForm.assessment_ids.includes(a.id))
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.title} ({a.code}) — {a.duration_minutes}m, {a.total_marks} marks
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                disabled={!editAssessmentToAdd}
+                onClick={() => {
+                  if (editAssessmentToAdd && !editForm.assessment_ids.includes(editAssessmentToAdd)) {
+                    setEditForm((prev) => ({
+                      ...prev,
+                      assessment_ids: [...prev.assessment_ids, editAssessmentToAdd],
+                    }));
+                    setEditAssessmentToAdd('');
+                  }
+                }}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  backgroundColor: '#0052CC',
+                  color: '#FFFFFF',
+                  fontWeight: 600,
+                  fontSize: '12px',
+                  border: 'none',
+                  cursor: !editAssessmentToAdd ? 'not-allowed' : 'pointer',
+                  opacity: !editAssessmentToAdd ? 0.6 : 1,
+                }}
+              >
+                + Link
+              </button>
+            </div>
+
+            {/* Linked Assessments Tag List */}
+            {editForm.assessment_ids.length === 0 ? (
+              <div style={{ padding: '12px', textAlign: 'center', backgroundColor: '#FFFFFF', borderRadius: '8px', border: '1px dashed #CBD5E1', fontSize: '12px', color: '#64748B' }}>
+                No assessments linked to this drive yet. Link one or more assessments from the dropdown above.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
+                {editForm.assessment_ids.map((aId) => {
+                  const ass = effectiveAssessments.find((a) => a.id === aId);
+                  return (
+                    <div
+                      key={aId}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '6px 10px',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <div>
+                        <strong style={{ color: '#0F172A' }}>{ass ? ass.title : aId}</strong>
+                        {ass && <span style={{ marginLeft: '6px', color: '#64748B', fontFamily: 'monospace' }}>({ass.code})</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditForm((prev) => ({
+                            ...prev,
+                            assessment_ids: prev.assessment_ids.filter((id) => id !== aId),
+                          }));
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#DC2626',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          padding: '2px 6px',
+                        }}
+                        title="Remove assessment association"
+                      >
+                        ✕ Remove
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Participating Colleges in Edit Modal */}
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px', backgroundColor: '#F8FAFC' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#0F172A', marginBottom: '6px' }}>
+              Eligible Colleges ({editForm.eligible_college_ids.length} selected)
+            </label>
+            <div style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '10px', maxHeight: '120px', overflowY: 'auto', backgroundColor: '#FFFFFF' }}>
+              {effectiveColleges.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#64748B', textAlign: 'center' }}>No colleges available in directory.</div>
+              ) : (
+                effectiveColleges.map((c) => {
+                  const isChecked = editForm.eligible_college_ids.includes(c.id);
+                  return (
+                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setEditForm((prev) => ({ ...prev, eligible_college_ids: [...prev.eligible_college_ids, c.id] }));
+                          } else {
+                            setEditForm((prev) => ({
+                              ...prev,
+                              eligible_college_ids: prev.eligible_college_ids.filter((id) => id !== c.id),
+                            }));
+                          }
+                        }}
+                      />
+                      <strong style={{ color: '#0052CC' }}>[{c.code}]</strong> {c.name}
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
             <button
               type="button"
@@ -1464,7 +1689,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                     }}
                   >
                     <option value="">Select an Assessment to attach...</option>
-                    {assessments
+                    {effectiveAssessments
                       .filter((a) => !driveDetail.drive_assessments?.some((da) => da.assessment === a.id))
                       .map((a) => (
                         <option key={a.id} value={a.id}>
@@ -1519,8 +1744,8 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                         <td style={{ padding: '12px', fontWeight: 700 }}>{da.display_order}</td>
                         <td style={{ padding: '12px', fontWeight: 600, color: '#0F172A' }}>{da.assessment_title}</td>
                         <td style={{ padding: '12px', fontFamily: 'monospace', color: '#64748B' }}>{da.assessment_code}</td>
-                        <td style={{ padding: '12px' }}>{da.assessment_duration} mins</td>
-                        <td style={{ padding: '12px' }}>{da.assessment_total_marks}</td>
+                        <td style={{ padding: '12px' }}>{da.assessment_duration ?? da.duration_minutes ?? 0} mins</td>
+                        <td style={{ padding: '12px' }}>{da.assessment_total_marks ?? da.total_marks ?? 0}</td>
                         <td style={{ padding: '12px' }}>
                           <span
                             style={{

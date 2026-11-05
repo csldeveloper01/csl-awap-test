@@ -452,6 +452,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "eligible_candidate_ids",
             "drive_ids",
             "sections",
+            "is_standalone",
         ]
 
     def validate_code(self, value):
@@ -1585,9 +1586,23 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
 
 class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):
     items = AdminQuestionPoolItemSerializer(many=True, read_only=True)
+    linked_assessments = serializers.SerializerMethodField()
 
     class Meta(AdminQuestionPoolSerializer.Meta):
-        fields = AdminQuestionPoolSerializer.Meta.fields + ["items"]
+        fields = AdminQuestionPoolSerializer.Meta.fields + ["items", "linked_assessments"]
+
+    def get_linked_assessments(self, obj):
+        sources = obj.assessment_sources.select_related("assessment", "section").all()
+        return [
+            {
+                "assessment_id": str(s.assessment.id),
+                "assessment_title": s.assessment.title,
+                "assessment_code": s.assessment.code,
+                "section_name": s.section.name if s.section else "All Sections",
+                "question_count": s.question_count,
+            }
+            for s in sources
+        ]
 
 
 class AdminAssessmentPoolSourceSerializer(serializers.ModelSerializer):
@@ -1681,8 +1696,11 @@ class AdminDriveAssessmentSerializer(serializers.ModelSerializer):
     assessment_type = serializers.CharField(source="assessment.assessment_type", read_only=True)
     delivery_mode = serializers.CharField(source="assessment.delivery_mode", read_only=True)
     duration_minutes = serializers.IntegerField(source="assessment.duration_minutes", read_only=True)
+    assessment_duration = serializers.IntegerField(source="assessment.duration_minutes", read_only=True)
     total_marks = serializers.IntegerField(source="assessment.total_marks", read_only=True)
+    assessment_total_marks = serializers.IntegerField(source="assessment.total_marks", read_only=True)
     assessment_status = serializers.CharField(source="assessment.status", read_only=True)
+    assessment_is_open = serializers.BooleanField(source="assessment.is_open", read_only=True)
 
     class Meta:
         model = DriveAssessment
@@ -1696,8 +1714,11 @@ class AdminDriveAssessmentSerializer(serializers.ModelSerializer):
             "assessment_type",
             "delivery_mode",
             "duration_minutes",
+            "assessment_duration",
             "total_marks",
+            "assessment_total_marks",
             "assessment_status",
+            "assessment_is_open",
             "display_order",
             "status",
             "is_required",

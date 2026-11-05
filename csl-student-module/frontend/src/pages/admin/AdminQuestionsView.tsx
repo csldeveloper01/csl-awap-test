@@ -753,6 +753,9 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           onCreateQuestion={() => openCreateModal()}
           onImportCSV={() => setShowImportModal(true)}
           onViewCentralBank={() => setActiveSubTab('BANK')}
+          onNavigateToAssessment={(assId) => {
+            window.location.href = `/csl-admin/?tab=assessments&assessmentId=${assId}`;
+          }}
         />
       ) : (
         <>

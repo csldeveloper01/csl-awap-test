@@ -109,10 +109,11 @@ except ImportError:
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 if ('test' in sys.argv and os.getenv('USE_POSTGRES_TEST') != '1') or os.getenv('DB_ENGINE') == 'sqlite':
+    sqlite_name = ':memory:' if 'test' in sys.argv else BASE_DIR / 'db.sqlite3'
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': ':memory:',
+            'NAME': sqlite_name,
         }
     }
 elif DATABASE_URL and dj_database_url:

@@ -26,6 +26,7 @@ from .models import (
     DriveAssessment,
     DriveRegistration,
     DriveInvitation,
+    AssessmentAuditLog,
 )
 from .serializers import (
     CandidateRegistrationSerializer,
@@ -1598,17 +1599,45 @@ class StudentInstitutionRequestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        AssessmentAuditLog.objects.create(
-            action=AssessmentAuditLog.Action.COLLEGE_CREATED,
+        # Check for duplicate recent request
+        existing_request = AssessmentAuditLog.objects.filter(
+            entity_type="COLLEGE_REQUEST",
+            details__institution_name__iexact=institution_name,
+        )
+        if student_email:
+            existing_request = existing_request.filter(entity_id=student_email)
+
+        if existing_request.exists():
+            return Response(
+                {
+                    "message": f"A request for '{institution_name}' has already been submitted and is currently pending review.",
+                    "success": True,
+                    "duplicate": True,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        action_choice = getattr(AssessmentAuditLog.Action, "INSTITUTION_REQUESTED", "INSTITUTION_REQUESTED")
+        audit_log = AssessmentAuditLog.objects.create(
+            action=action_choice,
             entity_type="COLLEGE_REQUEST",
             entity_id=student_email or "STUDENT",
-            description=f"Candidate requested institution addition: '{institution_name}' ({city}, {state_name}) - Contact: {student_email}",
+            details={
+                "institution_name": institution_name,
+                "email": student_email,
+                "city": city,
+                "state": state_name,
+            },
         )
 
-        return Response({
-            "message": f"Your request to add '{institution_name}' has been received. Our administration team has been notified.",
-            "success": True,
-        })
+        return Response(
+            {
+                "message": f"Your request to add '{institution_name}' has been received. Our administration team has been notified.",
+                "success": True,
+                "audit_id": audit_log.id,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class StudentCodeRunView(APIView):

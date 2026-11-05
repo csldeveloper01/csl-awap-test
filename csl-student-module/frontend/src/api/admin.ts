@@ -921,6 +921,13 @@ export interface AdminQuestionPool {
     question_difficulty: string;
     question_marks: number;
   }[];
+  linked_assessments?: {
+    assessment_id: string;
+    assessment_title: string;
+    assessment_code: string;
+    section_name: string;
+    question_count: number;
+  }[];
 }
 
 export interface AdminAssessmentPoolSource {
@@ -1240,9 +1247,12 @@ export interface AdminDriveAssessment {
   assessment: string;
   assessment_title: string;
   assessment_code: string;
-  assessment_duration: number;
-  assessment_total_marks: number;
-  assessment_is_open: boolean;
+  assessment_duration?: number;
+  duration_minutes?: number;
+  assessment_total_marks?: number;
+  total_marks?: number;
+  assessment_status?: string;
+  assessment_is_open?: boolean;
   display_order: number;
   is_required: boolean;
   registration_enabled: boolean;
@@ -1316,8 +1326,11 @@ export async function fetchAdminDriveDetail(id: string): Promise<AdminDriveDetai
   return res.data;
 }
 
-export async function updateAdminDrive(id: string, payload: Partial<AdminDrive> & { eligible_college_ids?: number[] }): Promise<AdminDriveDetail> {
-  const res = await adminApi.put(`/drives/${id}/`, payload);
+export async function updateAdminDrive(
+  id: string,
+  payload: Partial<AdminDrive> & { eligible_college_ids?: number[]; assessment_ids?: string[] }
+): Promise<AdminDriveDetail> {
+  const res = await adminApi.patch(`/drives/${id}/`, payload);
   return res.data;
 }
 

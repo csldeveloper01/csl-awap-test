@@ -3431,6 +3431,11 @@ class AdminAssessmentPoolSourcesView(APIView):
 
     def post(self, request, pk):
         assessment = get_object_or_404(Assessment, pk=pk)
+        if assessment.status in [Assessment.Status.CLOSED, Assessment.Status.ARCHIVED]:
+            return Response(
+                {"detail": f"Question configuration cannot be modified because this assessment is {assessment.status.lower()}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         pool_id = request.data.get("pool_id")
         section_id = request.data.get("section_id")
         question_count = int(request.data.get("question_count", 0))
@@ -3453,6 +3458,11 @@ class AdminAssessmentPoolSourcesView(APIView):
 
     def delete(self, request, pk):
         assessment = get_object_or_404(Assessment, pk=pk)
+        if assessment.status in [Assessment.Status.CLOSED, Assessment.Status.ARCHIVED]:
+            return Response(
+                {"detail": f"Question configuration cannot be modified because this assessment is {assessment.status.lower()}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         source_id = request.data.get("source_id") or request.query_params.get("source_id")
         if not source_id:
             return Response({"detail": "source_id is required to remove a pool source."}, status=status.HTTP_400_BAD_REQUEST)
@@ -3552,6 +3562,9 @@ class AdminDriveDetailView(APIView):
     def get(self, request, pk):
         drive = get_object_or_404(Drive.objects.prefetch_related("drive_assessments__assessment", "eligible_colleges"), pk=pk)
         return Response(AdminDriveDetailSerializer(drive).data)
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
 
     def patch(self, request, pk):
         drive = get_object_or_404(Drive, pk=pk)

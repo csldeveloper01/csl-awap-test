@@ -19,12 +19,14 @@ interface AdminQuestionPoolsViewProps {
   onCreateQuestion?: () => void;
   onImportCSV?: () => void;
   onViewCentralBank?: () => void;
+  onNavigateToAssessment?: (assessmentId: string) => void;
 }
 
 export function AdminQuestionPoolsView({
   onCreateQuestion,
   onImportCSV,
   onViewCentralBank,
+  onNavigateToAssessment,
 }: AdminQuestionPoolsViewProps = {}) {
   const [pools, setPools] = useState<AdminQuestionPool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1158,6 +1160,62 @@ export function AdminQuestionPoolsView({
 
             {/* Modal Body: Questions Table */}
             <div style={{ padding: '16px 20px', overflowY: 'auto', flex: 1 }}>
+              {/* Linked Assessments Section (Phase 2.2.4) */}
+              {managingPool.linked_assessments && managingPool.linked_assessments.length > 0 && (
+                <div style={{ marginBottom: '16px', padding: '12px 14px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '8px' }}>
+                    Linked Assessments ({managingPool.linked_assessments.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {managingPool.linked_assessments.map((la) => (
+                      <div
+                        key={la.assessment_id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '6px 10px',
+                          backgroundColor: '#FFFFFF',
+                          border: '1px solid #CBD5E1',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                        }}
+                      >
+                        <div>
+                          <strong style={{ color: '#0F172A' }}>{la.assessment_title}</strong>{' '}
+                          <span style={{ fontFamily: 'monospace', color: '#64748B' }}>({la.assessment_code})</span>
+                          <span style={{ marginLeft: '8px', color: '#0052CC', fontSize: '11px', fontWeight: 600 }}>
+                            Section: {la.section_name} • Quota: {la.question_count} Qs
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onNavigateToAssessment) {
+                              onNavigateToAssessment(la.assessment_id);
+                            } else {
+                              window.location.href = `/csl-admin/?tab=assessments&assessmentId=${la.assessment_id}`;
+                            }
+                          }}
+                          style={{
+                            padding: '4px 10px',
+                            backgroundColor: '#0052CC',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Open Assessment ↗
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {poolDetailLoading ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>
                   Loading pool questions...

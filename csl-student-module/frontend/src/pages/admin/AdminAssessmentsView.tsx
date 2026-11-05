@@ -101,13 +101,15 @@ export function AdminAssessmentsView({
   const [createIsStandalone, setCreateIsStandalone] = useState(true);
   const [createSelectedDriveIds, setCreateSelectedDriveIds] = useState<string[]>([]);
   const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
+  const [editIsStandalone, setEditIsStandalone] = useState<boolean>(true);
+  const [editEligibleCollegeIds, setEditEligibleCollegeIds] = useState<number[]>([]);
 
   // Close Assessment policy selection
   const [closePolicy, setClosePolicy] = useState<'ALLOW_FINISH' | 'STRICT_CUTOFF'>('ALLOW_FINISH');
   const [closing, setClosing] = useState(false);
 
   // Detail tab state
-  const [detailTab, setDetailTab] = useState<'overview' | 'colleges' | 'candidates' | 'audit'>('overview');
+  const [detailTab, setDetailTab] = useState<'overview' | 'questions' | 'colleges' | 'candidates' | 'audit'>('overview');
     const [allCandidates, setAllCandidates] = useState<any[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [savingCandidates, setSavingCandidates] = useState(false);
@@ -260,7 +262,7 @@ export function AdminAssessmentsView({
 
   const handleOpenDetail = async (
     assessmentOrId: AdminAssessment | string,
-    initialTab: 'overview' | 'colleges' | 'audit' = 'overview'
+    initialTab: 'overview' | 'questions' | 'colleges' | 'candidates' | 'audit' = 'overview'
   ) => {
     const assessmentId = typeof assessmentOrId === 'string' ? assessmentOrId : assessmentOrId.id;
     if (!assessmentId) return;
@@ -797,6 +799,12 @@ export function AdminAssessmentsView({
 
         await createAdminAssessment(formData);
       } else {
+        if (!createIsStandalone && createSelectedDriveIds.length === 0) {
+          setCreateError('Please select at least one Drive for a Drive-based assessment.');
+          setCreateSubmitting(false);
+          return;
+        }
+
         await createAdminAssessment({
           ...createForm,
           code: createForm.code.trim().toUpperCase(),
@@ -805,7 +813,9 @@ export function AdminAssessmentsView({
           aptitude_count: aptSec ? Number(aptSec.question_count) : (payloadSections.length > 0 ? 0 : Math.floor(totalQuestions / 2)),
           coding_count: codSec ? Number(codSec.question_count) : (payloadSections.length > 0 ? 0 : Math.ceil(totalQuestions / 2)),
           sections: payloadSections,
+          is_standalone: createIsStandalone,
           drive_ids: createIsStandalone ? [] : createSelectedDriveIds,
+          eligible_college_ids: createIsStandalone ? createForm.eligible_college_ids : [],
         });
       }
 
@@ -821,7 +831,10 @@ export function AdminAssessmentsView({
 
   const handleOpenEdit = (assessment: AdminAssessment) => {
     setEditError('');
+    const isStandaloneVal = assessment.is_standalone ?? (!assessment.drives || assessment.drives.length === 0);
+    setEditIsStandalone(isStandaloneVal);
     setEditSelectedDriveIds(assessment.drives ? assessment.drives.map((d) => d.id) : []);
+    setEditEligibleCollegeIds(assessment.eligible_colleges ? assessment.eligible_colleges.map((c: any) => c.id) : []);
     setEditDeliveryMode(assessment.delivery_mode || 'MCQ');
     setEditPdfFile(null);
     setEditPdfFilename(assessment.pdf_filename || null);
@@ -950,7 +963,9 @@ export function AdminAssessmentsView({
         auto_submit_on_tab_limit: editForm.auto_submit_on_tab_limit,
         close_policy: editForm.close_policy,
         sections: payloadSections,
-        drive_ids: editSelectedDriveIds,
+        is_standalone: editIsStandalone,
+        drive_ids: editIsStandalone ? [] : editSelectedDriveIds,
+        eligible_college_ids: editIsStandalone ? editEligibleCollegeIds : [],
       });
 
       if (editDeliveryMode === 'PDF_CODING' && editPdfFile) {
@@ -1808,7 +1823,7 @@ export function AdminAssessmentsView({
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
                     <button
                       onClick={() => {
-                        handleOpenDetail(a, 'overview');
+                        handleOpenDetail(a, 'questions');
                       }}
                       style={{
                         backgroundColor: '#0D52D6',
@@ -2613,7 +2628,8 @@ export function AdminAssessmentsView({
                 </div>
               </div>
 
-              {/* Eligible Colleges Selection */}
+              {/* Eligible Colleges Selection (Only for Standalone assessments) */}
+              {createIsStandalone ? (
               <div style={{ marginBottom: '20px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
                   Assign Participating Colleges ({createForm.eligible_college_ids.length} selected)
@@ -2643,6 +2659,11 @@ export function AdminAssessmentsView({
                   })}
                 </div>
               </div>
+              ) : (
+              <div style={{ marginBottom: '20px', padding: '12px 16px', backgroundColor: '#EFF6FF', borderRadius: '8px', border: '1px solid #BFDBFE', fontSize: '13px', color: '#1E40AF' }}>
+                ℹ Participating colleges are automatically inherited from the selected Drive(s). Standalone college assignment is not applicable for Drive-based assessments.
+              </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
@@ -2983,6 +3004,100 @@ export function AdminAssessmentsView({
                 </div>
               </div>
 
+              {/* Drive Association & College Hierarchy in Edit Modal (Phase 2.2.4) */}
+              <div style={{ marginBottom: '20px', padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  Drive Association & Eligibility Hierarchy
+                </label>
+                <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="editDriveMode"
+                      checked={editIsStandalone}
+                      onChange={() => {
+                        setEditIsStandalone(true);
+                        setEditSelectedDriveIds([]);
+                      }}
+                    />
+                    <span>Standalone Assessment (Independent)</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="editDriveMode"
+                      checked={!editIsStandalone}
+                      onChange={() => setEditIsStandalone(false)}
+                    />
+                    <span>Assign to Existing Drive(s)</span>
+                  </label>
+                </div>
+
+                {!editIsStandalone ? (
+                  <div style={{ marginTop: '10px' }}>
+                    <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '6px' }}>
+                      Select one or more active drives to link this assessment with:
+                    </div>
+                    {availableDrives.length === 0 ? (
+                      <p style={{ margin: 0, fontSize: '12px', color: '#94A3B8' }}>No active drives available.</p>
+                    ) : (
+                      <div style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', maxHeight: '120px', overflowY: 'auto', backgroundColor: '#FFFFFF' }}>
+                        {availableDrives.map((d) => {
+                          const isChecked = editSelectedDriveIds.includes(d.id);
+                          return (
+                            <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '12px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setEditSelectedDriveIds([...editSelectedDriveIds, d.id]);
+                                  } else {
+                                    setEditSelectedDriveIds(editSelectedDriveIds.filter((id) => id !== d.id));
+                                  }
+                                }}
+                              />
+                              <strong style={{ color: '#0052CC' }}>[{d.code}]</strong> {d.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div style={{ fontSize: '12px', color: '#1E40AF', marginTop: '8px', backgroundColor: '#EFF6FF', padding: '8px', borderRadius: '6px' }}>
+                      ℹ Participating colleges are automatically inherited from associated Drive(s). Existing registrations and attempts are preserved.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: '10px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Participating Colleges ({editEligibleCollegeIds.length} assigned)
+                    </label>
+                    <div style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', maxHeight: '120px', overflowY: 'auto', backgroundColor: '#FFFFFF' }}>
+                      {colleges.map((c) => {
+                        const isChecked = editEligibleCollegeIds.includes(c.id);
+                        return (
+                          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '12px', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditEligibleCollegeIds([...editEligibleCollegeIds, c.id]);
+                                } else {
+                                  setEditEligibleCollegeIds(editEligibleCollegeIds.filter((id) => id !== c.id));
+                                }
+                              }}
+                            />
+                            <strong>[{c.code}]</strong> {c.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
                   type="button"
@@ -3275,6 +3390,21 @@ export function AdminAssessmentsView({
                 }}
               >
                 Overview & Sessions
+              </button>
+              <button
+                onClick={() => setDetailTab('questions')}
+                style={{
+                  padding: '8px 16px',
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  border: 'none',
+                  borderBottom: detailTab === 'questions' ? '2px solid #0B2E6F' : '2px solid transparent',
+                  color: detailTab === 'questions' ? '#0B2E6F' : '#64748B',
+                  background: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                Manage Questions & Pools ({poolSources.length})
               </button>
               <button
                 onClick={() => setDetailTab('colleges')}
@@ -3586,7 +3716,7 @@ export function AdminAssessmentsView({
                           </div>
                         </div>
 
-                        {assessmentDetail.status === 'DRAFT' && (
+                        {(assessmentDetail.status === 'DRAFT' || assessmentDetail.status === 'SCHEDULED' || (assessmentDetail.status === 'OPEN' && Number(assessmentDetail.attempts_count || 0) === 0)) && (
                           <button
                             type="button"
                             onClick={handleOpenLinkPool}
@@ -3628,7 +3758,7 @@ export function AdminAssessmentsView({
                                 <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Target Section</th>
                                 <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Quota</th>
                                 <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569' }}>Randomize</th>
-                                {assessmentDetail.status === 'DRAFT' && (
+                                {(assessmentDetail.status === 'DRAFT' || assessmentDetail.status === 'SCHEDULED' || (assessmentDetail.status === 'OPEN' && Number(assessmentDetail.attempts_count || 0) === 0)) && (
                                   <th style={{ padding: '8px 12px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>Action</th>
                                 )}
                               </tr>
@@ -3657,7 +3787,7 @@ export function AdminAssessmentsView({
                                       {ps.randomize ? '✓ Yes' : 'No'}
                                     </span>
                                   </td>
-                                  {assessmentDetail.status === 'DRAFT' && (
+                                  {(assessmentDetail.status === 'DRAFT' || assessmentDetail.status === 'SCHEDULED' || (assessmentDetail.status === 'OPEN' && Number(assessmentDetail.attempts_count || 0) === 0)) && (
                                     <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                                       <button
                                         type="button"
@@ -3933,6 +4063,258 @@ export function AdminAssessmentsView({
                     </div>
                   </div>
                 )}
+
+                {/* MANAGE QUESTIONS & QUESTION POOLS TAB (Phase 2.2.4) */}
+                {detailTab === 'questions' && (() => {
+                  const canEdit = assessmentDetail.status === 'DRAFT' || assessmentDetail.status === 'SCHEDULED' || (assessmentDetail.status === 'OPEN' && Number(assessmentDetail.attempts_count || 0) === 0);
+                  const isSufficient = assessmentDetail.pool_sufficient ?? false;
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      {/* Lifecycle Lock / Editability Status Banner */}
+                      <div
+                        style={{
+                          padding: '12px 16px',
+                          borderRadius: '10px',
+                          border: canEdit ? '1px solid #BBF7D0' : '1px solid #FED7AA',
+                          backgroundColor: canEdit ? '#F0FDF4' : '#FFFBEB',
+                          color: canEdit ? '#166534' : '#9A3412',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '10px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                          <span style={{ fontSize: '16px' }}>{canEdit ? '✓' : '🔒'}</span>
+                          <span>
+                            {canEdit
+                              ? 'Question configuration is active. You can link curriculum question pools, assign section quotas, and modify question items.'
+                              : `Configuration locked: Assessment is ${assessmentDetail.status.toLowerCase()} or candidate sessions have commenced (${assessmentDetail.attempts_count || 0} attempt(s) recorded).`}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 800,
+                              padding: '3px 10px',
+                              borderRadius: '12px',
+                              backgroundColor: isSufficient ? '#DCFCE7' : '#FEF3C7',
+                              color: isSufficient ? '#15803D' : '#B45309',
+                              border: `1px solid ${isSufficient ? '#86EFAC' : '#FCD34D'}`,
+                            }}
+                          >
+                            {isSufficient ? 'Pool Status: Sufficient' : 'Pool Status: Insufficient'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDetail(assessmentDetail.id, 'questions')}
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              color: '#0052CC',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            ⟳ Refresh
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Linked Question Pools */}
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                                Linked Question Pools
+                              </h4>
+                              <span style={{ fontSize: '11px', fontWeight: 700, backgroundColor: '#EFF6FF', color: '#1D4ED8', padding: '2px 8px', borderRadius: '12px', border: '1px solid #BFDBFE' }}>
+                                {poolSources.length} Pool(s)
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                              Reusable curriculum modules supplying randomized question quotas into assessment sections.
+                            </div>
+                          </div>
+
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={handleOpenLinkPool}
+                              style={{
+                                padding: '8px 16px',
+                                backgroundColor: '#0052CC',
+                                color: '#FFFFFF',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              + Link Question Pool
+                            </button>
+                          )}
+                        </div>
+
+                        {loadingPoolSources ? (
+                          <div style={{ padding: '24px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+                            Loading linked pools...
+                          </div>
+                        ) : poolSources.length === 0 ? (
+                          <div style={{ padding: '24px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px dashed #CBD5E1', textAlign: 'center' }}>
+                            <div style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>No Question Pools Linked</div>
+                            <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '12px' }}>
+                              Link existing curriculum question pools to allocate questions dynamically to sections.
+                            </div>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={handleOpenLinkPool}
+                                style={{ padding: '6px 14px', backgroundColor: '#0052CC', color: '#FFFFFF', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                Link Your First Pool
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                              <thead>
+                                <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                                  <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Pool Name & Code</th>
+                                  <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Target Section</th>
+                                  <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Question Quota</th>
+                                  <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Randomize</th>
+                                  {canEdit && <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>Action</th>}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {poolSources.map((ps) => (
+                                  <tr key={ps.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                    <td style={{ padding: '12px' }}>
+                                      <div style={{ fontWeight: 700, color: '#0F172A' }}>{ps.pool_name}</div>
+                                      <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#64748B' }}>{ps.pool_code}</span>
+                                    </td>
+                                    <td style={{ padding: '12px', color: '#334155' }}>
+                                      {ps.section_name ? (
+                                        <span style={{ backgroundColor: '#F1F5F9', padding: '3px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
+                                          {ps.section_name} ({ps.section_code})
+                                        </span>
+                                      ) : (
+                                        <span style={{ color: '#94A3B8' }}>All Sections / Dynamic</span>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '12px', fontWeight: 700, color: '#0B2E6F' }}>
+                                      {ps.question_count} questions
+                                    </td>
+                                    <td style={{ padding: '12px' }}>
+                                      <span style={{ fontSize: '11px', fontWeight: 700, color: ps.randomize ? '#16A34A' : '#64748B' }}>
+                                        {ps.randomize ? '✓ Randomized' : 'Fixed Order'}
+                                      </span>
+                                    </td>
+                                    {canEdit && (
+                                      <td style={{ padding: '12px', textAlign: 'right' }}>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUnlinkPool(ps.id)}
+                                          style={{
+                                            padding: '5px 10px',
+                                            backgroundColor: '#FEF2F2',
+                                            border: '1px solid #FECACA',
+                                            color: '#DC2626',
+                                            borderRadius: '6px',
+                                            fontSize: '11px',
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                          }}
+                                        >
+                                          Unlink
+                                        </button>
+                                      </td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Curriculum Sections & Sufficiency Breakdown */}
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '16px' }}>
+                        <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+                          Curriculum Sections & Question Allocation
+                        </h4>
+                        <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '14px' }}>
+                          Sections must meet their question quotas before candidate delivery preparation can succeed.
+                        </div>
+
+                        {Array.isArray(assessmentDetail.sections) && assessmentDetail.sections.length > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {assessmentDetail.sections.map((s, idx) => {
+                              const assignedCount = s.available_questions_count !== undefined ? s.available_questions_count : 0;
+                              const isSecSufficient = assignedCount >= s.question_count;
+                              return (
+                                <div
+                                  key={s.id || idx}
+                                  style={{
+                                    border: '1px solid #E2E8F0',
+                                    borderRadius: '8px',
+                                    padding: '12px 16px',
+                                    backgroundColor: '#F8FAFC',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '10px',
+                                  }}
+                                >
+                                  <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 800, fontSize: '12px', padding: '2px 8px', borderRadius: '4px' }}>
+                                        {s.section_code}
+                                      </span>
+                                      <strong style={{ fontSize: '13px', color: '#0F172A' }}>{s.section_name}</strong>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>
+                                      Target Quota: {s.question_count} Qs • Marks: {s.marks_per_question || 1} mark(s)/Q
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <span
+                                      style={{
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        padding: '3px 10px',
+                                        borderRadius: '12px',
+                                        backgroundColor: isSecSufficient ? '#DCFCE7' : '#FEF3C7',
+                                        color: isSecSufficient ? '#166534' : '#92400E',
+                                        border: `1px solid ${isSecSufficient ? '#BBF7D0' : '#FDE68A'}`,
+                                      }}
+                                    >
+                                      {isSecSufficient ? `✓ Sufficient (${assignedCount}/${s.question_count})` : `⚠ Shortage (${assignedCount}/${s.question_count} allocated)`}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ padding: '12px', backgroundColor: '#F1F5F9', borderRadius: '6px', fontSize: '12px', color: '#475569' }}>
+                            Aptitude Target: {assessmentDetail.aptitude_count ?? 25} Qs • Coding Target: {assessmentDetail.coding_count ?? 25} Qs
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
 
                 {/* 2. ASSIGNED COLLEGES TAB */}
                 {detailTab === 'colleges' && (() => {
