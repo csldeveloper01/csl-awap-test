@@ -531,6 +531,9 @@ class AdminAssessmentDetailView(APIView):
                             assessment=updated,
                             defaults={"created_by": request.user},
                         )
+                updated.is_standalone = len(drive_ids) == 0
+                updated.save(update_fields=["is_standalone"])
+                updated.refresh_from_db()
 
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.ASSESSMENT_UPDATED,
@@ -4116,3 +4119,153 @@ class AdminCollegeImportOfficialView(APIView):
             })
         except Exception as e:
             return Response({"success": False, "detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminProgrammingQuestionDetailView(APIView):
+    """
+    CRUD management for programming question details and test cases.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, pk):
+        question = get_object_or_404(QuestionBank, pk=pk)
+        from .models import ProgrammingQuestion
+        prog = getattr(question, "programming_details", None)
+        if not prog:
+            return Response({
+                "question_id": question.id,
+                "prompt": question.prompt,
+                "problem_statement": question.prompt,
+                "constraints": "",
+                "input_format": "",
+                "output_format": "",
+                "allowed_languages": ["python", "java"],
+                "boilerplate_code": {
+                    "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+                    "java": "import java.util.*;\nimport java.io.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Write your solution here\n    }\n}\n"
+                },
+                "time_limit_seconds": 2.0,
+                "memory_limit_mb": 256,
+                "test_cases": [],
+            })
+
+        test_cases_data = [
+            {
+                "id": str(tc.id),
+                "is_public": tc.is_public,
+                "input_text": tc.input_text,
+                "expected_output": tc.expected_output,
+                "marks_weightage": tc.marks_weightage,
+                "explanation": tc.explanation,
+                "order": tc.order,
+            }
+            for tc in prog.test_cases.all().order_by("order", "created_at")
+        ]
+
+        return Response({
+            "id": str(prog.id),
+            "question_id": question.id,
+            "prompt": question.prompt,
+            "problem_statement": prog.problem_statement or question.prompt,
+            "constraints": prog.constraints,
+            "input_format": prog.input_format,
+            "output_format": prog.output_format,
+            "allowed_languages": prog.allowed_languages,
+            "boilerplate_code": prog.boilerplate_code,
+            "time_limit_seconds": prog.time_limit_seconds,
+            "memory_limit_mb": prog.memory_limit_mb,
+            "test_cases": test_cases_data,
+        })
+
+    def post(self, request, pk):
+        question = get_object_or_404(QuestionBank, pk=pk)
+        from .models import ProgrammingQuestion
+
+        data = request.data
+        prog, created = ProgrammingQuestion.objects.update_or_create(
+            question=question,
+            defaults={
+                "problem_statement": data.get("problem_statement", question.prompt),
+                "constraints": data.get("constraints", ""),
+                "input_format": data.get("input_format", ""),
+                "output_format": data.get("output_format", ""),
+                "allowed_languages": data.get("allowed_languages", ["python", "java"]),
+                "boilerplate_code": data.get("boilerplate_code", {}),
+                "time_limit_seconds": float(data.get("time_limit_seconds", 2.0)),
+                "memory_limit_mb": int(data.get("memory_limit_mb", 256)),
+            },
+        )
+        return Response({"success": True, "id": str(prog.id)}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class AdminProgrammingTestCaseView(APIView):
+    """
+    Manage test cases for a programming question.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        question = get_object_or_404(QuestionBank, pk=pk)
+        from .models import ProgrammingQuestion, ProgrammingTestCase
+
+        prog = getattr(question, "programming_details", None)
+        if not prog:
+            prog = ProgrammingQuestion.objects.create(
+                question=question,
+                problem_statement=question.prompt,
+                allowed_languages=["python", "java"],
+            )
+
+        tc_id = request.data.get("id")
+        is_public = bool(request.data.get("is_public", False))
+        input_text = request.data.get("input_text", "")
+        expected_output = request.data.get("expected_output", "")
+        marks_weightage = float(request.data.get("marks_weightage", 1.0))
+        explanation = request.data.get("explanation", "")
+        order = int(request.data.get("order", 0))
+
+        if not expected_output and expected_output != "":
+            return Response({"expected_output": ["Expected output is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        if tc_id:
+            tc = get_object_or_404(ProgrammingTestCase, id=tc_id, programming_question=prog)
+            tc.is_public = is_public
+            tc.input_text = input_text
+            tc.expected_output = expected_output
+            tc.marks_weightage = marks_weightage
+            tc.explanation = explanation
+            tc.order = order
+            tc.save()
+            created = False
+        else:
+            tc = ProgrammingTestCase.objects.create(
+                programming_question=prog,
+                is_public=is_public,
+                input_text=input_text,
+                expected_output=expected_output,
+                marks_weightage=marks_weightage,
+                explanation=explanation,
+                order=order,
+            )
+            created = True
+
+        return Response({
+            "id": str(tc.id),
+            "is_public": tc.is_public,
+            "input_text": tc.input_text,
+            "expected_output": tc.expected_output,
+            "marks_weightage": tc.marks_weightage,
+            "explanation": tc.explanation,
+            "order": tc.order,
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def delete(self, request, pk, tc_id=None):
+        question = get_object_or_404(QuestionBank, pk=pk)
+        from .models import ProgrammingTestCase
+        target_tc_id = tc_id or request.data.get("test_case_id") or request.query_params.get("test_case_id")
+        if not target_tc_id:
+            return Response({"detail": "test_case_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        tc = get_object_or_404(ProgrammingTestCase, id=target_tc_id, programming_question__question=question)
+        tc.delete()
+        return Response({"success": True, "detail": "Test case deleted."}, status=status.HTTP_200_OK)
+

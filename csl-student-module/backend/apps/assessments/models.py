@@ -379,6 +379,11 @@ class Assessment(models.Model):
 
     # College eligibility (M2M)
     eligible_colleges = models.ManyToManyField(College, blank=True, related_name="assigned_assessments")
+    is_standalone = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Authoritative indicator of Mode A standalone assessment vs Mode B drive-based assessment",
+    )
 
     # Assessment-specific question pool (M2M)
     questions = models.ManyToManyField(
@@ -633,6 +638,14 @@ class Drive(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, help_text="Drive title (e.g. Campus Recruitment 2026)")
     code = models.CharField(max_length=64, unique=True, db_index=True, help_text="Unique drive code")
+    drive_code = models.CharField(
+        max_length=8,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Unique 8-digit numeric access code for student registration",
+    )
     description = models.TextField(blank=True, default="", help_text="Detailed description and instructions")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
     visibility = models.CharField(max_length=20, choices=Visibility.choices, default=Visibility.PUBLIC, db_index=True)
@@ -671,8 +684,30 @@ class Drive(models.Model):
         verbose_name = "Drive"
         verbose_name_plural = "Drives"
 
+    def clean(self):
+        if self.name:
+            self.name = self.name.strip()
+        if self.code:
+            self.code = self.code.strip().upper()
+        if not self.drive_code:
+            import random
+            for _ in range(200):
+                cand = f"{random.randint(10000000, 99999999)}"
+                if not Drive.objects.filter(drive_code=cand).exists():
+                    self.drive_code = cand
+                    break
+            if not self.drive_code:
+                import time
+                self.drive_code = str(int(time.time()))[-8:]
+        else:
+            self.drive_code = str(self.drive_code).strip()
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.name} ({self.code})"
+        return f"{self.name} ({self.code} / {self.drive_code or 'NO_CODE'})"
 
 
 class DriveAssessment(models.Model):
@@ -1354,3 +1389,179 @@ class AssessmentPdfDocument(models.Model):
         if self.binary_data:
             return bytes(self.binary_data)
         return b""
+
+
+class AssessmentRegistration(models.Model):
+    """
+    Direct student-to-assessment registration record.
+    Authoritative operational link between Candidate and Assessment.
+    Drive association is recorded as metadata for grouped reporting.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment = models.ForeignKey(
+        Assessment,
+        on_delete=models.CASCADE,
+        related_name="candidate_registrations",
+    )
+    candidate = models.ForeignKey(
+        Candidate,
+        on_delete=models.CASCADE,
+        related_name="assessment_registrations",
+    )
+    drive = models.ForeignKey(
+        Drive,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assessment_registrations",
+        help_text="Optional Drive context through which candidate registered",
+    )
+    registered_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["-registered_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["assessment", "candidate"], name="uniq_assessment_candidate_reg"),
+        ]
+        verbose_name = "Assessment Registration"
+        verbose_name_plural = "Assessment Registrations"
+
+    def __str__(self):
+        return f"{self.candidate.full_name} -> {self.assessment.code}"
+
+
+class ProgrammingQuestion(models.Model):
+    """
+    Extends a QuestionBank coding item with structured execution parameters,
+    boilerplate code, and execution constraints.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    question = models.OneToOneField(
+        QuestionBank,
+        on_delete=models.CASCADE,
+        related_name="programming_details",
+    )
+    problem_statement = models.TextField(help_text="Full markdown problem statement")
+    constraints = models.TextField(blank=True, default="", help_text="Input/output and time/memory constraints")
+    input_format = models.TextField(blank=True, default="", help_text="Input format description")
+    output_format = models.TextField(blank=True, default="", help_text="Output format description")
+    allowed_languages = models.JSONField(default=list, help_text="List of allowed languages, e.g. ['python', 'java']")
+    boilerplate_code = models.JSONField(default=dict, blank=True, help_text="Boilerplate code dictionary keyed by language")
+    time_limit_seconds = models.FloatField(default=2.0, help_text="Execution time limit per test case in seconds")
+    memory_limit_mb = models.PositiveIntegerField(default=256, help_text="Memory limit in megabytes")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Programming Details for: {self.question.prompt[:40]}"
+
+
+class ProgrammingTestCase(models.Model):
+    """
+    Test cases for automated grading of programming questions.
+    Public test cases are exposed to students as samples. Hidden test cases are confidential.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    programming_question = models.ForeignKey(
+        ProgrammingQuestion,
+        on_delete=models.CASCADE,
+        related_name="test_cases",
+    )
+    is_public = models.BooleanField(default=False, db_index=True, help_text="Public sample test case visible to student vs hidden evaluation case")
+    input_text = models.TextField(blank=True, default="", help_text="Standard input provided to student program")
+    expected_output = models.TextField(help_text="Expected standard output to match")
+    marks_weightage = models.FloatField(default=1.0, help_text="Score weightage for passing this test case")
+    explanation = models.TextField(blank=True, default="", help_text="Explanation for sample test cases")
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "created_at"]
+
+    def __str__(self):
+        scope = "Public" if self.is_public else "Hidden"
+        return f"{scope} Test Case for {self.programming_question.question.prompt[:30]}"
+
+
+class CodeSubmission(models.Model):
+    """
+    Tracks candidate code submissions evaluated against test cases.
+    Directly linked to AssessmentAttempt for authoritative score attribution.
+    """
+    class Verdict(models.TextChoices):
+        PENDING = "PENDING", "Pending Execution"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        WRONG_ANSWER = "WRONG_ANSWER", "Wrong Answer"
+        COMPILATION_ERROR = "COMPILATION_ERROR", "Compilation Error"
+        RUNTIME_ERROR = "RUNTIME_ERROR", "Runtime Error"
+        TIME_LIMIT_EXCEEDED = "TIME_LIMIT_EXCEEDED", "Time Limit Exceeded"
+        MEMORY_LIMIT_EXCEEDED = "MEMORY_LIMIT_EXCEEDED", "Memory Limit Exceeded"
+        INTERNAL_ERROR = "INTERNAL_ERROR", "Internal Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    attempt = models.ForeignKey(
+        AssessmentAttempt,
+        on_delete=models.CASCADE,
+        related_name="code_submissions",
+    )
+    candidate = models.ForeignKey(
+        Candidate,
+        on_delete=models.CASCADE,
+        related_name="code_submissions",
+    )
+    programming_question = models.ForeignKey(
+        ProgrammingQuestion,
+        on_delete=models.PROTECT,
+        related_name="submissions",
+    )
+    language = models.CharField(max_length=50, help_text="e.g. python, java")
+    source_code = models.TextField()
+    verdict = models.CharField(max_length=30, choices=Verdict.choices, default=Verdict.PENDING, db_index=True)
+    score_awarded = models.FloatField(default=0.0)
+    total_test_cases = models.PositiveIntegerField(default=0)
+    passed_test_cases = models.PositiveIntegerField(default=0)
+    execution_time_ms = models.FloatField(default=0.0)
+    memory_used_kb = models.PositiveIntegerField(default=0)
+    compile_output = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Submission by {self.candidate.full_name} ({self.language}): {self.verdict} ({self.score_awarded} pts)"
+
+
+class CodeTestResult(models.Model):
+    """
+    Detailed execution result of a single test case within a submission.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.ForeignKey(
+        CodeSubmission,
+        on_delete=models.CASCADE,
+        related_name="test_results",
+    )
+    test_case = models.ForeignKey(
+        ProgrammingTestCase,
+        on_delete=models.CASCADE,
+        related_name="results",
+    )
+    status = models.CharField(max_length=30, choices=CodeSubmission.Verdict.choices)
+    actual_output = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    execution_time_ms = models.FloatField(default=0.0)
+    memory_used_kb = models.PositiveIntegerField(default=0)
+    passed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Result for {self.test_case.id}: {'PASS' if self.passed else 'FAIL'}"
+

@@ -1808,11 +1808,7 @@ export function AdminAssessmentsView({
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
                     <button
                       onClick={() => {
-                        if (onNavigateToQuestions) {
-                          onNavigateToQuestions(a.id);
-                        } else {
-                          handleOpenDetail(a, 'overview');
-                        }
+                        handleOpenDetail(a, 'overview');
                       }}
                       style={{
                         backgroundColor: '#0D52D6',
@@ -2113,22 +2109,9 @@ export function AdminAssessmentsView({
 
                       <button
                         onClick={() => {
-                          if (onNavigateToQuestions) {
-                            onNavigateToQuestions(a.id);
-                          }
+                          handleOpenDetail(a, 'overview');
                         }}
-                        title="View and manage Question Pool for this assessment"
-                        style={{
-                          backgroundColor: '#EEF2FF',
-                          color: '#4338CA',
-                          border: '1px solid #C7D2FE',
-                          padding: '6px 10px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
+                        title="View and manage Question Pool for this assessment">
                         Question Pool
                       </button>
 

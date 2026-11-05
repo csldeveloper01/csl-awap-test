@@ -72,6 +72,8 @@ from .admin_views import (
     AdminStudentAccessReassessView,
     AdminQuestionBulkAssignPoolView,
     AdminCollegeImportOfficialView,
+    AdminProgrammingQuestionDetailView,
+    AdminProgrammingTestCaseView,
 )
 
 urlpatterns = [
@@ -130,6 +132,9 @@ urlpatterns = [
     # Questions
     path("questions/", AdminQuestionListView.as_view(), name="admin-questions"),
     path("questions/<int:pk>/", AdminQuestionDetailView.as_view(), name="admin-question-detail"),
+    path("questions/<int:pk>/coding/", AdminProgrammingQuestionDetailView.as_view(), name="admin-question-coding-details"),
+    path("questions/<int:pk>/coding/test-cases/", AdminProgrammingTestCaseView.as_view(), name="admin-question-coding-test-cases"),
+    path("questions/<int:pk>/coding/test-cases/<uuid:tc_id>/", AdminProgrammingTestCaseView.as_view(), name="admin-question-coding-test-cases-detail"),
     path("questions/<int:pk>/toggle/", AdminQuestionToggleView.as_view(), name="admin-question-toggle"),
     path("questions/<int:pk>/archive/", AdminQuestionArchiveView.as_view(), name="admin-question-archive"),
     path("questions/import-preview/", AdminQuestionImportPreviewView.as_view(), name="admin-question-import-preview"),

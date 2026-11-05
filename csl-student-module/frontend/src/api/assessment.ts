@@ -125,13 +125,35 @@ export interface QuestionOption {
   text: string;
 }
 
+export interface ProgrammingTestCaseSample {
+  id: string;
+  input_text: string;
+  expected_output: string;
+  explanation?: string;
+  marks_weightage?: number;
+}
+
+export interface ProgrammingDetails {
+  problem_statement: string;
+  constraints?: string;
+  input_format?: string;
+  output_format?: string;
+  allowed_languages: string[];
+  boilerplate_code: Record<string, string>;
+  time_limit_seconds: number;
+  memory_limit_mb: number;
+  sample_test_cases: ProgrammingTestCaseSample[];
+}
+
 export interface QuestionSnapshot {
   question_order: number;
+  question_id?: number;
   section_type: string;
   category?: string;
   prompt: string;
   options: QuestionOption[];
   selected_option: string;
+  programming_details?: ProgrammingDetails | null;
 }
 
 export interface AttemptDetailResponse {
@@ -241,10 +263,7 @@ export const getStudentColleges = async (): Promise<CollegeOption[]> => {
   return res.data;
 };
 
-export const getCandidateAssessments = async (): Promise<CandidateAssessmentsResponse> => {
-  const res = await assessmentApi.get<CandidateAssessmentsResponse>('/candidate-assessments/');
-  return res.data;
-};
+
 
 export const registerCandidate = async (payload: RegistrationPayload): Promise<RegisterResponse> => {
   const res = await assessmentApi.post<RegisterResponse>('/register/', payload);
@@ -489,5 +508,75 @@ export const linkCandidateToDrive = async (payload: DriveLinkPayload): Promise<D
     sessionStorage.setItem('assessment_token', res.data.assessment_token);
     localStorage.setItem('csl_assessment_token', res.data.assessment_token);
   }
+  return res.data;
+};
+
+
+export interface CodeRunPayload {
+  attempt_id: string;
+  question_id: number;
+  language: string;
+  source_code: string;
+  custom_input?: string;
+}
+
+export interface CodeRunResult {
+  mode: 'CUSTOM_INPUT' | 'SAMPLE_TEST_CASES';
+  verdict?: string;
+  stdout?: string;
+  stderr?: string;
+  compile_output?: string;
+  execution_time_ms?: number;
+  sample_results?: Array<{
+    test_case_id: string;
+    input_text: string;
+    expected_output: string;
+    actual_output: string;
+    stderr?: string;
+    passed: boolean;
+    execution_time_ms: number;
+  }>;
+}
+
+export const runCode = async (payload: CodeRunPayload): Promise<CodeRunResult> => {
+  const res = await assessmentApi.post<CodeRunResult>('/code/run/', payload);
+  return res.data;
+};
+
+export interface CodeSubmitPayload {
+  attempt_id: string;
+  question_id: number;
+  language: string;
+  source_code: string;
+}
+
+export interface CodeSubmitResult {
+  submission_id: string;
+  verdict: string;
+  score_awarded: number;
+  total_test_cases: number;
+  passed_test_cases: number;
+  execution_time_ms: number;
+  compile_output?: string;
+  results: Array<{
+    test_case_id: string;
+    is_public: boolean;
+    status: string;
+    passed: boolean;
+    execution_time_ms: number;
+    actual_output?: string | null;
+    expected_output?: string | null;
+    input_text?: string | null;
+  }>;
+}
+
+export const submitCode = async (payload: CodeSubmitPayload): Promise<CodeSubmitResult> => {
+  const res = await assessmentApi.post<CodeSubmitResult>('/code/submit/', payload);
+  return res.data;
+};
+
+export const getCandidateAssessments = async (driveCode?: string): Promise<CandidateAssessmentsResponse> => {
+  const params = driveCode ? { drive_code: driveCode } : {};
+  const res = await assessmentApi.get<CandidateAssessmentsResponse>('/candidate-assessments/', { params });
   return res.data;
 };

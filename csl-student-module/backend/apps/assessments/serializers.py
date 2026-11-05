@@ -24,11 +24,25 @@ class CandidateRegistrationSerializer(serializers.ModelSerializer):
     email = serializers.EmailField()
     college = serializers.CharField(required=False, allow_blank=True, default="")
     college_id = serializers.IntegerField(required=False, allow_null=True)
-    phone_number = serializers.CharField(required=True, allow_blank=False)
+    phone_number = serializers.CharField(required=False, allow_blank=True, default="9999999999")
+    register_number = serializers.CharField(required=False, allow_blank=True, default="")
+    roll_number = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    department = serializers.CharField(required=False, allow_blank=True, default="General")
+    year_of_study = serializers.CharField(required=False, allow_blank=True, default="Final Year")
     assessment_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     drive_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     invite_token = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     access_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+
+    def to_internal_value(self, data):
+        data = data.copy() if hasattr(data, "copy") else dict(data)
+        if "roll_number" in data and not data.get("register_number"):
+            data["register_number"] = data["roll_number"]
+        if not data.get("department"):
+            data["department"] = "General"
+        if not data.get("year_of_study"):
+            data["year_of_study"] = "Final Year"
+        return super().to_internal_value(data)
 
     class Meta:
         model = Candidate
@@ -36,6 +50,7 @@ class CandidateRegistrationSerializer(serializers.ModelSerializer):
             "id",
             "full_name",
             "register_number",
+            "roll_number",
             "college",
             "college_id",
             "email",
@@ -80,19 +95,24 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
     """
     Student-facing question serializer.
     STRICT SECURITY: correct_option_key is NEVER included.
+    Includes programming_details and sample test cases for coding questions.
     """
+    question_id = serializers.IntegerField(source="question.id", read_only=True)
     options = serializers.SerializerMethodField()
     category = serializers.CharField(source="question.category", read_only=True)
+    programming_details = serializers.SerializerMethodField()
 
     class Meta:
         model = AttemptQuestionSnapshot
         fields = [
             "question_order",
+            "question_id",
             "section_type",
             "category",
             "prompt",
             "options",
             "selected_option",
+            "programming_details",
         ]
 
     def get_options(self, obj):
@@ -102,6 +122,39 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
             {"key": "C", "text": obj.option_c_text},
             {"key": "D", "text": obj.option_d_text},
         ]
+
+    def get_programming_details(self, obj):
+        try:
+            q = obj.question
+            if hasattr(q, "programming_details") and q.programming_details:
+                prog = q.programming_details
+                sample_cases = [
+                    {
+                        "id": str(tc.id),
+                        "input_text": tc.input_text,
+                        "expected_output": tc.expected_output,
+                        "explanation": tc.explanation,
+                        "marks_weightage": tc.marks_weightage,
+                    }
+                    for tc in prog.test_cases.filter(is_public=True).order_by("order", "created_at")
+                ]
+                return {
+                    "problem_statement": prog.problem_statement or q.prompt,
+                    "constraints": prog.constraints,
+                    "input_format": prog.input_format,
+                    "output_format": prog.output_format,
+                    "allowed_languages": prog.allowed_languages or ["python", "java"],
+                    "boilerplate_code": prog.boilerplate_code or {
+                        "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+                        "java": "import java.util.*;\nimport java.io.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Write your solution here\n    }\n}\n"
+                    },
+                    "time_limit_seconds": prog.time_limit_seconds,
+                    "memory_limit_mb": prog.memory_limit_mb,
+                    "sample_test_cases": sample_cases,
+                }
+        except Exception:
+            pass
+        return None
 
 
 class AssessmentAttemptDetailSerializer(serializers.ModelSerializer):

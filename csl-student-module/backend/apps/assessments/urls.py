@@ -18,6 +18,8 @@ from .views import (
     PublicDriveDetailView,
     ResolveAccessCodeView,
     DriveLinkCandidateView,
+    StudentCodeRunView,
+    StudentCodeSubmitView,
 )
 
 urlpatterns = [
@@ -28,6 +30,8 @@ urlpatterns = [
     path("drive-link/", DriveLinkCandidateView.as_view(), name="drive-link-candidate"),
     path("drives/<str:code_or_id>/public/", PublicDriveDetailView.as_view(), name="public-drive-detail"),
     path("resolve-code/", ResolveAccessCodeView.as_view(), name="resolve-access-code"),
+    path("code/run/", StudentCodeRunView.as_view(), name="student-code-run"),
+    path("code/submit/", StudentCodeSubmitView.as_view(), name="student-code-submit"),
     path("recover/", StudentAttemptRecoveryView.as_view(), name="assessment-recover"),
     path("start/", StartAssessmentView.as_view(), name="assessment-start"),
     path("attempts/<uuid:attempt_id>/", AttemptStateView.as_view(), name="assessment-attempt-state"),

@@ -74,49 +74,98 @@ class CandidateEligibleAssessmentsView(APIView):
 
     def get(self, request):
         candidate = get_authorized_candidate(request)
-        if not candidate:
-            return Response(
-                {"detail": "Authentication required. Valid candidate token must be provided."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
+        drive_code = (request.query_params.get("drive_code") or "").strip()
+        college_id = request.query_params.get("college_id")
         from django.db.models import Q
-        q_filter = Q(eligible_candidates=candidate)
-        if candidate.college_ref:
-            q_filter |= Q(eligible_colleges=candidate.college_ref)
-        # Assessments with neither restricted colleges nor restricted candidates are open to all
-        q_filter |= Q(eligible_colleges__isnull=True, eligible_candidates__isnull=True)
 
-        assessments = (
-            Assessment.objects.filter(
+        if drive_code:
+            # Mode B: Drive-Based Assessment
+            drive = Drive.objects.filter(
+                Q(drive_code=drive_code) | Q(code__iexact=drive_code)
+            ).first()
+            if not drive:
+                return Response(
+                    {"detail": f"Drive with code '{drive_code}' not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
+                return Response(
+                    {"detail": f"Drive '{drive.name}' is no longer active."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if drive.eligible_colleges.exists():
+                if candidate:
+                    if not candidate.college_ref or not drive.eligible_colleges.filter(id=candidate.college_ref.id).exists():
+                        return Response(
+                            {"detail": f"Your institution ({candidate.college}) is not eligible for drive '{drive.name}'."},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+                elif college_id:
+                    if not drive.eligible_colleges.filter(id=college_id).exists():
+                        return Response(
+                            {"detail": f"Selected institution is not eligible for drive '{drive.name}'."},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+            assessments = (
+                drive.assessments.filter(
+                    status__in=[
+                        Assessment.Status.OPEN,
+                        Assessment.Status.SCHEDULED,
+                        Assessment.Status.READY,
+                        Assessment.Status.CLOSED,
+                    ],
+                    assessment_drives__status="ACTIVE",
+                )
+                .distinct()
+                .order_by("assessment_drives__display_order", "status", "-created_at")
+            )
+        else:
+            # Mode A: Open / Standalone Assessment
+            # Authoritatively filter by is_standalone=True so drive-based assessments are never leaked
+            base_qs = Assessment.objects.filter(
                 status__in=[
                     Assessment.Status.OPEN,
                     Assessment.Status.SCHEDULED,
                     Assessment.Status.READY,
                     Assessment.Status.CLOSED,
-                ]
+                ],
+                is_standalone=True,
             )
-            .filter(q_filter)
-            .distinct()
-            .order_by("status", "-created_at")
-        )
+            if candidate:
+                q_filter = Q(eligible_candidates=candidate)
+                if candidate.college_ref:
+                    q_filter |= Q(eligible_colleges=candidate.college_ref)
+                q_filter |= Q(eligible_colleges__isnull=True, eligible_candidates__isnull=True)
+                assessments = base_qs.filter(q_filter)
+            elif college_id:
+                assessments = base_qs.filter(Q(eligible_colleges__id=college_id) | Q(eligible_colleges__isnull=True))
+            else:
+                assessments = base_qs
+
+            assessments = (
+                assessments
+                .distinct()
+                .order_by("status", "-created_at")
+            )
 
         serializer = StudentCandidateAssessmentSerializer(
             assessments,
             many=True,
             context={"candidate": candidate},
         )
+        candidate_data = {
+            "id": str(candidate.id),
+            "full_name": candidate.full_name,
+            "register_number": candidate.register_number,
+            "college": candidate.college,
+            "college_id": candidate.college_ref_id,
+            "department": candidate.department,
+            "year_of_study": candidate.year_of_study,
+            "is_active": candidate.is_active,
+        } if candidate else None
+
         return Response({
-            "candidate": {
-                "id": str(candidate.id),
-                "full_name": candidate.full_name,
-                "register_number": candidate.register_number,
-                "college": candidate.college,
-                "college_id": candidate.college_ref_id,
-                "department": candidate.department,
-                "year_of_study": candidate.year_of_study,
-                "is_active": candidate.is_active,
-            },
+            "candidate": candidate_data,
             "assessments": serializer.data,
         })
 
@@ -460,7 +509,8 @@ class CandidateRegisterView(APIView):
                     target_assessment_id = str(assessment_by_code.id)
 
         if drive_code and not target_drive:
-            target_drive = Drive.objects.filter(code__iexact=drive_code).first()
+            from django.db.models import Q
+            target_drive = Drive.objects.filter(Q(drive_code=drive_code) | Q(code__iexact=drive_code)).first()
             if not target_drive:
                 return Response({"drive_code": [f"Drive with code '{drive_code}' not found."]}, status=status.HTTP_404_NOT_FOUND)
 
@@ -545,6 +595,14 @@ class CandidateRegisterView(APIView):
                     open_assigned = college_obj.assigned_assessments.filter(status=Assessment.Status.OPEN)
                     if open_assigned.count() == 1:
                         target_assessment = open_assigned.first()
+
+                if target_assessment:
+                    from .models import AssessmentRegistration
+                    AssessmentRegistration.objects.get_or_create(
+                        assessment=target_assessment,
+                        candidate=existing_candidate,
+                        defaults={"drive": target_drive},
+                    )
 
                 # Check for active in-progress attempt
                 attempt_qs = existing_candidate.attempts.all()
@@ -653,6 +711,7 @@ class CandidateRegisterView(APIView):
                         "drive_id": str(target_drive.id) if target_drive else None,
                         "drive_name": target_drive.name if target_drive else None,
                         "drive_code": target_drive.code if target_drive else None,
+                        "eight_digit_code": target_drive.drive_code if target_drive else None,
                         "is_active_attempt": bool(active_attempt),
                         "already_completed": already_completed and not bool(active_attempt),
                         "attempt_id": str(active_attempt.id if active_attempt else (last_completed.id if (already_completed and last_completed) else "")),
@@ -725,6 +784,17 @@ class CandidateRegisterView(APIView):
                         if not a.eligible_colleges.exists() or (college_obj and a.eligible_colleges.filter(id=college_obj.id).exists()):
                             a.eligible_candidates.add(candidate)
 
+                target_assessment_id = data.get("assessment_id")
+                if target_assessment_id:
+                    target_assessment = Assessment.objects.filter(id=target_assessment_id).first()
+                    if target_assessment:
+                        from .models import AssessmentRegistration
+                        AssessmentRegistration.objects.create(
+                            assessment=target_assessment,
+                            candidate=candidate,
+                            drive=target_drive,
+                        )
+
         token = generate_candidate_token(str(candidate.id))
 
         return Response(
@@ -737,6 +807,7 @@ class CandidateRegisterView(APIView):
                 "drive_id": str(target_drive.id) if target_drive else None,
                 "drive_name": target_drive.name if target_drive else None,
                 "drive_code": target_drive.code if target_drive else None,
+                "eight_digit_code": target_drive.drive_code if target_drive else None,
                 "registration_status": "NEW_REGISTRATION",
                 "is_active_attempt": False,
                 "already_completed": False,
@@ -845,18 +916,23 @@ class ResolveAccessCodeView(APIView):
                 "message": f"Access code verified for '{assessment.title}'.",
             })
 
-        # 3. Check Drive code directly
-        drive = Drive.objects.filter(code__iexact=code).first()
+        # 3. Check Drive code directly (both 8-digit numeric code and alphanumeric code)
+        from django.db.models import Q
+        drive = Drive.objects.filter(Q(drive_code=code) | Q(code__iexact=code)).first()
         if drive:
+            if drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
+                return Response({"detail": f"Drive '{drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
             if drive.visibility == Drive.Visibility.INVITE_ONLY:
                 return Response({"detail": "This drive is invite-only. A valid invitation token or access code is required."}, status=status.HTTP_403_FORBIDDEN)
             return Response({
                 "type": "DRIVE",
                 "drive_id": str(drive.id),
                 "drive_code": drive.code,
+                "eight_digit_code": drive.drive_code,
                 "drive_name": drive.name,
                 "visibility": drive.visibility,
-                "message": f"Drive found: {drive.name}.",
+                "eligible_college_ids": list(drive.eligible_colleges.values_list("id", flat=True)),
+                "message": f"Drive verified: {drive.name}.",
             })
 
         return Response({"detail": "Invalid access code or token."}, status=status.HTTP_404_NOT_FOUND)
@@ -1533,4 +1609,134 @@ class StudentInstitutionRequestView(APIView):
             "message": f"Your request to add '{institution_name}' has been received. Our administration team has been notified.",
             "success": True,
         })
+
+
+class StudentCodeRunView(APIView):
+    """
+    Candidate executes programming code in Monaco Editor against custom stdin or public sample test cases.
+    Provides immediate console output feedback without altering assessment score.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        candidate = get_authorized_candidate(request)
+        if not candidate:
+            return Response({"detail": "Valid candidate authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        attempt_id = request.data.get("attempt_id")
+        question_id = request.data.get("question_id")
+        language = (request.data.get("language") or "python").lower().strip()
+        source_code = request.data.get("source_code", "")
+        custom_input = request.data.get("custom_input")
+        if custom_input is None:
+            custom_input = request.data.get("stdin", None)
+
+        if not source_code:
+            return Response({"detail": "Source code cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
+        if attempt.state in AssessmentAttempt.TERMINAL_STATES:
+            return Response({"detail": f"Attempt is {attempt.state}; code execution is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+
+        from .coding_service import execute_single_run
+        from .models import ProgrammingQuestion
+
+        prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
+        time_limit = prog_q.time_limit_seconds if prog_q else 2.0
+        memory_limit = prog_q.memory_limit_mb if prog_q else 256
+
+        if custom_input is not None:
+            res = execute_single_run(
+                language=language,
+                source_code=source_code,
+                stdin=custom_input,
+                time_limit=time_limit,
+                memory_limit_mb=memory_limit,
+            )
+            return Response({
+                "mode": "CUSTOM_INPUT",
+                "verdict": res.get("verdict"),
+                "status": res.get("verdict"),
+                "stdout": res.get("stdout"),
+                "stderr": res.get("stderr"),
+                "compile_output": res.get("compile_output"),
+                "execution_time_ms": res.get("execution_time_ms"),
+                "memory_used_kb": res.get("memory_used_kb"),
+            })
+        else:
+            sample_results = []
+            if prog_q:
+                public_cases = prog_q.test_cases.filter(is_public=True).order_by("order", "created_at")
+                for tc in public_cases:
+                    res = execute_single_run(
+                        language=language,
+                        source_code=source_code,
+                        stdin=tc.input_text or "",
+                        time_limit=time_limit,
+                        memory_limit_mb=memory_limit,
+                    )
+                    actual = res.get("stdout", "").strip().replace("\r\n", "\n")
+                    expected = (tc.expected_output or "").strip().replace("\r\n", "\n")
+                    passed = (res.get("verdict") == "ACCEPTED") and (actual == expected)
+                    sample_results.append({
+                        "test_case_id": str(tc.id),
+                        "input_text": tc.input_text,
+                        "expected_output": tc.expected_output,
+                        "actual_output": res.get("stdout"),
+                        "stderr": res.get("stderr"),
+                        "passed": passed,
+                        "execution_time_ms": res.get("execution_time_ms"),
+                    })
+
+            return Response({
+                "mode": "SAMPLE_TEST_CASES",
+                "sample_results": sample_results,
+            })
+
+
+class StudentCodeSubmitView(APIView):
+    """
+    Candidate submits programming solution for authoritative grading.
+    Evaluates against all configured test cases (public and hidden).
+    Saves CodeSubmission and CodeTestResult linked to AssessmentAttempt.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        candidate = get_authorized_candidate(request)
+        if not candidate:
+            return Response({"detail": "Valid candidate authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        attempt_id = request.data.get("attempt_id")
+        question_id = request.data.get("question_id")
+        language = (request.data.get("language") or "python").lower().strip()
+        source_code = request.data.get("source_code", "")
+
+        if not source_code:
+            return Response({"detail": "Source code cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
+        if attempt.state in AssessmentAttempt.TERMINAL_STATES:
+            return Response({"detail": f"Attempt is {attempt.state}; code submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import ProgrammingQuestion
+        from .coding_service import evaluate_submission
+
+        prog_q = get_object_or_404(ProgrammingQuestion, question_id=question_id)
+
+        eval_result = evaluate_submission(
+            programming_question=prog_q,
+            candidate=candidate,
+            attempt=attempt,
+            language=language,
+            source_code=source_code,
+        )
+
+        eval_result["status"] = eval_result.get("verdict")
+        eval_result["score"] = eval_result.get("score_awarded")
+        eval_result["passed_count"] = eval_result.get("passed_test_cases")
+        return Response(eval_result, status=status.HTTP_200_OK)
+
 

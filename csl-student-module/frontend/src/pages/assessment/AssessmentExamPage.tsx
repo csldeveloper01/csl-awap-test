@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import { SecurePdfViewer } from '../../components/assessment/SecurePdfViewer';
+import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygroundPane';
 import {
   getAttemptState,
   saveAnswer,
@@ -1691,86 +1692,98 @@ export function AssessmentExamPage() {
               {currentQ.prompt}
             </div>
 
-            {/* 4 Selectable Answer Options (Mockup Rounded Cards) */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px',
-                paddingRight: '4px',
-              }}
-            >
-              {currentQ.options.map((opt) => {
-                const isSelected = answers[currentQ.question_order] === opt.key;
-                return (
-                  <div
-                    key={opt.key}
-                    onClick={() => handleSelectOption(currentQ.question_order, opt.key)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '14px',
-                      padding: '13px 18px',
-                      borderRadius: '12px',
-                      border: isSelected
-                        ? '2px solid #1455B8'
-                        : '1.5px solid #E2E8F0',
-                      backgroundColor: isSelected ? '#EFF6FF' : '#FFFFFF',
-                      cursor: submitting ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.12s ease',
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    {/* Radio Circle */}
+            {/* Coding Playground or MCQ Options */}
+            {currentQ.programming_details || (currentQ.section_type === 'CODING' && (!currentQ.options || currentQ.options.length === 0)) ? (
+              <div style={{ flex: 1, minHeight: '520px', display: 'flex', flexDirection: 'column' }}>
+                <CodingPlaygroundPane
+                  attemptId={attemptId || attempt.id}
+                  question={currentQ}
+                  onAnswerSaved={(code) => {
+                    handleSelectOption(currentQ.question_order, code);
+                  }}
+                />
+              </div>
+            ) : (
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                  paddingRight: '4px',
+                }}
+              >
+                {currentQ.options?.map((opt) => {
+                  const isSelected = answers[currentQ.question_order] === opt.key;
+                  return (
                     <div
+                      key={opt.key}
+                      onClick={() => handleSelectOption(currentQ.question_order, opt.key)}
                       style={{
-                        width: '18px',
-                        height: '18px',
-                        borderRadius: '50%',
-                        border: isSelected ? '5px solid #1455B8' : '2px solid #94A3B8',
-                        backgroundColor: '#FFFFFF',
-                        boxSizing: 'border-box',
-                        flexShrink: 0,
-                      }}
-                    />
-
-                    {/* Letter Badge (A, B, C, D) */}
-                    <div
-                      style={{
-                        width: '28px',
-                        height: '28px',
-                        borderRadius: '50%',
-                        backgroundColor: isSelected ? '#1455B8' : '#F1F5F9',
-                        color: isSelected ? '#FFFFFF' : '#475569',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 800,
-                        fontSize: '13px',
-                        flexShrink: 0,
+                        gap: '14px',
+                        padding: '13px 18px',
+                        borderRadius: '12px',
+                        border: isSelected
+                          ? '2px solid #1455B8'
+                          : '1.5px solid #E2E8F0',
+                        backgroundColor: isSelected ? '#EFF6FF' : '#FFFFFF',
+                        cursor: submitting ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.12s ease',
+                        boxSizing: 'border-box',
                       }}
                     >
-                      {opt.key}
-                    </div>
+                      {/* Radio Circle */}
+                      <div
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          borderRadius: '50%',
+                          border: isSelected ? '5px solid #1455B8' : '2px solid #94A3B8',
+                          backgroundColor: '#FFFFFF',
+                          boxSizing: 'border-box',
+                          flexShrink: 0,
+                        }}
+                      />
 
-                    {/* Option Text */}
-                    <div
-                      style={{
-                        fontSize: '15px',
-                        color: '#111111',
-                        fontWeight: isSelected ? 600 : 500,
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {opt.text}
+                      {/* Letter Badge (A, B, C, D) */}
+                      <div
+                        style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '50%',
+                          backgroundColor: isSelected ? '#1455B8' : '#F1F5F9',
+                          color: isSelected ? '#FFFFFF' : '#475569',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 800,
+                          fontSize: '13px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {opt.key}
+                      </div>
+
+                      {/* Option Text */}
+                      <div
+                        style={{
+                          fontSize: '15px',
+                          color: '#111111',
+                          fontWeight: isSelected ? 600 : 500,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {opt.text}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Actions Row Below Options (Mark for Later & Clear Answer) */}
             <div

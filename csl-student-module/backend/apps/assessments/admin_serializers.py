@@ -304,16 +304,23 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
         return obj.is_currently_open()
 
     def get_pool_questions_count(self, obj):
-        return obj.questions.count()
+        from .services import get_assessment_available_questions_qs
+        return get_assessment_available_questions_qs(obj).count()
 
     def get_pool_aptitude_count(self, obj):
-        return obj.questions.filter(section_type=QuestionBank.SectionType.APTITUDE, is_active=True).count()
+        from .services import get_assessment_available_questions_qs
+        return get_assessment_available_questions_qs(obj).filter(section_type=QuestionBank.SectionType.APTITUDE).count()
 
     def get_pool_coding_count(self, obj):
-        return obj.questions.filter(section_type=QuestionBank.SectionType.CODING, is_active=True).count()
+        from .services import get_assessment_available_questions_qs
+        return get_assessment_available_questions_qs(obj).filter(section_type=QuestionBank.SectionType.CODING).count()
 
     def get_pool_sufficient(self, obj):
         from django.db.models import Q
+        from .services import get_assessment_available_questions_qs
+        available_qs = get_assessment_available_questions_qs(obj)
+        if not available_qs.exists():
+            return False
         try:
             allocs = obj.section_allocations.select_related("section").all()
             if allocs.exists():
@@ -326,10 +333,7 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
                         | Q(section__code__iexact=sec.code)
                         | Q(section__name__iexact=sec.name)
                     )
-                    if obj.questions.exists():
-                        cnt = obj.questions.filter(sec_filter, is_active=True).distinct().count()
-                    else:
-                        cnt = QuestionBank.objects.filter(sec_filter, is_active=True).distinct().count()
+                    cnt = available_qs.filter(sec_filter).distinct().count()
                     if cnt < alloc.question_count:
                         return False
                 return True
@@ -339,8 +343,8 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
         cod_req = obj.coding_count or 0
         if apt_req == 0 and cod_req == 0:
             return False
-        apt = self.get_pool_aptitude_count(obj)
-        cod = self.get_pool_coding_count(obj)
+        apt = available_qs.filter(section_type=QuestionBank.SectionType.APTITUDE).count()
+        cod = available_qs.filter(section_type=QuestionBank.SectionType.CODING).count()
         return (apt >= apt_req) and (cod >= cod_req)
 
     def get_eligible_colleges(self, obj):
@@ -370,7 +374,7 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
 
     def get_drives(self, obj):
         try:
-            return [{"id": str(d.id), "name": d.name, "code": d.code} for d in obj.drives.all()]
+            return [{"id": str(d.id), "name": d.name, "code": d.code, "drive_code": d.drive_code} for d in obj.drives.all()]
         except Exception:
             return []
 
@@ -382,7 +386,10 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
 
     def get_is_standalone(self, obj):
         try:
-            return not obj.drives.exists()
+            from .models import DriveAssessment
+            if DriveAssessment.objects.filter(assessment_id=obj.id, status="ACTIVE").exists():
+                return False
+            return getattr(obj, "is_standalone", True)
         except Exception:
             return True
 
@@ -569,10 +576,9 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
                             | Q(section__code__iexact=section_obj.code)
                             | Q(section__name__iexact=section_obj.name)
                         )
-                        if self.instance and self.instance.questions.exists():
-                            avail = self.instance.questions.filter(sec_filter, is_active=True).distinct().count()
-                        else:
-                            avail = QuestionBank.objects.filter(sec_filter, is_active=True).distinct().count()
+                        from .services import get_assessment_available_questions_qs
+                        avail_qs = get_assessment_available_questions_qs(self.instance) if self.instance else QuestionBank.objects.none()
+                        avail = avail_qs.filter(sec_filter).distinct().count()
                         if avail < q_count:
                             errors["sections"] = (
                                 f"Insufficient questions for section '{section_obj.name}'. "
@@ -608,10 +614,9 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
                             | Q(section__code__iexact=sec.code)
                             | Q(section__name__iexact=sec.name)
                         )
-                        if self.instance.questions.exists():
-                            avail = self.instance.questions.filter(sec_filter, is_active=True).distinct().count()
-                        else:
-                            avail = QuestionBank.objects.filter(sec_filter, is_active=True).distinct().count()
+                        from .services import get_assessment_available_questions_qs
+                        avail_qs = get_assessment_available_questions_qs(self.instance)
+                        avail = avail_qs.filter(sec_filter).distinct().count()
                         if avail < alloc.question_count:
                             errors["sections"] = (
                                 f"Insufficient questions for section '{sec.name}'. "
@@ -638,6 +643,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
 
         college_ids = validated_data.pop("eligible_college_ids", None)
         candidate_ids = validated_data.pop("eligible_candidate_ids", None)
+        drive_ids = validated_data.pop("drive_ids", None)
         sections_data = self.initial_data.get("sections", None)
         validated_data.pop("sections", None)
         pdf_file = validated_data.pop("pdf_file", None)
@@ -649,6 +655,14 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         if candidate_ids is not None:
             cands = Candidate.objects.filter(id__in=candidate_ids)
             assessment.eligible_candidates.set(cands)
+        if drive_ids is not None:
+            valid_drives = Drive.objects.filter(id__in=drive_ids)
+            for d in valid_drives:
+                DriveAssessment.objects.get_or_create(drive=d, assessment=assessment)
+            DriveAssessment.objects.filter(assessment=assessment).exclude(drive__in=valid_drives).delete()
+            if "is_standalone" not in validated_data:
+                assessment.is_standalone = not valid_drives.exists()
+                assessment.save(update_fields=["is_standalone"])
         if sections_data and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
             self._sync_sections(assessment, sections_data)
 
@@ -709,6 +723,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
 
         college_ids = validated_data.pop("eligible_college_ids", None)
         candidate_ids = validated_data.pop("eligible_candidate_ids", None)
+        drive_ids = validated_data.pop("drive_ids", None)
         sections_data = self.initial_data.get("sections", None)
         validated_data.pop("sections", None)
         pdf_file = validated_data.pop("pdf_file", None)
@@ -720,6 +735,14 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         if candidate_ids is not None:
             cands = Candidate.objects.filter(id__in=candidate_ids)
             assessment.eligible_candidates.set(cands)
+        if drive_ids is not None:
+            valid_drives = Drive.objects.filter(id__in=drive_ids)
+            for d in valid_drives:
+                DriveAssessment.objects.get_or_create(drive=d, assessment=assessment)
+            DriveAssessment.objects.filter(assessment=assessment).exclude(drive__in=valid_drives).delete()
+            if "is_standalone" not in validated_data:
+                assessment.is_standalone = not valid_drives.exists()
+                assessment.save(update_fields=["is_standalone"])
         if sections_data is not None and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
             self._sync_sections(assessment, sections_data)
 
@@ -1749,6 +1772,7 @@ class AdminDriveListSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "code",
+            "drive_code",
             "description",
             "status",
             "visibility",
@@ -1789,6 +1813,7 @@ class AdminDriveDetailSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "code",
+            "drive_code",
             "description",
             "status",
             "visibility",
@@ -1835,6 +1860,7 @@ class AdminDriveCreateUpdateSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "code",
+            "drive_code",
             "description",
             "status",
             "visibility",
@@ -1845,6 +1871,19 @@ class AdminDriveCreateUpdateSerializer(serializers.ModelSerializer):
             "eligible_college_ids",
             "assessment_ids",
         ]
+
+    def validate_drive_code(self, value):
+        if value:
+            val = str(value).strip()
+            if not val.isdigit() or len(val) != 8:
+                raise serializers.ValidationError("Drive code must be an 8-digit numeric string.")
+            qs = Drive.objects.filter(drive_code=val)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(f"8-digit drive code '{val}' is already in use.")
+            return val
+        return value
 
     def validate_code(self, value):
         val = value.strip().upper()

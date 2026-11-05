@@ -146,6 +146,7 @@ export interface AdminSection {
   id: number;
   name: string;
   code: string;
+  drive_code?: string;
   description: string;
   is_active: boolean;
   order: number;
@@ -903,6 +904,7 @@ export interface AdminQuestionPool {
   id: string;
   name: string;
   code: string;
+  drive_code?: string;
   description: string;
   category: string;
   is_active: boolean;
@@ -1278,6 +1280,7 @@ export interface AdminDrive {
   id: string;
   name: string;
   code: string;
+  drive_code?: string;
   description: string;
   status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | 'CLOSED';
   visibility: 'PUBLIC' | 'INVITE_ONLY';
@@ -1515,3 +1518,50 @@ export async function exportCandidateDataCsv(filters?: {
   return res.data;
 }
 
+
+
+// --- CODING PLAYGROUND AUTHORING ---
+export interface AdminProgrammingTestCase {
+  id?: string;
+  is_public: boolean;
+  input_text: string;
+  expected_output: string;
+  marks_weightage: number;
+  explanation?: string;
+  order?: number;
+}
+
+export interface AdminProgrammingDetails {
+  id?: string;
+  question_id: number;
+  prompt?: string;
+  problem_statement: string;
+  constraints: string;
+  input_format: string;
+  output_format: string;
+  allowed_languages: string[];
+  boilerplate_code: Record<string, string>;
+  time_limit_seconds: number;
+  memory_limit_mb: number;
+  test_cases: AdminProgrammingTestCase[];
+}
+
+export async function fetchAdminQuestionCoding(questionId: number): Promise<AdminProgrammingDetails> {
+  const res = await adminApi.get(`/questions/${questionId}/coding/`);
+  return res.data;
+}
+
+export async function saveAdminQuestionCoding(questionId: number, data: Partial<AdminProgrammingDetails>): Promise<{ success: boolean; id: string }> {
+  const res = await adminApi.post(`/questions/${questionId}/coding/`, data);
+  return res.data;
+}
+
+export async function saveAdminProgrammingTestCase(questionId: number, data: AdminProgrammingTestCase): Promise<AdminProgrammingTestCase> {
+  const res = await adminApi.post(`/questions/${questionId}/coding/test-cases/`, data);
+  return res.data;
+}
+
+export async function deleteAdminProgrammingTestCase(questionId: number, testCaseId: string): Promise<{ success: boolean }> {
+  const res = await adminApi.delete(`/questions/${questionId}/coding/test-cases/${testCaseId}/`);
+  return res.data;
+}

@@ -615,8 +615,15 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                   <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#0F172A', margin: '0 0 6px', paddingRight: '36px' }}>
                     {drive.name}
                   </h3>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', fontFamily: 'monospace' }}>
-                    CODE: {drive.code}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '2px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', fontFamily: 'monospace' }}>
+                      CODE: {drive.code}
+                    </span>
+                    {drive.drive_code && (
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#166534', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace' }}>
+                        8-DIGIT: {drive.drive_code}
+                      </span>
+                    )}
                   </div>
                   {drive.description && (
                     <p style={{ fontSize: '13px', color: '#475569', margin: '8px 0 0', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -717,6 +724,24 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                     >
                       Copy Link
                     </button>
+                    {drive.drive_code && (
+                      <button
+                        onClick={() => copyToClipboard(drive.drive_code || "", '8-Digit Access Code')}
+                        title="Copy 8-Digit Student Access Code"
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid #BBF7D0',
+                          backgroundColor: '#F0FDF4',
+                          color: '#15803D',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Copy 8-Digit
+                      </button>
+                    )}
                   </div>
 
                   <button
@@ -1240,6 +1265,23 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
           </div>
         ) : (
           <div>
+            {/* 8-Digit Access Banner */}
+            {driveDetail.drive_code && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '10px', padding: '10px 16px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#166534' }}>8-Digit Student Access Code:</span>
+                  <span style={{ fontSize: '16px', fontWeight: 800, color: '#15803D', fontFamily: 'monospace', letterSpacing: '1px' }}>{driveDetail.drive_code}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(driveDetail.drive_code || "", '8-Digit Access Code')}
+                  style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #16A34A', backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Copy Code
+                </button>
+              </div>
+            )}
+
             {/* 6 Subtabs Navigation Bar */}
             <div
               style={{
