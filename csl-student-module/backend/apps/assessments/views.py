@@ -778,7 +778,14 @@ class PublicDriveDetailView(APIView):
                 "duration_minutes": da.assessment.duration_minutes,
                 "total_marks": da.assessment.total_marks,
                 "is_required": da.is_required,
+                "delivery_mode": da.assessment.delivery_mode,
+                "assessment_type": da.assessment.assessment_type,
             })
+
+        eligible_colleges_list = [
+            {"id": c.id, "name": c.name, "code": c.code}
+            for c in drive.eligible_colleges.filter(is_active=True)
+        ]
 
         return Response({
             "id": str(drive.id),
@@ -787,9 +794,12 @@ class PublicDriveDetailView(APIView):
             "description": drive.description,
             "status": drive.status,
             "visibility": drive.visibility,
+            "start_date": drive.start_date.isoformat() if drive.start_date else None,
+            "end_date": drive.end_date.isoformat() if drive.end_date else None,
             "registration_start": drive.registration_start.isoformat() if drive.registration_start else None,
             "registration_end": drive.registration_end.isoformat() if drive.registration_end else None,
             "is_registration_open": is_registration_open,
+            "eligible_colleges": eligible_colleges_list,
             "assessments": assessments_list,
         })
 

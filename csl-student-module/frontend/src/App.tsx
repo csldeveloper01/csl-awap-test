@@ -18,6 +18,7 @@ import { ComingSoonPage } from './pages/student/ComingSoonPage';
 import { StaffActivitiesPage } from './pages/staff/StaffActivitiesPage';
 
 import { AssessmentRegisterPage } from './pages/assessment/AssessmentRegisterPage';
+import PublicDriveLandingPage from './pages/assessment/PublicDriveLandingPage';
 import { AssessmentInstructionsPage } from './pages/assessment/AssessmentInstructionsPage';
 import { AssessmentExamPage } from './pages/assessment/AssessmentExamPage';
 import { AssessmentResultsPage } from './pages/assessment/AssessmentResultsPage';
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="/" element={<AssessmentRegisterPage />} />
 
         {/* Initial Assessment Student Journey */}
+        <Route path="/drive/:driveCode" element={<PublicDriveLandingPage />} />
         <Route path="/assessment" element={<AssessmentRegisterPage />} />
         <Route path="/assessment/register" element={<AssessmentRegisterPage />} />
         <Route path="/assessment/instructions" element={<AssessmentInstructionsPage />} />

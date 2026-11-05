@@ -77,7 +77,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
   // Manage Drive Modal State
   const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
   const [driveDetail, setDriveDetail] = useState<AdminDriveDetail | null>(null);
-  const [manageTab, setManageTab] = useState<'overview' | 'assessments' | 'registrations' | 'colleges' | 'invitations' | 'reports'>('overview');
+  const [manageTab, setManageTab] = useState<'overview' | 'assessments' | 'analytics' | 'settings' | 'registrations' | 'colleges' | 'invitations' | 'reports'>('overview');
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   // Subtab-specific states
@@ -137,15 +137,18 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
   const totalRegistrations = drives.reduce((acc, d) => acc + (d.registrations_count || 0), 0);
   const totalLinkedAssessments = drives.reduce((acc, d) => acc + (d.assessments_count || 0), 0);
 
-  const handleOpenManage = async (driveId: string) => {
+  const handleOpenManage = async (driveId: string, initialTab: typeof manageTab = 'overview') => {
     setSelectedDriveId(driveId);
     setLoadingDetail(true);
-    setManageTab('overview');
+    setManageTab(initialTab);
     try {
       const detail = await fetchAdminDriveDetail(driveId);
       setDriveDetail(detail);
       setSelectedEligibleColleges(detail.eligible_colleges.map((c) => c.id));
       setInvitations(detail.invitations || []);
+      if (initialTab === 'analytics' || initialTab === 'reports') {
+        fetchAdminDriveReports(driveId).then(setReports).catch(console.error);
+      }
     } catch (err) {
       console.error('Failed to load drive detail', err);
     } finally {
@@ -174,7 +177,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
       } catch (err) {
         console.error(err);
       }
-    } else if (tab === 'reports') {
+    } else if (tab === 'reports' || tab === 'analytics') {
       try {
         const rep = await fetchAdminDriveReports(selectedDriveId);
         setReports(rep);
@@ -200,14 +203,14 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
 
     setCreating(true);
     try {
-      await createAdminDrive({
+      const created = await createAdminDrive({
         ...createForm,
         start_date: createForm.start_date ? new Date(createForm.start_date).toISOString() : null,
         end_date: createForm.end_date ? new Date(createForm.end_date).toISOString() : null,
         registration_start: createForm.registration_start ? new Date(createForm.registration_start).toISOString() : null,
         registration_end: createForm.registration_end ? new Date(createForm.registration_end).toISOString() : null,
       });
-      showToast('Drive created successfully.');
+      showToast('Drive created successfully. Opening drive workspace...');
       setIsCreateOpen(false);
       setCreateForm({
         name: '',
@@ -221,7 +224,10 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
         registration_end: '',
         eligible_college_ids: [],
       });
-      loadDrives();
+      await loadDrives();
+      if (created && created.id) {
+        handleOpenManage(created.id, 'assessments');
+      }
     } catch (err: any) {
       showToast(err.response?.data?.error || err.response?.data?.code?.[0] || 'Failed to create drive.');
     } finally {
@@ -1248,10 +1254,10 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
               {[
                 { key: 'overview', label: 'Overview' },
                 { key: 'assessments', label: `Assessments (${driveDetail.drive_assessments?.length || 0})` },
+                { key: 'analytics', label: 'Analytics' },
                 { key: 'registrations', label: `Registrations (${driveDetail.registrations_count || 0})` },
-                { key: 'colleges', label: `Colleges & Eligibility (${driveDetail.eligible_colleges?.length || 0})` },
+                { key: 'settings', label: 'Settings & Eligibility' },
                 { key: 'invitations', label: `Invitations (${driveDetail.invitations?.length || 0})` },
-                { key: 'reports', label: 'Reports & Analytics' },
               ].map((tab) => (
                 <button
                   key={tab.key}
@@ -1329,7 +1335,7 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
                     <input
                       type="text"
                       readOnly
-                      value={`${window.location.origin}/register?drive=${driveDetail.code}`}
+                      value={`${window.location.origin}/drive/${driveDetail.code}`}
                       style={{
                         flex: 1,
                         padding: '10px 14px',
@@ -1911,64 +1917,282 @@ export function AdminDrivesView({ colleges = [], assessments = [] }: AdminDrives
               </div>
             )}
 
-            {/* TAB 6: REPORTS */}
-            {manageTab === 'reports' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* TAB: ANALYTICS & REPORTS (Candidate Deduplicated) */}
+            {(manageTab === 'reports' || manageTab === 'analytics') && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 {reports ? (
                   <div>
+                    {/* Deduplicated Analytics KPI Grid */}
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
                         gap: '12px',
-                        marginBottom: '16px',
+                        marginBottom: '20px',
                       }}
                     >
-                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '12px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A' }}>{reports.total_registered}</div>
-                        <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>Total Registered</div>
-                      </div>
-                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '12px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#0052CC' }}>{reports.attended_count}</div>
-                        <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>Total Attended</div>
-                      </div>
-                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '12px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#059669' }}>
-                          {reports.total_registered > 0
-                            ? `${Math.round((reports.attended_count / reports.total_registered) * 100)}%`
-                            : '0%'}
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A' }}>
+                          {reports.total_unique_candidates ?? reports.attended_count ?? reports.total_registered ?? 0}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>Turnout Rate</div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          Unique Candidates
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#0052CC' }}>
+                          {reports.total_attempts ?? reports.attended_count ?? 0}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          Total Attempts
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#059669' }}>
+                          {reports.completed_attempts ?? reports.completed_count ?? 0}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          Completed
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#D97706' }}>
+                          {reports.in_progress_attempts ?? reports.in_progress_count ?? 0}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          In Progress
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#DC2626' }}>
+                          {reports.flagged_attempts ?? 0}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          Flagged
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '14px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '24px', fontWeight: 800, color: '#4F46E5' }}>
+                          {reports.average_score !== undefined ? `${reports.average_score} pts` : 'N/A'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', marginTop: '2px' }}>
+                          Avg Score
+                        </div>
                       </div>
                     </div>
 
-                    <h4 style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700, color: '#334155' }}>
-                      Assessment Performance Breakdown
-                    </h4>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B' }}>
-                          <th style={{ padding: '8px 10px' }}>Assessment</th>
-                          <th style={{ padding: '8px 10px' }}>Attempts</th>
-                          <th style={{ padding: '8px 10px' }}>Completed</th>
-                          <th style={{ padding: '8px 10px' }}>In Progress</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {reports.assessments_breakdown?.map((ab: any) => (
-                          <tr key={ab.assessment_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                            <td style={{ padding: '10px', fontWeight: 600 }}>{ab.assessment_title}</td>
-                            <td style={{ padding: '10px' }}>{ab.attempts_count}</td>
-                            <td style={{ padding: '10px', color: '#059669', fontWeight: 600 }}>{ab.completed_count}</td>
-                            <td style={{ padding: '10px', color: '#D97706' }}>{ab.in_progress_count}</td>
+                    {/* Detailed Per-Assessment Breakdown */}
+                    <div style={{ marginBottom: '24px' }}>
+                      <h4 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#1E293B', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span>Associated Assessments Performance</span>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748B' }}>
+                          Completion Rate: {reports.completion_rate ? `${reports.completion_rate}%` : '0%'}
+                        </span>
+                      </h4>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px', borderRadius: '12px', overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0', color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>
+                            <th style={{ padding: '10px 12px' }}>Assessment Title & Code</th>
+                            <th style={{ padding: '10px 12px' }}>Delivery Mode</th>
+                            <th style={{ padding: '10px 12px' }}>Attempts</th>
+                            <th style={{ padding: '10px 12px' }}>Completed</th>
+                            <th style={{ padding: '10px 12px' }}>In Progress</th>
+                            <th style={{ padding: '10px 12px' }}>Avg Score</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {reports.assessments_breakdown && reports.assessments_breakdown.length > 0 ? (
+                            reports.assessments_breakdown.map((ab: any) => (
+                              <tr key={ab.assessment_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                <td style={{ padding: '12px', fontWeight: 700, color: '#0F172A' }}>
+                                  <div>{ab.title || ab.assessment_title}</div>
+                                  <div style={{ fontSize: '11px', color: '#0052CC', fontWeight: 600 }}>{ab.code || ab.assessment_code}</div>
+                                </td>
+                                <td style={{ padding: '12px', color: '#64748B' }}>
+                                  <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, backgroundColor: '#F1F5F9' }}>
+                                    {ab.delivery_mode || 'MCQ'}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '12px', fontWeight: 700 }}>{ab.total_attempts ?? ab.attempts_count ?? 0}</td>
+                                <td style={{ padding: '12px', color: '#059669', fontWeight: 700 }}>{ab.completed_attempts ?? ab.completed_count ?? 0}</td>
+                                <td style={{ padding: '12px', color: '#D97706', fontWeight: 700 }}>{ab.in_progress_attempts ?? ab.in_progress_count ?? 0}</td>
+                                <td style={{ padding: '12px', color: '#4F46E5', fontWeight: 700 }}>
+                                  {ab.average_score !== undefined ? `${ab.average_score} pts` : '-'}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={6} style={{ padding: '20px', textAlign: 'center', color: '#94A3B8' }}>
+                                No assessment attempt data recorded yet for this drive.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Participating Colleges Breakdown */}
+                    {reports.college_participation && reports.college_participation.length > 0 && (
+                      <div>
+                        <h4 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 800, color: '#1E293B' }}>
+                          Institutional Participation
+                        </h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
+                          {reports.college_participation.map((cp: any, idx: number) => (
+                            <div key={idx} style={{ padding: '12px 14px', backgroundColor: '#F8FAFC', borderRadius: '10px', border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {cp.college_name}
+                              </span>
+                              <span style={{ fontSize: '12px', fontWeight: 800, color: '#0052CC', backgroundColor: '#EFF6FF', padding: '2px 8px', borderRadius: '6px' }}>
+                                {cp.candidate_count}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p style={{ color: '#64748B', textAlign: 'center', padding: '24px' }}>Loading analytics report...</p>
                 )}
+              </div>
+            )}
+
+            {/* TAB: SETTINGS & ELIGIBILITY */}
+            {manageTab === 'settings' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ padding: '20px', backgroundColor: '#F8FAFC', borderRadius: '16px', border: '1px solid #E2E8F0' }}>
+                  <h4 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 800, color: '#0F172A' }}>
+                    Drive Settings & Operational Parameters
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>Drive Name</label>
+                        <input
+                          type="text"
+                          value={editForm.name}
+                          onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>Drive Code</label>
+                        <input
+                          type="text"
+                          value={editForm.code}
+                          onChange={(e) => setEditForm({ ...editForm, code: e.target.value.toUpperCase() })}
+                          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', fontFamily: 'monospace' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>Description</label>
+                      <textarea
+                        rows={3}
+                        value={editForm.description}
+                        onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>Status</label>
+                        <select
+                          value={editForm.status}
+                          onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
+                          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                        >
+                          <option value="DRAFT">Draft</option>
+                          <option value="UPCOMING">Upcoming</option>
+                          <option value="ACTIVE">Active</option>
+                          <option value="COMPLETED">Completed</option>
+                          <option value="ARCHIVED">Archived</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>Visibility</label>
+                        <select
+                          value={editForm.visibility}
+                          onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value as any })}
+                          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                        >
+                          <option value="PUBLIC">Public</option>
+                          <option value="INVITE_ONLY">Invite Only</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={handleUpdateDrive}
+                        disabled={updating}
+                        style={{
+                          padding: '10px 20px',
+                          borderRadius: '10px',
+                          border: 'none',
+                          backgroundColor: '#0052CC',
+                          color: '#FFFFFF',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {updating ? 'Saving Changes...' : 'Save Drive Settings'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Institutional Eligibility Embedded in Settings */}
+                <div style={{ padding: '20px', backgroundColor: '#F8FAFC', borderRadius: '16px', border: '1px solid #E2E8F0' }}>
+                  <h4 style={{ margin: '0 0 12px', fontSize: '15px', fontWeight: 800, color: '#0F172A' }}>
+                    Eligible Colleges & Institutions
+                  </h4>
+                  <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748B' }}>
+                    Leave unselected to make this Drive open to all verified institutions.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', maxHeight: '180px', overflowY: 'auto', padding: '8px', backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', marginBottom: '14px' }}>
+                    {colleges.map((c) => {
+                      const isChecked = selectedEligibleColleges.includes(c.id);
+                      return (
+                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#0F172A', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedEligibleColleges([...selectedEligibleColleges, c.id]);
+                              } else {
+                                setSelectedEligibleColleges(selectedEligibleColleges.filter((id) => id !== c.id));
+                              }
+                            }}
+                          />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} ({c.code})</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={handleSaveEligibility}
+                      style={{
+                        padding: '8px 18px',
+                        borderRadius: '10px',
+                        border: 'none',
+                        backgroundColor: '#0F172A',
+                        color: '#FFFFFF',
+                        fontWeight: 700,
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Update Eligible Colleges
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

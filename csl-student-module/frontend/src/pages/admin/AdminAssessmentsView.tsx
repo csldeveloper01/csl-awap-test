@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
@@ -38,6 +38,8 @@ import {
   type AdminSection,
   type AdminQuestionPool,
   type AdminAssessmentPoolSource,
+  fetchAdminDrives,
+  type AdminDrive,
 } from '../../api/admin';
 
 interface AdminAssessmentsViewProps {
@@ -92,6 +94,13 @@ export function AdminAssessmentsView({
   const [assessmentDetail, setAssessmentDetail] = useState<AdminAssessmentDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  // Drive hierarchy state (Phase 2.2.2)
+  const [availableDrives, setAvailableDrives] = useState<AdminDrive[]>([]);
+  const [driveFilter, setDriveFilter] = useState<'ALL' | 'STANDALONE' | 'DRIVE' | string>('ALL');
+  const [createIsStandalone, setCreateIsStandalone] = useState(true);
+  const [createSelectedDriveIds, setCreateSelectedDriveIds] = useState<string[]>([]);
+  const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
 
   // Close Assessment policy selection
   const [closePolicy, setClosePolicy] = useState<'ALLOW_FINISH' | 'STRICT_CUTOFF'>('ALLOW_FINISH');
@@ -246,6 +255,7 @@ export function AdminAssessmentsView({
     fetchAssessments();
     fetchColleges();
     fetchSections();
+    fetchAdminDrives().then(setAvailableDrives).catch(console.error);
   }, [search, statusFilter]);
 
   const handleOpenDetail = async (
@@ -697,6 +707,10 @@ export function AdminAssessmentsView({
       eligible_college_ids: [],
     });
 
+    // Phase 2.2.2: Reset drive hierarchy states
+    setCreateIsStandalone(true);
+    setCreateSelectedDriveIds([]);
+
     // Phase 2.1: Start with empty sections - require explicit admin configuration
     setCreateSections([]);
     setShowCreateModal(true);
@@ -775,6 +789,11 @@ export function AdminAssessmentsView({
         createForm.eligible_college_ids.forEach((cid) => {
           formData.append('eligible_college_ids', String(cid));
         });
+        if (!createIsStandalone && createSelectedDriveIds.length > 0) {
+          createSelectedDriveIds.forEach((did) => {
+            formData.append('drive_ids', did);
+          });
+        }
 
         await createAdminAssessment(formData);
       } else {
@@ -786,6 +805,7 @@ export function AdminAssessmentsView({
           aptitude_count: aptSec ? Number(aptSec.question_count) : (payloadSections.length > 0 ? 0 : Math.floor(totalQuestions / 2)),
           coding_count: codSec ? Number(codSec.question_count) : (payloadSections.length > 0 ? 0 : Math.ceil(totalQuestions / 2)),
           sections: payloadSections,
+          drive_ids: createIsStandalone ? [] : createSelectedDriveIds,
         });
       }
 
@@ -801,6 +821,7 @@ export function AdminAssessmentsView({
 
   const handleOpenEdit = (assessment: AdminAssessment) => {
     setEditError('');
+    setEditSelectedDriveIds(assessment.drives ? assessment.drives.map((d) => d.id) : []);
     setEditDeliveryMode(assessment.delivery_mode || 'MCQ');
     setEditPdfFile(null);
     setEditPdfFilename(assessment.pdf_filename || null);
@@ -929,6 +950,7 @@ export function AdminAssessmentsView({
         auto_submit_on_tab_limit: editForm.auto_submit_on_tab_limit,
         close_policy: editForm.close_policy,
         sections: payloadSections,
+        drive_ids: editSelectedDriveIds,
       });
 
       if (editDeliveryMode === 'PDF_CODING' && editPdfFile) {
@@ -995,8 +1017,22 @@ export function AdminAssessmentsView({
     }
   };
 
+  // Drive hierarchy filtered assessments (Phase 2.2.2)
+  const displayedAssessments: AdminAssessment[] = useMemo(() => {
+    return assessments.filter((a: AdminAssessment) => {
+      if (driveFilter === 'ALL') return true;
+      if (driveFilter === 'STANDALONE') {
+        return a.is_standalone || !a.drives || a.drives.length === 0;
+      }
+      if (driveFilter === 'DRIVE') {
+        return !a.is_standalone && a.drives && a.drives.length > 0;
+      }
+      return a.drives?.some((d: { id: string; code: string }) => d.id === driveFilter || d.code === driveFilter);
+    });
+  }, [assessments, driveFilter]);
+
   // Metrics
-  const totalCount = assessments.length;
+  const totalCount = displayedAssessments.length;
   const openCount = assessments.filter((a) => a.is_open).length;
   const totalAttempts = assessments.reduce((acc, a) => acc + (a.attempts_count || 0), 0);
 
@@ -1262,6 +1298,49 @@ export function AdminAssessmentsView({
             </svg>
           </div>
         </div>
+
+        {/* Drive Hierarchy Filter (Phase 2.2.2) */}
+        <div style={{ position: 'relative' }}>
+          <select
+            value={driveFilter}
+            onChange={(e) => setDriveFilter(e.target.value)}
+            style={{
+              appearance: 'none',
+              backgroundColor: '#FFFFFF',
+              border: '1.5px solid #CBD5E1',
+              borderRadius: '24px',
+              padding: '10px 36px 10px 18px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#1E293B',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="ALL">All Hierarchy (Drives & Standalone)</option>
+            <option value="STANDALONE">Standalone Only</option>
+            <option value="DRIVE">Drive Associated Only</option>
+            {availableDrives.map((d) => (
+              <option key={d.id} value={d.id}>
+                Drive: {d.name} ({d.code})
+              </option>
+            ))}
+          </select>
+          <div
+            style={{
+              position: 'absolute',
+              right: '12px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              pointerEvents: 'none',
+              color: '#0D52D6',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+        </div>
       </div>
 
       {/* ─── ACTION BUTTONS ROW (Mockup 3) ─── */}
@@ -1420,7 +1499,7 @@ export function AdminAssessmentsView({
             gap: '22px',
           }}
         >
-          {assessments.map((a) => {
+          {displayedAssessments.map((a: AdminAssessment) => {
             const sectionLabel =
               a.sections && a.sections.length > 0
                 ? a.sections.map((s) => s.section_name || s.section_code).join(' • ')
@@ -1465,19 +1544,52 @@ export function AdminAssessmentsView({
                       <div style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1.25 }}>
                         {a.title}
                       </div>
-                      <div
-                        style={{
-                          display: 'inline-block',
-                          backgroundColor: '#F1F5F9',
-                          color: '#475569',
-                          borderRadius: '12px',
-                          padding: '3px 10px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          marginTop: '6px',
-                        }}
-                      >
-                        {sectionLabel}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            backgroundColor: '#F1F5F9',
+                            color: '#475569',
+                            borderRadius: '12px',
+                            padding: '3px 10px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {sectionLabel}
+                        </span>
+                        {a.is_standalone || !a.drives || a.drives.length === 0 ? (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              backgroundColor: '#F1F5F9',
+                              color: '#64748B',
+                              borderRadius: '12px',
+                              padding: '3px 10px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                            }}
+                          >
+                            Standalone
+                          </span>
+                        ) : (
+                          <span
+                            title={a.drives.map((d: any) => `${d.name} (${d.code})`).join('\n')}
+                            style={{
+                              display: 'inline-block',
+                              backgroundColor: '#EFF6FF',
+                              color: '#0052CC',
+                              border: '1px solid #BFDBFE',
+                              borderRadius: '12px',
+                              padding: '3px 10px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'help',
+                            }}
+                          >
+                            Drive: {a.drives[0].name}{a.drives.length > 1 ? ` (+${a.drives.length - 1})` : ''}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -2451,6 +2563,71 @@ export function AdminAssessmentsView({
                   <option value="ALLOW_FINISH">Allow in-progress attempts to finish</option>
                   <option value="STRICT_CUTOFF">Strict cutoff (terminate active attempts immediately)</option>
                 </select>
+              </div>
+
+                            {/* Drive Association Section (Phase 2.2.2) */}
+              <div style={{ marginBottom: '20px', padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  Drive Association & Hierarchy
+                </label>
+                <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="createDriveMode"
+                      checked={createIsStandalone}
+                      onChange={() => {
+                        setCreateIsStandalone(true);
+                        setCreateSelectedDriveIds([]);
+                      }}
+                    />
+                    <span>Standalone Assessment (Independent)</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="createDriveMode"
+                      checked={!createIsStandalone}
+                      onChange={() => setCreateIsStandalone(false)}
+                    />
+                    <span>Assign to Existing Drive(s)</span>
+                  </label>
+                </div>
+                {!createIsStandalone && (
+                  <div style={{ marginTop: '10px' }}>
+                    <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '6px' }}>
+                      Select one or more active drives to link this assessment with:
+                    </div>
+                    {availableDrives.length === 0 ? (
+                      <p style={{ margin: 0, fontSize: '12px', color: '#94A3B8' }}>No active drives available. You can assign this assessment to drives later.</p>
+                    ) : (
+                      <div style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', maxHeight: '120px', overflowY: 'auto', backgroundColor: '#FFFFFF' }}>
+                        {availableDrives.map((d) => {
+                          const isChecked = createSelectedDriveIds.includes(d.id);
+                          return (
+                            <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '12px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setCreateSelectedDriveIds([...createSelectedDriveIds, d.id]);
+                                  } else {
+                                    setCreateSelectedDriveIds(createSelectedDriveIds.filter((id) => id !== d.id));
+                                  }
+                                }}
+                              />
+                              <strong style={{ color: '#0052CC' }}>[{d.code}]</strong> {d.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div style={{ fontSize: '11px', color: '#64748B', marginTop: '8px' }}>
+                  ℹ Standalone assessments can be linked to recruitment drives at any time. Removing an assessment from a drive never deletes the assessment or its candidate records.
+                </div>
               </div>
 
               {/* Eligible Colleges Selection */}

@@ -417,6 +417,8 @@ export interface PublicDriveAssessment {
   duration_minutes: number;
   total_marks: number;
   is_required: boolean;
+  delivery_mode?: string;
+  assessment_type?: string;
 }
 
 export interface PublicDriveInfo {
@@ -425,10 +427,13 @@ export interface PublicDriveInfo {
   code: string;
   description: string;
   status: string;
+  visibility?: string;
   start_date: string | null;
   end_date: string | null;
   registration_start: string | null;
   registration_end: string | null;
+  is_registration_open?: boolean;
+  eligible_colleges?: Array<{ id: number; name: string; code: string }>;
   assessments: PublicDriveAssessment[];
 }
 

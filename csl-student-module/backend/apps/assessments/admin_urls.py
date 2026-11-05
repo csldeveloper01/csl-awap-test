@@ -89,6 +89,7 @@ urlpatterns = [
     path("drives/<uuid:pk>/invitations/", AdminDriveInvitationsView.as_view(), name="admin-drive-invitations"),
     path("drives/<uuid:pk>/eligibility/", AdminDriveEligibilityView.as_view(), name="admin-drive-eligibility"),
     path("drives/<uuid:pk>/reports/", AdminDriveReportsView.as_view(), name="admin-drive-reports"),
+    path("drives/<uuid:pk>/analytics/", AdminDriveReportsView.as_view(), name="admin-drive-analytics"),
     
     # Colleges
     path("colleges/", AdminCollegeListView.as_view(), name="admin-colleges"),

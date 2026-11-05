@@ -219,6 +219,14 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
     pool_sufficient = serializers.SerializerMethodField()
     sections = serializers.SerializerMethodField()
 
+    pdf_filename = serializers.SerializerMethodField()
+    pdf_file_size = serializers.SerializerMethodField()
+    pdf_uploaded_at = serializers.SerializerMethodField()
+    eligible_candidates_count = serializers.SerializerMethodField()
+    drives = serializers.SerializerMethodField()
+    drives_count = serializers.SerializerMethodField()
+    is_standalone = serializers.SerializerMethodField()
+
     class Meta:
         model = Assessment
         fields = [
@@ -262,12 +270,10 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
             "pdf_filename",
             "pdf_file_size",
             "pdf_uploaded_at",
+            "drives",
+            "drives_count",
+            "is_standalone",
         ]
-
-    pdf_filename = serializers.SerializerMethodField()
-    pdf_file_size = serializers.SerializerMethodField()
-    pdf_uploaded_at = serializers.SerializerMethodField()
-    eligible_candidates_count = serializers.SerializerMethodField()
 
     def get_pdf_filename(self, obj):
         try:
@@ -362,6 +368,24 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
             ]
         ).count()
 
+    def get_drives(self, obj):
+        try:
+            return [{"id": str(d.id), "name": d.name, "code": d.code} for d in obj.drives.all()]
+        except Exception:
+            return []
+
+    def get_drives_count(self, obj):
+        try:
+            return obj.drives.count()
+        except Exception:
+            return 0
+
+    def get_is_standalone(self, obj):
+        try:
+            return not obj.drives.exists()
+        except Exception:
+            return True
+
 
 class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
     eligible_college_ids = serializers.ListField(
@@ -370,6 +394,11 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         write_only=True,
     )
     eligible_candidate_ids = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        write_only=True,
+    )
+    drive_ids = serializers.ListField(
         child=serializers.CharField(),
         required=False,
         write_only=True,
@@ -414,6 +443,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "close_policy",
             "eligible_college_ids",
             "eligible_candidate_ids",
+            "drive_ids",
             "sections",
         ]
 
@@ -1646,6 +1676,7 @@ class AdminDriveAssessmentSerializer(serializers.ModelSerializer):
             "total_marks",
             "assessment_status",
             "display_order",
+            "status",
             "is_required",
             "registration_enabled",
             "created_at",

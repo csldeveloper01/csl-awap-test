@@ -205,6 +205,9 @@ export interface AdminAssessment {
   updated_at: string;
   eligible_colleges: { id: number; name: string; code: string }[];
   eligible_colleges_count: number;
+  drives?: Array<{ id: string; name: string; code: string }>;
+  drives_count?: number;
+  is_standalone?: boolean;
   attempts_count: number;
   in_progress_count: number;
   submitted_count: number;
@@ -486,7 +489,7 @@ export async function getAdminAssessmentDetail(id: string): Promise<AdminAssessm
 }
 
 export async function createAdminAssessment(
-  data: FormData | (Partial<AdminAssessment> & { eligible_college_ids?: number[] })
+  data: FormData | (Partial<AdminAssessment> & { eligible_college_ids?: number[]; drive_ids?: string[] })
 ): Promise<AdminAssessmentDetail> {
   const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
   const res = await adminApi.post<AdminAssessmentDetail>(
@@ -497,7 +500,10 @@ export async function createAdminAssessment(
   return res.data;
 }
 
-export async function updateAdminAssessment(id: string, data: Partial<AdminAssessment> & { eligible_college_ids?: number[] }): Promise<AdminAssessmentDetail> {
+export async function updateAdminAssessment(
+  id: string,
+  data: Partial<AdminAssessment> & { eligible_college_ids?: number[]; drive_ids?: string[] }
+): Promise<AdminAssessmentDetail> {
   const res = await adminApi.patch<AdminAssessmentDetail>(`/assessments/${id}/`, data);
   return res.data;
 }
@@ -1395,24 +1401,48 @@ export async function updateAdminDriveEligibility(
   return res.data;
 }
 
-export async function fetchAdminDriveReports(driveId: string): Promise<{
+export interface AdminDriveAnalytics {
   drive_id: string;
   drive_name: string;
-  total_registered: number;
-  attended_count: number;
-  registration_status_breakdown: Record<string, number>;
-  assessments_count: number;
+  drive_code: string;
+  total_associated_assessments: number;
+  total_registrations: number;
+  total_unique_candidates: number;
+  total_attempts: number;
+  completed_attempts: number;
+  in_progress_attempts: number;
+  timed_out_attempts: number;
+  flagged_attempts: number;
+  average_score: number;
+  completion_rate: number;
   assessments_breakdown: Array<{
     assessment_id: string;
-    assessment_title: string;
-    assessment_code: string;
+    code: string;
+    title: string;
+    delivery_mode: string;
+    status: string;
+    is_required: boolean;
     total_candidates: number;
-    attempts_count: number;
-    completed_count: number;
-    in_progress_count: number;
+    total_attempts: number;
+    completed_attempts: number;
+    in_progress_attempts: number;
+    timed_out_attempts: number;
+    flagged_attempts: number;
+    average_score: number;
   }>;
-}> {
-  const res = await adminApi.get(`/drives/${driveId}/reports/`);
+  college_participation: Array<{
+    college_name: string;
+    candidate_count: number;
+  }>;
+}
+
+export async function fetchAdminDriveReports(driveId: string): Promise<AdminDriveAnalytics> {
+  const res = await adminApi.get<AdminDriveAnalytics>(`/drives/${driveId}/analytics/`);
+  return res.data;
+}
+
+export async function fetchAdminDriveAnalytics(driveId: string): Promise<AdminDriveAnalytics> {
+  const res = await adminApi.get<AdminDriveAnalytics>(`/drives/${driveId}/analytics/`);
   return res.data;
 }
 

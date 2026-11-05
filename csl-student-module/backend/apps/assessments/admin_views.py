@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Avg
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -462,11 +462,25 @@ class AdminAssessmentListView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        drive_ids = serializer.validated_data.pop("drive_ids", None)
+        if drive_ids is None and "drive_ids" in request.data:
+            drive_ids = request.data.get("drive_ids", [])
+
         with transaction.atomic():
             assessment = serializer.save(
                 status=Assessment.Status.DRAFT,
                 created_by=request.user,
             )
+
+            if drive_ids:
+                for d_id in drive_ids:
+                    drive_obj = Drive.objects.filter(id=d_id).first()
+                    if drive_obj:
+                        DriveAssessment.objects.get_or_create(
+                            drive=drive_obj,
+                            assessment=assessment,
+                            defaults={"created_by": request.user},
+                        )
 
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.ASSESSMENT_CREATED,
@@ -497,12 +511,26 @@ class AdminAssessmentDetailView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         college_ids = serializer.validated_data.pop("eligible_college_ids", None)
+        drive_ids = serializer.validated_data.pop("drive_ids", None)
+        if drive_ids is None and "drive_ids" in request.data:
+            drive_ids = request.data.get("drive_ids", [])
 
         with transaction.atomic():
             updated = serializer.save()
             if college_ids is not None:
                 colleges = College.objects.filter(id__in=college_ids)
                 updated.eligible_colleges.set(colleges)
+
+            if drive_ids is not None:
+                DriveAssessment.objects.filter(assessment=updated).exclude(drive_id__in=drive_ids).delete()
+                for d_id in drive_ids:
+                    drive_obj = Drive.objects.filter(id=d_id).first()
+                    if drive_obj:
+                        DriveAssessment.objects.get_or_create(
+                            drive=drive_obj,
+                            assessment=updated,
+                            defaults={"created_by": request.user},
+                        )
 
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.ASSESSMENT_UPDATED,
@@ -3747,30 +3775,101 @@ class AdminDriveEligibilityView(APIView):
 
 class AdminDriveReportsView(APIView):
     """
-    Analytics and reporting for a Drive.
+    Analytics and reporting for a Drive with deduplicated candidate metrics.
     """
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request, pk):
         drive = get_object_or_404(Drive, pk=pk)
-        reg_count = drive.registrations.count()
-        approved_count = drive.registrations.filter(registration_status=DriveRegistration.Status.APPROVED).count()
-        registered_count = drive.registrations.filter(registration_status=DriveRegistration.Status.REGISTERED).count()
 
-        assessment_ids = list(drive.drive_assessments.values_list("assessment_id", flat=True))
-        attempts_qs = AssessmentAttempt.objects.filter(assessment_id__in=assessment_ids, candidate__drive_registrations__drive=drive)
-        attempts_count = attempts_qs.count()
-        submitted_count = attempts_qs.filter(state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]).count()
+        drive_assessments = drive.drive_assessments.select_related("assessment").all()
+        assessment_ids = [da.assessment_id for da in drive_assessments]
+
+        reg_count = drive.registrations.count()
+        registered_candidate_ids = set(drive.registrations.values_list("candidate_id", flat=True))
+
+        attempts_qs = AssessmentAttempt.objects.filter(assessment_id__in=assessment_ids)
+        attempt_candidate_ids = set(attempts_qs.values_list("candidate_id", flat=True))
+
+        # Deduplicated unique candidates across all associated assessments & drive registrations
+        unique_candidate_ids = registered_candidate_ids | attempt_candidate_ids
+        total_unique_candidates = len(unique_candidate_ids)
+
+        total_attempts = attempts_qs.count()
+        completed_attempts = attempts_qs.filter(
+            state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]
+        ).count()
+        in_progress_attempts = attempts_qs.filter(state=AssessmentAttempt.State.IN_PROGRESS).count()
+        timed_out_attempts = attempts_qs.filter(state=AssessmentAttempt.State.TIMED_OUT).count()
+        flagged_attempts = attempts_qs.filter(
+            Q(is_flagged=True) | Q(integrity_events__isnull=False)
+        ).distinct().count()
+
+        avg_score_res = attempts_qs.filter(
+            state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]
+        ).aggregate(Avg("total_score"))["total_score__avg"]
+        average_score = round(float(avg_score_res), 2) if avg_score_res is not None else 0.0
+
+        completion_rate = round((completed_attempts / total_attempts * 100), 1) if total_attempts > 0 else 0.0
+
+        assessments_breakdown = []
+        for da in drive_assessments:
+            a = da.assessment
+            a_attempts = attempts_qs.filter(assessment=a)
+            a_total = a_attempts.count()
+            a_completed = a_attempts.filter(
+                state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]
+            ).count()
+            a_in_prog = a_attempts.filter(state=AssessmentAttempt.State.IN_PROGRESS).count()
+            a_timeout = a_attempts.filter(state=AssessmentAttempt.State.TIMED_OUT).count()
+            a_flagged = a_attempts.filter(Q(is_flagged=True) | Q(integrity_events__isnull=False)).distinct().count()
+            a_avg = a_attempts.filter(
+                state__in=[AssessmentAttempt.State.SUBMITTED, AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION]
+            ).aggregate(Avg("total_score"))["total_score__avg"]
+
+            assessments_breakdown.append({
+                "assessment_id": str(a.id),
+                "code": a.code,
+                "title": a.title,
+                "delivery_mode": a.delivery_mode,
+                "status": a.status,
+                "is_required": da.is_required,
+                "total_candidates": a.eligible_candidates.count(),
+                "total_attempts": a_total,
+                "completed_attempts": a_completed,
+                "in_progress_attempts": a_in_prog,
+                "timed_out_attempts": a_timeout,
+                "flagged_attempts": a_flagged,
+                "average_score": round(float(a_avg), 2) if a_avg is not None else 0.0,
+            })
+
+        college_counts = (
+            Candidate.objects.filter(id__in=unique_candidate_ids)
+            .values("college")
+            .annotate(candidate_count=Count("id"))
+            .order_by("-candidate_count")[:15]
+        )
+        college_participation = [
+            {"college_name": c["college"] or "Unknown", "candidate_count": c["candidate_count"]}
+            for c in college_counts
+        ]
 
         return Response({
             "drive_id": str(drive.id),
             "drive_name": drive.name,
+            "drive_code": drive.code,
+            "total_associated_assessments": len(assessment_ids),
             "total_registrations": reg_count,
-            "registered_candidates": registered_count,
-            "approved_candidates": approved_count,
-            "total_assessments": len(assessment_ids),
-            "total_attempts": attempts_count,
-            "completed_attempts": submitted_count,
+            "total_unique_candidates": total_unique_candidates,
+            "total_attempts": total_attempts,
+            "completed_attempts": completed_attempts,
+            "in_progress_attempts": in_progress_attempts,
+            "timed_out_attempts": timed_out_attempts,
+            "flagged_attempts": flagged_attempts,
+            "average_score": average_score,
+            "completion_rate": completion_rate,
+            "assessments_breakdown": assessments_breakdown,
+            "college_participation": college_participation,
         })
 
 

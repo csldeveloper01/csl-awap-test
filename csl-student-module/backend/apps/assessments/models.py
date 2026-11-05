@@ -691,8 +691,22 @@ class DriveAssessment(models.Model):
         related_name="assessment_drives",
     )
     display_order = models.PositiveIntegerField(default=0, help_text="Display order sequence within the drive")
+    status = models.CharField(
+        max_length=20,
+        default="ACTIVE",
+        choices=[("ACTIVE", "Active"), ("INACTIVE", "Inactive")],
+        db_index=True,
+        help_text="Status of association",
+    )
     is_required = models.BooleanField(default=True, help_text="Whether this assessment is mandatory in the drive")
     registration_enabled = models.BooleanField(default=True, help_text="Whether registrations for this assessment are enabled in this drive")
+    created_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_drive_assessments",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
