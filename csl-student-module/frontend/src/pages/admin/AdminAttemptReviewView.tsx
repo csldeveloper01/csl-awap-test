@@ -660,6 +660,184 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
         </div>
       )}
 
+      {/* Coding Submissions & Automated Evaluation */}
+      {review.code_submissions && review.code_submissions.length > 0 && (
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '16px',
+            border: '1.5px solid #E2E8F0',
+            padding: '24px',
+            marginBottom: '20px',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              💻 Candidate Code Submissions & Test Case Breakdown
+            </h3>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748B' }}>
+              {review.code_submissions.length} submission{review.code_submissions.length > 1 ? 's' : ''} recorded
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {review.code_submissions.map((sub, sIdx) => (
+              <div
+                key={sub.id || sIdx}
+                style={{
+                  border: '1px solid #CBD5E1',
+                  borderRadius: '12px',
+                  overflow: 'hidden',
+                  backgroundColor: '#F8FAFC',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '12px 18px',
+                    backgroundColor: '#0B2E6F',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '10px',
+                  }}
+                >
+                  <div>
+                    <span style={{ fontWeight: 800, fontSize: '14px' }}>
+                      {sub.question_title || `Programming Question #${sIdx + 1}`}
+                    </span>
+                    <span style={{ marginLeft: '12px', fontSize: '12px', opacity: 0.85 }}>
+                      Language: <strong>{sub.language.toUpperCase()}</strong>
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <span
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        backgroundColor: sub.verdict === 'ACCEPTED' ? '#16A34A' : '#DC2626',
+                        color: '#FFFFFF',
+                      }}
+                    >
+                      {sub.verdict}
+                    </span>
+                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#FACC15' }}>
+                      {sub.score_awarded} pts
+                    </span>
+                    <span style={{ fontSize: '11px', opacity: 0.8 }}>
+                      Passed {sub.passed_test_cases}/{sub.total_test_cases} ({sub.execution_time_ms.toFixed(1)}ms)
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px 18px' }}>
+                  {/* Source Code View */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
+                      Submitted Source Code:
+                    </div>
+                    <pre
+                      style={{
+                        backgroundColor: '#1E1E1E',
+                        color: '#E2E8F0',
+                        padding: '12px 16px',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontFamily: 'Consolas, monospace',
+                        margin: 0,
+                        overflowX: 'auto',
+                        maxHeight: '260px',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {sub.source_code}
+                    </pre>
+                  </div>
+
+                  {sub.compile_output && (
+                    <div style={{ marginBottom: '14px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', padding: '10px 14px', borderRadius: '8px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#DC2626' }}>Compilation / Diagnostic Output:</span>
+                      <pre style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#991B1B', whiteSpace: 'pre-wrap' }}>
+                        {sub.compile_output}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Full Test Results Breakdown (Public & Hidden) */}
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>
+                      Comprehensive Test Case Evaluation Breakdown:
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {sub.test_results?.map((tr, trIdx) => (
+                        <div
+                          key={tr.id || trIdx}
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: '8px',
+                            border: tr.passed ? '1px solid #A7F3D0' : '1px solid #FECACA',
+                            backgroundColor: tr.passed ? '#ECFDF5' : '#FEF2F2',
+                            fontSize: '12px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: 800, color: tr.passed ? '#065F46' : '#991B1B' }}>
+                              {tr.is_public ? `Sample Case ${trIdx + 1} (Public)` : `Test Case ${trIdx + 1} (Hidden Evaluation)`}
+                            </span>
+                            <span
+                              style={{
+                                fontWeight: 800,
+                                fontSize: '11px',
+                                color: tr.passed ? '#059669' : '#DC2626',
+                              }}
+                            >
+                              {tr.passed ? '✓ PASSED' : `✗ ${tr.status || 'FAILED'}`} ({tr.execution_time_ms.toFixed(1)}ms)
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', marginTop: '6px', fontSize: '11px', color: '#334155' }}>
+                            {tr.input_text !== undefined && (
+                              <div>
+                                <span style={{ fontWeight: 700, color: '#64748B' }}>Input: </span>
+                                <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
+                                  {tr.input_text || '(empty)'}
+                                </code>
+                              </div>
+                            )}
+                            <div>
+                              <span style={{ fontWeight: 700, color: '#64748B' }}>Expected: </span>
+                              <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
+                                {tr.expected_output}
+                              </code>
+                            </div>
+                            <div>
+                              <span style={{ fontWeight: 700, color: '#64748B' }}>Actual: </span>
+                              <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
+                                {tr.actual_output !== undefined ? (tr.actual_output?.trim() || '(empty)') : 'N/A'}
+                              </code>
+                            </div>
+                          </div>
+
+                          {tr.error_message && (
+                            <pre style={{ margin: '6px 0 0 0', color: '#DC2626', fontSize: '11px', whiteSpace: 'pre-wrap' }}>
+                              {tr.error_message}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Questions Filter Bar */}
       <div
         style={{

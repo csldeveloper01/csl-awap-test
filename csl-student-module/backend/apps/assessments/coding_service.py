@@ -6,6 +6,7 @@ import subprocess
 import logging
 from typing import Dict, Any, List, Optional
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,49 @@ JUDGE0_LANGUAGE_IDS = {
     "python": 71,  # Python (3.8.1) / Python 3
     "python3": 71,
     "java": 62,    # Java (OpenJDK 13/17)
+    "javascript": 63,  # JavaScript (Node.js 12.14.0)
+    "js": 63,
+    "node": 63,
+    "cpp": 54,     # C++ (GCC 9.2.0)
+    "c++": 54,
+    "c": 50,       # C (GCC 9.2.0)
+    "sql": 82,     # SQL (SQLite 3.27.2)
 }
+
+
+def is_safe_local_execution_permitted() -> bool:
+    """
+    Determines if running candidate code directly on the host using LocalExecutionAdapter
+    is permitted. In production environments (DEBUG=False, not running automated tests),
+    untrusted candidate code MUST NOT run unsandboxed on the host application server.
+    """
+    return bool(
+        getattr(settings, "DEBUG", False)
+        or getattr(settings, "TESTING", False)
+        or ("test" in sys.argv)
+    )
+
+
+def normalize_code_output(text: Optional[str], mode: str = "trimmed") -> str:
+    """
+    Authoritative output comparison normalization policy:
+    1. Line endings: CRLF (\r\n) and CR (\r) are converted to LF (\n).
+    2. In 'trimmed' mode: Trailing whitespace is stripped from each line,
+       and leading/trailing blank lines are stripped, preserving internal indentation.
+    3. In 'exact' mode: Only line ending normalization is performed.
+    """
+    if text is None:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if mode == "exact":
+        return text
+
+    lines = [line.rstrip() for line in text.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
 
 
 class Judge0Client:
@@ -104,9 +147,8 @@ class Judge0Client:
 
 class LocalExecutionAdapter:
     """
-    Secure local runner for Python 3 and Java 17/21 execution.
-    Executes in isolated temporary directories with strict timeouts and memory caps.
-    Used for development, testing, and verified environments.
+    Local runner for Python 3, Node.js, and Java execution in development/test environments.
+    Executes in isolated temporary directories with strict timeouts.
     """
 
     @classmethod
@@ -184,38 +226,42 @@ class LocalExecutionAdapter:
     @classmethod
     def execute_java(cls, source_code: str, stdin: str = "", time_limit: float = 3.0) -> Dict[str, Any]:
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Extract public class name if specified, default to Solution
             import re
             match = re.search(r'public\s+class\s+([A-Za-z0-9_]+)', source_code)
             class_name = match.group(1) if match else "Solution"
 
-            # If class name isn't Solution and has no public class, ensure a Solution class exists
-            if not match and "class Solution" not in source_code:
-                # Wrap source code or provide class name
-                java_file = os.path.join(temp_dir, f"{class_name}.java")
-            else:
-                java_file = os.path.join(temp_dir, f"{class_name}.java")
-
+            java_file = os.path.join(temp_dir, f"{class_name}.java")
             with open(java_file, "w", encoding="utf-8") as f:
                 f.write(source_code)
 
             # Compile step
             compile_start = time.perf_counter()
-            compile_proc = subprocess.run(
-                ["javac", "-J-Xmx256m", java_file],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=temp_dir,
-            )
-            if compile_proc.returncode != 0:
+            try:
+                compile_proc = subprocess.run(
+                    ["javac", "-J-Xmx256m", java_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=temp_dir,
+                )
+                if compile_proc.returncode != 0:
+                    return {
+                        "verdict": "COMPILATION_ERROR",
+                        "stdout": "",
+                        "stderr": compile_proc.stderr or "",
+                        "compile_output": compile_proc.stderr or "",
+                        "execution_time_ms": (time.perf_counter() - compile_start) * 1000.0,
+                        "memory_used_kb": 2048,
+                        "is_sandboxed": False,
+                    }
+            except FileNotFoundError:
                 return {
-                    "verdict": "COMPILATION_ERROR",
+                    "verdict": "INTERNAL_ERROR",
                     "stdout": "",
-                    "stderr": compile_proc.stderr or "",
-                    "compile_output": compile_proc.stderr or "",
-                    "execution_time_ms": (time.perf_counter() - compile_start) * 1000.0,
-                    "memory_used_kb": 2048,
+                    "stderr": "Java SDK (javac) is not installed on host.",
+                    "compile_output": "",
+                    "execution_time_ms": 0.0,
+                    "memory_used_kb": 0,
                     "is_sandboxed": False,
                 }
 
@@ -278,7 +324,8 @@ class LocalExecutionAdapter:
 def execute_single_run(language: str, source_code: str, stdin: str = "", time_limit: float = 2.0, memory_limit_mb: int = 256) -> Dict[str, Any]:
     """
     Executes a single program run against stdin.
-    Uses Judge0 if configured; otherwise delegates to LocalExecutionAdapter.
+    Uses Judge0 if configured; otherwise delegates to LocalExecutionAdapter ONLY in safe dev/test environments.
+    In production, fails safely if Judge0 is unavailable.
     """
     judge0 = Judge0Client()
     if judge0.is_configured():
@@ -286,7 +333,20 @@ def execute_single_run(language: str, source_code: str, stdin: str = "", time_li
         if res.get("verdict") != "INTERNAL_ERROR":
             return res
 
-    # Local execution fallback
+    # Check whether local unsandboxed execution is allowed on this environment
+    if not is_safe_local_execution_permitted():
+        logger.error("Execution attempted on host in production without configured sandbox engine.")
+        return {
+            "verdict": "INTERNAL_ERROR",
+            "stdout": "",
+            "stderr": "Code execution engine unavailable. Please try again shortly or contact your administrator.",
+            "compile_output": "",
+            "execution_time_ms": 0.0,
+            "memory_used_kb": 0,
+            "is_sandboxed": False,
+        }
+
+    # Local execution fallback for dev / test
     lang = language.lower().strip()
     if "python" in lang:
         return LocalExecutionAdapter.execute_python(source_code, stdin, time_limit)
@@ -296,7 +356,7 @@ def execute_single_run(language: str, source_code: str, stdin: str = "", time_li
         return {
             "verdict": "INTERNAL_ERROR",
             "stdout": "",
-            "stderr": f"Unsupported language: {language}",
+            "stderr": f"Unsupported language for local runner: {language}. Please configure Judge0 engine.",
             "compile_output": "",
             "execution_time_ms": 0.0,
             "memory_used_kb": 0,
@@ -314,9 +374,10 @@ def evaluate_submission(
     """
     Evaluates a candidate submission against all test cases for a programming question.
     Creates CodeSubmission and CodeTestResult records.
-    Updates the candidate score on the attempt.
+    Updates the candidate score on the attempt and question snapshot atomically.
     """
     from .models import CodeSubmission, CodeTestResult
+    from django.db.models import Max
 
     test_cases = list(programming_question.test_cases.all().order_by("order", "created_at"))
     time_limit = programming_question.time_limit_seconds or 2.0
@@ -331,6 +392,21 @@ def evaluate_submission(
         verdict=CodeSubmission.Verdict.PENDING,
         total_test_cases=len(test_cases),
     )
+
+    if not test_cases:
+        submission.verdict = CodeSubmission.Verdict.INTERNAL_ERROR
+        submission.save(update_fields=["verdict"])
+        return {
+            "submission_id": str(submission.id),
+            "verdict": "INTERNAL_ERROR",
+            "score_awarded": 0.0,
+            "total_test_cases": 0,
+            "passed_test_cases": 0,
+            "execution_time_ms": 0.0,
+            "memory_used_kb": 0,
+            "compile_output": "Programming question has no configured test cases.",
+            "results": [],
+        }
 
     passed_count = 0
     total_score = 0.0
@@ -370,10 +446,13 @@ def evaluate_submission(
         elif exec_verdict == "RUNTIME_ERROR":
             status = CodeSubmission.Verdict.RUNTIME_ERROR
             passed = False
+        elif exec_verdict == "INTERNAL_ERROR":
+            status = CodeSubmission.Verdict.INTERNAL_ERROR
+            passed = False
         else:
-            # Check output equality
-            actual_clean = stdout.strip().replace("\r\n", "\n")
-            expected_clean = (tc.expected_output or "").strip().replace("\r\n", "\n")
+            # Check normalized output equality
+            actual_clean = normalize_code_output(stdout, mode="trimmed")
+            expected_clean = normalize_code_output(tc.expected_output, mode="trimmed")
             if actual_clean == expected_clean:
                 status = CodeSubmission.Verdict.ACCEPTED
                 passed = True
@@ -386,17 +465,19 @@ def evaluate_submission(
         if not passed and not first_failing_verdict:
             first_failing_verdict = status
 
+        # Save result to DB: include actual_output and stderr for administrator review
         CodeTestResult.objects.create(
             submission=submission,
             test_case=tc,
             status=status,
-            actual_output=stdout if tc.is_public else "",  # Never store hidden outputs for students
-            error_message=stderr if tc.is_public else "",
+            actual_output=stdout,
+            error_message=stderr,
             execution_time_ms=exec_time,
             memory_used_kb=mem_used,
             passed=passed,
         )
 
+        # Build candidate-facing result: STRICT SECURITY for hidden test cases
         results_data.append({
             "test_case_id": str(tc.id),
             "is_public": tc.is_public,
@@ -409,10 +490,8 @@ def evaluate_submission(
             "explanation": tc.explanation if tc.is_public else None,
         })
 
-    # Final verdict
-    if not test_cases:
-        final_verdict = CodeSubmission.Verdict.ACCEPTED
-    elif passed_count == len(test_cases):
+    # Final verdict calculation
+    if passed_count == len(test_cases):
         final_verdict = CodeSubmission.Verdict.ACCEPTED
     else:
         final_verdict = first_failing_verdict or CodeSubmission.Verdict.WRONG_ANSWER
@@ -420,7 +499,7 @@ def evaluate_submission(
     # Calculate question marks proportion
     q_marks = programming_question.question.marks if (programming_question and programming_question.question) else 10
     score_ratio = (total_score / max_possible_score) if max_possible_score > 0 else 0.0
-    awarded_marks = round(score_ratio * q_marks, 2)
+    awarded_marks = min(float(q_marks), round(score_ratio * q_marks, 2))
 
     submission.verdict = final_verdict
     submission.score_awarded = awarded_marks
@@ -429,6 +508,30 @@ def evaluate_submission(
     submission.memory_used_kb = max_mem_used
     submission.compile_output = compile_err_output
     submission.save()
+
+    # Authoritatively recalculate attempt coding score
+    try:
+        best_scores = (
+            attempt.code_submissions.values("programming_question")
+            .annotate(best=Max("score_awarded"))
+        )
+        total_coding = sum(int(round(item["best"])) for item in best_scores)
+        attempt.coding_score = total_coding
+        attempt.total_score = (attempt.aptitude_score or 0) + attempt.coding_score
+        total_marks = attempt.snapshot_total_marks or (attempt.assessment.total_marks if attempt.assessment else 50)
+        if total_marks > 0:
+            attempt.percentage = round((attempt.total_score / total_marks) * 100.0, 2)
+        attempt.save(update_fields=["coding_score", "total_score", "percentage", "updated_at"])
+
+        # Mark question snapshot as answered if available
+        snapshot = attempt.question_snapshots.filter(question_id=programming_question.question_id).first()
+        if snapshot:
+            snapshot.is_correct = (final_verdict == CodeSubmission.Verdict.ACCEPTED)
+            snapshot.selected_option = "SUBMITTED"
+            snapshot.answered_at = timezone.now()
+            snapshot.save(update_fields=["is_correct", "selected_option", "answered_at", "updated_at"])
+    except Exception as e:
+        logger.warning("Could not update attempt scores after coding submission: %s", e)
 
     return {
         "submission_id": str(submission.id),

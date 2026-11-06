@@ -74,6 +74,7 @@ from .admin_views import (
     AdminCollegeImportOfficialView,
     AdminProgrammingQuestionDetailView,
     AdminProgrammingTestCaseView,
+    AdminQuestionImportCodingJsonView,
 )
 
 urlpatterns = [
@@ -141,6 +142,7 @@ urlpatterns = [
     path("questions/bulk-update/", AdminQuestionBulkUpdateView.as_view(), name="admin-questions-bulk-update"),
     path("questions/bulk-delete/", AdminQuestionBulkDeleteView.as_view(), name="admin-questions-bulk-delete"),
     path("questions/import-csv/", AdminQuestionImportCSVView.as_view(), name="admin-question-import-csv"),
+    path("questions/import-coding-json/", AdminQuestionImportCodingJsonView.as_view(), name="admin-questions-import-coding-json"),
     path("questions/bulk-assign-pool/", AdminQuestionBulkAssignPoolView.as_view(), name="admin-questions-bulk-assign-pool"),
 
     # Reusable Sections Library

@@ -241,7 +241,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
             >
               {allowedLanguages.map((l) => (
                 <option key={l} value={l}>
-                  {l.toUpperCase() === 'PYTHON' ? 'Python 3' : l.toUpperCase() === 'JAVA' ? 'Java 17' : l}
+                  {l.toUpperCase() === 'PYTHON' ? 'Python 3' : l.toUpperCase() === 'JAVA' ? 'Java 17' : l.toUpperCase() === 'JAVASCRIPT' ? 'JavaScript (Node.js)' : l.toUpperCase() === 'CPP' ? 'C++ (GCC)' : l.toUpperCase() === 'C' ? 'C (GCC)' : l.toUpperCase()}
                 </option>
               ))}
             </select>
@@ -306,7 +306,18 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
         <div style={{ flex: 1, minHeight: '300px' }}>
           <Editor
             height="100%"
-            language={language.toLowerCase() === 'python' ? 'python' : 'java'}
+            language={
+              (() => {
+                const l = language.toLowerCase();
+                if (l.includes('python')) return 'python';
+                if (l.includes('java') && !l.includes('script')) return 'java';
+                if (l.includes('script') || l === 'js' || l === 'node') return 'javascript';
+                if (l.includes('c++') || l.includes('cpp')) return 'cpp';
+                if (l === 'c') return 'c';
+                if (l.includes('sql')) return 'sql';
+                return 'python';
+              })()
+            }
             value={sourceCode}
             onChange={(val) => setSourceCode(val || '')}
             theme="vs-dark"
@@ -423,13 +434,60 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
               <div>
                 {/* Submit Result */}
                 {submitResult && (
-                  <div style={{ marginBottom: '10px', padding: '10px', borderRadius: '6px', backgroundColor: submitResult.verdict === 'ACCEPTED' ? '#064E3B' : '#7F1D1D' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF', marginBottom: '4px' }}>
-                      Verdict: {submitResult.verdict}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ padding: '10px', borderRadius: '6px', backgroundColor: submitResult.verdict === 'ACCEPTED' ? '#064E3B' : '#7F1D1D' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF', marginBottom: '4px' }}>
+                        Verdict: {submitResult.verdict}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#E2E8F0' }}>
+                        Score Awarded: <strong>{submitResult.score_awarded} pts</strong> • Passed: {submitResult.passed_test_cases} / {submitResult.total_test_cases} test cases ({submitResult.execution_time_ms.toFixed(1)}ms)
+                      </div>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#E2E8F0' }}>
-                      Score Awarded: <strong>{submitResult.score_awarded} pts</strong> • Passed: {submitResult.passed_test_cases} / {submitResult.total_test_cases} test cases ({submitResult.execution_time_ms.toFixed(1)}ms)
-                    </div>
+
+                    {submitResult.compile_output && (
+                      <div style={{ padding: '8px', borderRadius: '6px', backgroundColor: '#3B1212', border: '1px solid #DC2626' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#F87171' }}>Compilation Diagnostics:</span>
+                        <pre style={{ margin: '4px 0 0 0', color: '#FCA5A5', fontSize: '11px', whiteSpace: 'pre-wrap' }}>
+                          {submitResult.compile_output}
+                        </pre>
+                      </div>
+                    )}
+
+                    {submitResult.results && submitResult.results.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {submitResult.results.map((r, idx) => (
+                          <div
+                            key={r.test_case_id || idx}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              backgroundColor: r.passed ? '#064E3B' : '#450A0A',
+                              border: r.passed ? '1px solid #059669' : '1px solid #DC2626',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontWeight: 700, color: '#FFFFFF', fontSize: '12px' }}>
+                                {r.is_public ? `Sample Case ${idx + 1} (Public)` : `Test Case ${idx + 1} (Hidden Evaluation)`}
+                              </span>
+                              <span style={{ fontWeight: 800, fontSize: '11px', color: r.passed ? '#34D399' : '#F87171' }}>
+                                {r.passed ? '✓ PASSED' : `✗ ${r.status || 'FAILED'}`} ({r.execution_time_ms.toFixed(1)}ms)
+                              </span>
+                            </div>
+                            {r.is_public && r.input_text !== null && r.input_text !== undefined && (
+                              <div style={{ marginTop: '4px', fontSize: '11px', color: '#D1D5DB' }}>
+                                Input: <code>{r.input_text}</code> | Expected: <code>{r.expected_output}</code>
+                                {r.actual_output && <span> | Output: <code>{r.actual_output.trim()}</code></span>}
+                              </div>
+                            )}
+                            {!r.is_public && (
+                              <div style={{ marginTop: '2px', fontSize: '10px', color: '#94A3B8', fontStyle: 'italic' }}>
+                                Confidential evaluation test case
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

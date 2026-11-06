@@ -364,6 +364,33 @@ export interface AdminAttemptReview {
   pdf_file_size?: number;
   questions: AdminQuestionReviewSnapshot[];
   integrity_events: AdminIntegrityEvent[];
+  code_submissions?: Array<{
+    id: string;
+    question_id?: number | null;
+    question_title: string;
+    language: string;
+    source_code: string;
+    verdict: string;
+    score_awarded: number;
+    total_test_cases: number;
+    passed_test_cases: number;
+    execution_time_ms: number;
+    memory_used_kb: number;
+    compile_output?: string;
+    created_at?: string;
+    test_results: Array<{
+      id: string;
+      test_case_id?: string | null;
+      is_public: boolean;
+      status: string;
+      passed: boolean;
+      input_text?: string;
+      expected_output?: string;
+      actual_output?: string;
+      error_message?: string;
+      execution_time_ms: number;
+    }>;
+  }>;
 }
 
 export interface AdminResult {
@@ -1578,3 +1605,45 @@ export async function deleteAdminProgrammingTestCase(questionId: number, testCas
   const res = await adminApi.delete(`/questions/${questionId}/coding/test-cases/${testCaseId}/`);
   return res.data;
 }
+
+export interface CodingJsonImportResult {
+  success?: boolean;
+  preview_mode?: boolean;
+  message?: string;
+  imported_count?: number;
+  updated_count?: number;
+  skipped_count?: number;
+  valid_count?: number;
+  invalid_count?: number;
+  duplicate_count?: number;
+  total_questions?: number;
+  target_pool?: string;
+  items?: Array<{
+    index: number;
+    title: string;
+    difficulty: string;
+    marks: number;
+    test_case_count: number;
+    public_test_case_count: number;
+    hidden_test_case_count: number;
+    status: string;
+    errors: string[];
+  }>;
+}
+
+export const importCodingQuestionsJson = async (
+  payload: any,
+  options?: { preview?: boolean; poolId?: string; duplicatePolicy?: string }
+): Promise<CodingJsonImportResult> => {
+  const params: Record<string, string> = {};
+  if (options?.preview) params.preview = 'true';
+  if (options?.poolId) params.pool_id = options.poolId;
+  if (options?.duplicatePolicy) params.duplicate_policy = options.duplicatePolicy;
+  const res = await adminApi.post<CodingJsonImportResult>('/questions/import-coding-json/', payload, { params });
+  return res.data;
+};
+
+export const fetchCodingQuestionsJsonTemplate = async (): Promise<any> => {
+  const res = await adminApi.get('/questions/import-coding-json/');
+  return res.data;
+};

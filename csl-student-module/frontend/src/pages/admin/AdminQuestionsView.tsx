@@ -25,6 +25,7 @@ import {
 } from '../../api/admin';
 import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 import { AdminQuestionPoolsView } from './AdminQuestionPoolsView';
+import { ImportCodingJsonModal } from './ImportCodingJsonModal';
 
 interface AdminQuestionsViewProps {
   initialAssessmentId?: string;
@@ -189,6 +190,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
   // CSV Import Modal state
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showCodingJsonModal, setShowCodingJsonModal] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<{
     success_count: number;
@@ -856,6 +858,27 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
             <span>Import CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowCodingJsonModal(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '9px 16px',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #CBD5E1',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#0B2E6F',
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            }}
+          >
+            <span>💻 Import Coding JSON</span>
           </button>
 
           <button
@@ -2587,6 +2610,16 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           </div>
         </div>
       )}
+      
+      {showCodingJsonModal && (
+        <ImportCodingJsonModal
+          onClose={() => setShowCodingJsonModal(false)}
+          onSuccess={() => {
+            loadQuestions();
+          }}
+        />
+      )}
+
       {/* ─── QUESTION PREVIEW MODAL (PHASE 2.1) ────────────────────── */}
       {previewQuestion && (
         <div

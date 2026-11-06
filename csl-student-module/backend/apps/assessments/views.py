@@ -118,8 +118,18 @@ class CandidateEligibleAssessmentsView(APIView):
                     assessment_drives__status="ACTIVE",
                 )
                 .distinct()
-                .order_by("assessment_drives__display_order", "status", "-created_at")
             )
+            # Dual college eligibility: Drive-based assessment with no assessment-level restrictions
+            # inherits Drive colleges; if assessment has restrictions, candidate must satisfy both.
+            if candidate and candidate.college_ref:
+                assessments = assessments.filter(
+                    Q(eligible_colleges__isnull=True) | Q(eligible_colleges=candidate.college_ref)
+                )
+            elif college_id:
+                assessments = assessments.filter(
+                    Q(eligible_colleges__isnull=True) | Q(eligible_colleges__id=college_id)
+                )
+            assessments = assessments.order_by("assessment_drives__display_order", "status", "-created_at")
         else:
             # Mode A: Open / Standalone Assessment
             # Authoritatively filter by is_standalone=True so drive-based assessments are never leaked
@@ -379,7 +389,8 @@ class DriveLinkCandidateView(APIView):
                 invitation_obj = inv_by_code
                 target_drive = inv_by_code.drive
             else:
-                target_drive = Drive.objects.filter(code__iexact=access_code).first()
+                from django.db.models import Q
+                target_drive = Drive.objects.filter(Q(drive_code=access_code) | Q(code__iexact=access_code)).first()
 
         if drive_code and not target_drive:
             target_drive = Drive.objects.filter(code__iexact=drive_code).first()
@@ -402,7 +413,12 @@ class DriveLinkCandidateView(APIView):
                 return Response({"detail": f"Your institution is not eligible for drive '{target_drive.name}'."}, status=status.HTTP_403_FORBIDDEN)
 
         if target_drive.visibility == Drive.Visibility.INVITE_ONLY and not invitation_obj:
-            return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+            code_matched = (
+                (access_code and (access_code == target_drive.drive_code or access_code.lower() == target_drive.code.lower()))
+                or (drive_code and (drive_code == target_drive.drive_code or drive_code.lower() == target_drive.code.lower()))
+            )
+            if not code_matched:
+                return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
 
         # 4. Atomically link Candidate to Drive and Drive Assessments
         with transaction.atomic():
@@ -508,6 +524,11 @@ class CandidateRegisterView(APIView):
                 assessment_by_code = Assessment.objects.filter(access_code__iexact=access_code).first()
                 if assessment_by_code:
                     target_assessment_id = str(assessment_by_code.id)
+                else:
+                    from django.db.models import Q
+                    drive_by_access = Drive.objects.filter(Q(drive_code=access_code) | Q(code__iexact=access_code)).first()
+                    if drive_by_access:
+                        target_drive = drive_by_access
 
         if drive_code and not target_drive:
             from django.db.models import Q
@@ -529,7 +550,12 @@ class CandidateRegisterView(APIView):
                     return Response({"college": [f"Your institution is not eligible for drive '{target_drive.name}'."]}, status=status.HTTP_403_FORBIDDEN)
 
             if target_drive.visibility == Drive.Visibility.INVITE_ONLY and not invitation_obj:
-                return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+                code_matched = (
+                    (access_code and (access_code == target_drive.drive_code or access_code.lower() == target_drive.code.lower()))
+                    or (drive_code and (drive_code == target_drive.drive_code or drive_code.lower() == target_drive.code.lower()))
+                )
+                if not code_matched:
+                    return Response({"detail": f"Drive '{target_drive.name}' is invite-only. A valid invitation link or access code is required."}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
             # Check existing candidate by email, or by college + register number
@@ -537,6 +563,10 @@ class CandidateRegisterView(APIView):
             if not existing_candidate:
                 existing_candidate = Candidate.objects.select_for_update().filter(
                     college_ref=college_obj, register_number=reg_no
+                ).first()
+            if not existing_candidate:
+                existing_candidate = Candidate.objects.select_for_update().filter(
+                    register_number=reg_no
                 ).first()
 
             if existing_candidate:
@@ -584,9 +614,9 @@ class CandidateRegisterView(APIView):
                         is_college_eligible = (
                             bool(college_obj and target_assessment.eligible_colleges.filter(id=college_obj.id).exists())
                             if has_colleges
-                            else False
+                            else bool(target_drive and not has_colleges)
                         )
-                        is_open_to_all = (not has_colleges) and (not has_candidates)
+                        is_open_to_all = (not has_colleges) and (not has_candidates) and (not target_drive)
                         if not (is_directly_eligible or is_college_eligible or is_open_to_all):
                             return Response(
                                 {"detail": f"You are not eligible for '{target_assessment.title}'."},
@@ -790,10 +820,10 @@ class CandidateRegisterView(APIView):
                     target_assessment = Assessment.objects.filter(id=target_assessment_id).first()
                     if target_assessment:
                         from .models import AssessmentRegistration
-                        AssessmentRegistration.objects.create(
+                        AssessmentRegistration.objects.get_or_create(
                             assessment=target_assessment,
                             candidate=candidate,
-                            drive=target_drive,
+                            defaults={"drive": target_drive},
                         )
 
         token = generate_candidate_token(str(candidate.id))
@@ -923,7 +953,8 @@ class ResolveAccessCodeView(APIView):
         if drive:
             if drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
                 return Response({"detail": f"Drive '{drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
-            if drive.visibility == Drive.Visibility.INVITE_ONLY:
+            # An 8-digit access code or drive code directly authorizes entry to an invite-only drive
+            if drive.visibility == Drive.Visibility.INVITE_ONLY and not (code == drive.drive_code or code.lower() == drive.code.lower()):
                 return Response({"detail": "This drive is invite-only. A valid invitation token or access code is required."}, status=status.HTTP_403_FORBIDDEN)
             return Response({
                 "type": "DRIVE",

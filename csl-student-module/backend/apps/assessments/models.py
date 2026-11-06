@@ -1211,6 +1211,7 @@ class AssessmentAuditLog(models.Model):
         COLLEGE_UPDATED = "COLLEGE_UPDATED", "College Updated"
         COLLEGE_STATUS_TOGGLED = "COLLEGE_STATUS_TOGGLED", "College Status Changed"
         CANDIDATES_IMPORTED = "CANDIDATES_IMPORTED", "Candidates Imported"
+        QUESTIONS_IMPORTED = "QUESTIONS_IMPORTED", "Questions Imported"
         QUESTIONS_ASSIGNED = "QUESTIONS_ASSIGNED", "Questions Assigned to Assessment Pool"
         RESULTS_RELEASED = "RESULTS_RELEASED", "Assessment Results Released"
         RESULTS_UNRELEASED = "RESULTS_UNRELEASED", "Assessment Results Withheld"

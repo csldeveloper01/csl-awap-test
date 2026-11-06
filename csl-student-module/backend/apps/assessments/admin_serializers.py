@@ -1241,6 +1241,42 @@ class AdminLiveAttemptSerializer(serializers.ModelSerializer):
 
     def get_answered_count(self, obj):
         return obj.question_snapshots.exclude(selected_option="").count()
+    def get_code_submissions(self, obj):
+        submissions = obj.code_submissions.select_related("programming_question__question").prefetch_related("test_results__test_case").all()
+        return [
+            {
+                "id": str(sub.id),
+                "question_id": sub.programming_question.question.id if sub.programming_question and sub.programming_question.question else None,
+                "question_title": sub.programming_question.question.prompt if sub.programming_question and sub.programming_question.question else "",
+                "language": sub.language,
+                "source_code": sub.source_code,
+                "verdict": sub.verdict,
+                "score_awarded": sub.score_awarded,
+                "total_test_cases": sub.total_test_cases,
+                "passed_test_cases": sub.passed_test_cases,
+                "execution_time_ms": sub.execution_time_ms,
+                "memory_used_kb": sub.memory_used_kb,
+                "compile_output": sub.compile_output,
+                "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                "test_results": [
+                    {
+                        "id": str(tr.id),
+                        "test_case_id": str(tr.test_case.id) if tr.test_case else None,
+                        "is_public": tr.test_case.is_public if tr.test_case else False,
+                        "status": tr.status,
+                        "passed": tr.passed,
+                        "input_text": tr.test_case.input_text if tr.test_case else "",
+                        "expected_output": tr.test_case.expected_output if tr.test_case else "",
+                        "actual_output": tr.actual_output,
+                        "error_message": tr.error_message,
+                        "execution_time_ms": tr.execution_time_ms,
+                    }
+                    for tr in sub.test_results.all()
+                ]
+            }
+            for sub in submissions
+        ]
+
 
     def get_total_questions(self, obj):
         if hasattr(obj, "_prefetched_objects_cache") and "question_snapshots" in obj._prefetched_objects_cache:
@@ -1379,6 +1415,7 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
     assessment_code = serializers.SerializerMethodField()
     total_questions = serializers.SerializerMethodField()
     answered_count = serializers.SerializerMethodField()
+    code_submissions = serializers.SerializerMethodField()
 
     class Meta:
         model = AssessmentAttempt
@@ -1407,6 +1444,7 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
             "delivery_mode",
             "is_manual_evaluation_pending",
             "pdf_filename",
+            "code_submissions",
         ]
 
     delivery_mode = serializers.SerializerMethodField()
@@ -1452,6 +1490,42 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
 
     def get_answered_count(self, obj):
         return obj.question_snapshots.exclude(selected_option="").count()
+    def get_code_submissions(self, obj):
+        submissions = obj.code_submissions.select_related("programming_question__question").prefetch_related("test_results__test_case").all()
+        return [
+            {
+                "id": str(sub.id),
+                "question_id": sub.programming_question.question.id if sub.programming_question and sub.programming_question.question else None,
+                "question_title": sub.programming_question.question.prompt if sub.programming_question and sub.programming_question.question else "",
+                "language": sub.language,
+                "source_code": sub.source_code,
+                "verdict": sub.verdict,
+                "score_awarded": sub.score_awarded,
+                "total_test_cases": sub.total_test_cases,
+                "passed_test_cases": sub.passed_test_cases,
+                "execution_time_ms": sub.execution_time_ms,
+                "memory_used_kb": sub.memory_used_kb,
+                "compile_output": sub.compile_output,
+                "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                "test_results": [
+                    {
+                        "id": str(tr.id),
+                        "test_case_id": str(tr.test_case.id) if tr.test_case else None,
+                        "is_public": tr.test_case.is_public if tr.test_case else False,
+                        "status": tr.status,
+                        "passed": tr.passed,
+                        "input_text": tr.test_case.input_text if tr.test_case else "",
+                        "expected_output": tr.test_case.expected_output if tr.test_case else "",
+                        "actual_output": tr.actual_output,
+                        "error_message": tr.error_message,
+                        "execution_time_ms": tr.execution_time_ms,
+                    }
+                    for tr in sub.test_results.all()
+                ]
+            }
+            for sub in submissions
+        ]
+
 
 
 class AdminResultSerializer(serializers.ModelSerializer):

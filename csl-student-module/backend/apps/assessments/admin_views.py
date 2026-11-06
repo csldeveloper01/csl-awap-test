@@ -4282,3 +4282,353 @@ class AdminProgrammingTestCaseView(APIView):
         tc.delete()
         return Response({"success": True, "detail": "Test case deleted."}, status=status.HTTP_200_OK)
 
+
+
+
+class AdminQuestionImportCodingJsonView(APIView):
+    """
+    Structured JSON Bulk Import for Programming/Coding Questions.
+    Supports preview mode (preview=true) and atomic persistence.
+    Associates questions with QuestionPool if pool_id is provided.
+    Audits import actions in AssessmentAuditLog.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        """
+        Returns a sample JSON schema template for bulk coding questions.
+        """
+        sample_template = {
+            "pool_id": None,
+            "duplicate_policy": "CREATE_NEW",
+            "preview": False,
+            "questions": [
+                {
+                    "title": "Two Sum Problem",
+                    "problem_statement": "Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.\n\nYou may assume each input would have exactly one solution, and you may not use the same element twice.",
+                    "constraints": "2 <= nums.length <= 10^4\n-10^9 <= nums[i] <= 10^9\n-10^9 <= target <= 10^9",
+                    "input_format": "Line 1: An integer n representing array length.\nLine 2: n space-separated integers.\nLine 3: An integer target.",
+                    "output_format": "Two space-separated indices in ascending order.",
+                    "difficulty": "EASY",
+                    "section_type": "CODING",
+                    "marks": 10,
+                    "time_limit_seconds": 2.0,
+                    "memory_limit_mb": 256,
+                    "allowed_languages": ["python", "java", "javascript", "cpp"],
+                    "boilerplate_code": {
+                        "python": "import sys\n\ndef solve():\n    input_data = sys.stdin.read().split()\n    if not input_data:\n        return\n    n = int(input_data[0])\n    nums = [int(x) for x in input_data[1:n+1]]\n    target = int(input_data[n+1])\n    # Write logic here\n\nif __name__ == '__main__':\n    solve()\n",
+                        "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        int target = sc.nextInt();\n        // Write logic here\n    }\n}\n"
+                    },
+                    "test_cases": [
+                        {
+                            "input_text": "4\n2 7 11 15\n9",
+                            "expected_output": "0 1",
+                            "is_public": True,
+                            "marks_weightage": 3.0,
+                            "explanation": "nums[0] + nums[1] = 2 + 7 = 9"
+                        },
+                        {
+                            "input_text": "3\n3 2 4\n6",
+                            "expected_output": "1 2",
+                            "is_public": False,
+                            "marks_weightage": 7.0,
+                            "explanation": "nums[1] + nums[2] = 2 + 4 = 6"
+                        }
+                    ]
+                }
+            ]
+        }
+        return Response({
+            "template": sample_template,
+            "instructions": {
+                "duplicate_policy": "Supported values: 'CREATE_NEW' (default), 'SKIP', 'OVERWRITE'.",
+                "preview": "Set to true (or query parameter ?preview=true) to validate without committing.",
+                "pool_id": "Optional UUID of existing QuestionPool to automatically link imported questions.",
+                "test_cases": "At least one test case is required per question. is_public marks visible sample cases."
+            }
+        })
+
+    def post(self, request):
+        from .models import QuestionBank, ProgrammingQuestion, ProgrammingTestCase, QuestionPool, QuestionPoolItem
+        data = request.data
+        if isinstance(data, list):
+            questions_data = data
+            pool_id = request.query_params.get("pool_id")
+            duplicate_policy = request.query_params.get("duplicate_policy", "CREATE_NEW").upper()
+            is_preview = request.query_params.get("preview", "false").lower() in ["true", "1", "yes"]
+        elif isinstance(data, dict):
+            questions_data = data.get("questions", [])
+            pool_id = data.get("pool_id") or request.query_params.get("pool_id")
+            duplicate_policy = (data.get("duplicate_policy") or request.query_params.get("duplicate_policy", "CREATE_NEW")).upper()
+            is_preview = (
+                data.get("preview") is True
+                or request.query_params.get("preview", "false").lower() in ["true", "1", "yes"]
+            )
+        else:
+            return Response({"detail": "Invalid payload format. Expected JSON object with 'questions' list or array of questions."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not questions_data or not isinstance(questions_data, list):
+            return Response({"detail": "'questions' must be a non-empty list of question objects."}, status=status.HTTP_400_BAD_REQUEST)
+
+        target_pool = None
+        if pool_id:
+            try:
+                target_pool = QuestionPool.objects.filter(id=pool_id).first()
+                if not target_pool:
+                    return Response({"detail": f"Target QuestionPool '{pool_id}' not found."}, status=status.HTTP_404_NOT_FOUND)
+            except Exception:
+                return Response({"detail": f"Invalid pool_id format '{pool_id}'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validation pass
+        validated_items = []
+        preview_items = []
+        valid_count = 0
+        invalid_count = 0
+        duplicate_count = 0
+
+        for idx, q_raw in enumerate(questions_data):
+            errors = []
+            title = (q_raw.get("title") or q_raw.get("prompt") or "").strip()
+            if not title:
+                errors.append("Question 'title' or 'prompt' is required.")
+
+            statement = (q_raw.get("problem_statement") or title).strip()
+            raw_tcs = q_raw.get("test_cases", [])
+            if not raw_tcs or not isinstance(raw_tcs, list):
+                errors.append("At least one test case in 'test_cases' is required.")
+
+            valid_tcs = []
+            if isinstance(raw_tcs, list):
+                for tc_idx, tc_raw in enumerate(raw_tcs):
+                    tc_out = str(tc_raw.get("expected_output") or tc_raw.get("output") or "").strip()
+                    if tc_out == "":
+                        errors.append(f"Test case {tc_idx + 1} is missing 'expected_output'.")
+                    else:
+                        valid_tcs.append({
+                            "input_text": str(tc_raw.get("input_text") if tc_raw.get("input_text") is not None else (tc_raw.get("input") or "")),
+                            "expected_output": tc_out,
+                            "is_public": bool(tc_raw.get("is_public", False)),
+                            "marks_weightage": float(tc_raw.get("marks_weightage") or tc_raw.get("weight") or 1.0),
+                            "explanation": str(tc_raw.get("explanation") or ""),
+                            "order": int(tc_raw.get("order", tc_idx + 1)),
+                        })
+
+            difficulty = (q_raw.get("difficulty") or "MEDIUM").upper()
+            if difficulty not in ["EASY", "MEDIUM", "HARD"]:
+                difficulty = "MEDIUM"
+
+            section_type = (q_raw.get("section_type") or "CODING").strip()
+            marks = int(q_raw.get("marks") or 10)
+            time_limit = float(q_raw.get("time_limit_seconds") or 2.0)
+            memory_limit = int(q_raw.get("memory_limit_mb") or 256)
+            allowed_langs = q_raw.get("allowed_languages") or ["python", "java"]
+            boilerplate = q_raw.get("boilerplate_code") or {
+                "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+                "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n"
+            }
+
+            # Check existing duplicate
+            existing_q = QuestionBank.objects.filter(prompt__iexact=title).first()
+            is_duplicate = bool(existing_q)
+            if is_duplicate:
+                duplicate_count += 1
+
+            status_label = "ERROR" if errors else ("DUPLICATE" if is_duplicate else "VALID")
+            if errors:
+                invalid_count += 1
+            else:
+                valid_count += 1
+                validated_items.append({
+                    "raw": q_raw,
+                    "title": title,
+                    "statement": statement,
+                    "difficulty": difficulty,
+                    "section_type": section_type,
+                    "marks": marks,
+                    "constraints": q_raw.get("constraints", ""),
+                    "input_format": q_raw.get("input_format", ""),
+                    "output_format": q_raw.get("output_format", ""),
+                    "time_limit": time_limit,
+                    "memory_limit": memory_limit,
+                    "allowed_langs": allowed_langs,
+                    "boilerplate": boilerplate,
+                    "test_cases": valid_tcs,
+                    "existing_q": existing_q,
+                })
+
+            preview_items.append({
+                "index": idx + 1,
+                "title": title,
+                "difficulty": difficulty,
+                "marks": marks,
+                "test_case_count": len(valid_tcs),
+                "public_test_case_count": sum(1 for t in valid_tcs if t["is_public"]),
+                "hidden_test_case_count": sum(1 for t in valid_tcs if not t["is_public"]),
+                "status": status_label,
+                "errors": errors,
+            })
+
+        if is_preview:
+            return Response({
+                "preview_mode": True,
+                "total_questions": len(questions_data),
+                "valid_count": valid_count,
+                "invalid_count": invalid_count,
+                "duplicate_count": duplicate_count,
+                "target_pool": target_pool.name if target_pool else None,
+                "duplicate_policy": duplicate_policy,
+                "items": preview_items,
+            })
+
+        if invalid_count > 0:
+            return Response({
+                "detail": f"Validation failed for {invalid_count} of {len(questions_data)} questions. Please correct the errors or test cases.",
+                "items": preview_items,
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Commit pass
+        imported_count = 0
+        updated_count = 0
+        skipped_count = 0
+
+        with transaction.atomic():
+            for item in validated_items:
+                existing_q = item["existing_q"]
+                if existing_q:
+                    if duplicate_policy == "SKIP":
+                        skipped_count += 1
+                        continue
+                    elif duplicate_policy == "OVERWRITE":
+                        q_obj = existing_q
+                        q_obj.prompt = item["title"]
+                        q_obj.difficulty = item["difficulty"]
+                        q_obj.marks = item["marks"]
+                        q_obj.section_type = item["section_type"]
+                        q_obj.save()
+
+                        prog, _ = ProgrammingQuestion.objects.update_or_create(
+                            question=q_obj,
+                            defaults={
+                                "problem_statement": item["statement"],
+                                "constraints": item["constraints"],
+                                "input_format": item["input_format"],
+                                "output_format": item["output_format"],
+                                "time_limit_seconds": item["time_limit"],
+                                "memory_limit_mb": item["memory_limit"],
+                                "allowed_languages": item["allowed_langs"],
+                                "boilerplate_code": item["boilerplate"],
+                            }
+                        )
+                        prog.test_cases.all().delete()
+                        for tc_data in item["test_cases"]:
+                            ProgrammingTestCase.objects.create(
+                                programming_question=prog,
+                                input_text=tc_data["input_text"],
+                                expected_output=tc_data["expected_output"],
+                                is_public=tc_data["is_public"],
+                                marks_weightage=tc_data["marks_weightage"],
+                                explanation=tc_data["explanation"],
+                                order=tc_data["order"],
+                            )
+                        updated_count += 1
+                    else: # CREATE_NEW
+                        q_obj = QuestionBank.objects.create(
+                            prompt=item["title"],
+                            difficulty=item["difficulty"],
+                            marks=item["marks"],
+                            section_type=item["section_type"],
+                            option_a="N/A (Coding Question)",
+                            option_b="N/A (Coding Question)",
+                            option_c="N/A (Coding Question)",
+                            option_d="N/A (Coding Question)",
+                            correct_option="A",
+                        )
+                        prog = ProgrammingQuestion.objects.create(
+                            question=q_obj,
+                            problem_statement=item["statement"],
+                            constraints=item["constraints"],
+                            input_format=item["input_format"],
+                            output_format=item["output_format"],
+                            time_limit_seconds=item["time_limit"],
+                            memory_limit_mb=item["memory_limit"],
+                            allowed_languages=item["allowed_langs"],
+                            boilerplate_code=item["boilerplate"],
+                        )
+                        for tc_data in item["test_cases"]:
+                            ProgrammingTestCase.objects.create(
+                                programming_question=prog,
+                                input_text=tc_data["input_text"],
+                                expected_output=tc_data["expected_output"],
+                                is_public=tc_data["is_public"],
+                                marks_weightage=tc_data["marks_weightage"],
+                                explanation=tc_data["explanation"],
+                                order=tc_data["order"],
+                            )
+                        imported_count += 1
+                else:
+                    q_obj = QuestionBank.objects.create(
+                        prompt=item["title"],
+                        difficulty=item["difficulty"],
+                        marks=item["marks"],
+                        section_type=item["section_type"],
+                        option_a="N/A (Coding Question)",
+                        option_b="N/A (Coding Question)",
+                        option_c="N/A (Coding Question)",
+                        option_d="N/A (Coding Question)",
+                        correct_option="A",
+                    )
+                    prog = ProgrammingQuestion.objects.create(
+                        question=q_obj,
+                        problem_statement=item["statement"],
+                        constraints=item["constraints"],
+                        input_format=item["input_format"],
+                        output_format=item["output_format"],
+                        time_limit_seconds=item["time_limit"],
+                        memory_limit_mb=item["memory_limit"],
+                        allowed_languages=item["allowed_langs"],
+                        boilerplate_code=item["boilerplate"],
+                    )
+                    for tc_data in item["test_cases"]:
+                        ProgrammingTestCase.objects.create(
+                            programming_question=prog,
+                            input_text=tc_data["input_text"],
+                            expected_output=tc_data["expected_output"],
+                            is_public=tc_data["is_public"],
+                            marks_weightage=tc_data["marks_weightage"],
+                            explanation=tc_data["explanation"],
+                            order=tc_data["order"],
+                        )
+                    imported_count += 1
+
+                # If target pool provided, assign question to pool
+                if target_pool:
+                    order_idx = target_pool.items.count() + 1
+                    QuestionPoolItem.objects.get_or_create(
+                        pool=target_pool,
+                        question=q_obj,
+                        defaults={"order": order_idx}
+                    )
+
+            # Audit log
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.QUESTIONS_IMPORTED,
+                entity_type="QUESTION_BANK",
+                entity_id=str(target_pool.id) if target_pool else "GLOBAL",
+                user=request.user,
+                details={
+                    "mode": "JSON_BULK_IMPORT",
+                    "imported_count": imported_count,
+                    "updated_count": updated_count,
+                    "skipped_count": skipped_count,
+                    "target_pool_id": str(target_pool.id) if target_pool else None,
+                }
+            )
+
+        return Response({
+            "success": True,
+            "message": f"Successfully processed {len(validated_items)} questions: {imported_count} imported, {updated_count} updated, {skipped_count} skipped.",
+            "imported_count": imported_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "target_pool": target_pool.name if target_pool else None,
+        }, status=status.HTTP_201_CREATED if imported_count > 0 else status.HTTP_200_OK)
