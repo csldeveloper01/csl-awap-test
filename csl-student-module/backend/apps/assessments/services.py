@@ -282,8 +282,12 @@ def validate_question_bank_sufficiency(aptitude_count: int = None, coding_count:
                     f"Insufficient '{sec.name}' ({sec.code}) questions in {scope_name}: found {available}, requires {needed} (shortage of {shortage})."
                 )
     else:
-        apt_count = aptitude_count if aptitude_count is not None else (assessment.aptitude_count if assessment else 25)
-        cod_count = coding_count if coding_count is not None else (assessment.coding_count if assessment else 25)
+        if assessment and assessment.delivery_mode == Assessment.DeliveryMode.CODING:
+            apt_count = 0
+            cod_count = coding_count if coding_count is not None else (assessment.coding_count if assessment else 1)
+        else:
+            apt_count = aptitude_count if aptitude_count is not None else (assessment.aptitude_count if assessment else 25)
+            cod_count = coding_count if coding_count is not None else (assessment.coding_count if assessment else 25)
         if apt_count == 0 and cod_count == 0:
             raise ValidationError({"bank_error": "Assessment has no configured sections or questions."})
 
@@ -1008,8 +1012,12 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
                 selected_question_ids.add(q.id)
                 order_counter += 1
     else:
-        apt_count = assessment.aptitude_count if assessment else config.aptitude_count
-        cod_count = assessment.coding_count if assessment else config.coding_count
+        if assessment and assessment.delivery_mode == Assessment.DeliveryMode.CODING:
+            apt_count = 0
+            cod_count = assessment.coding_count if assessment else config.coding_count
+        else:
+            apt_count = assessment.aptitude_count if assessment else config.aptitude_count
+            cod_count = assessment.coding_count if assessment else config.coding_count
         total_required = apt_count + cod_count
         if total_required <= 0:
             raise ValidationError({"detail": "Assessment has no configured sections or questions."})
@@ -1086,6 +1094,33 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
             if orig_key == q.correct_option:
                 correct_key_in_shuffled = keys[idx]
 
+        # Capture immutable snapshot for coding questions
+        prog = getattr(q, "programming_details", None)
+        prog_data = {}
+        if prog:
+            prog_data = {
+                "problem_statement": prog.problem_statement or q.prompt,
+                "constraints": prog.constraints or "",
+                "input_format": prog.input_format or "",
+                "output_format": prog.output_format or "",
+                "time_limit_seconds": prog.time_limit_seconds or 2.0,
+                "memory_limit_mb": prog.memory_limit_mb or 256,
+                "allowed_languages": prog.allowed_languages or ["python", "java"],
+                "boilerplate_code": prog.boilerplate_code or {},
+                "test_cases": [
+                    {
+                        "id": str(tc.id),
+                        "input_text": tc.input_text or "",
+                        "expected_output": tc.expected_output or "",
+                        "is_public": tc.is_public,
+                        "marks_weightage": tc.marks_weightage,
+                        "explanation": tc.explanation or "",
+                        "order": tc.order,
+                    }
+                    for tc in prog.test_cases.filter(is_active=True).order_by("order", "created_at")
+                ],
+            }
+
         snapshots.append(
             AttemptQuestionSnapshot(
                 attempt=attempt,
@@ -1098,6 +1133,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
                 option_c_text=shuffled[2][1],
                 option_d_text=shuffled[3][1],
                 correct_option_key=correct_key_in_shuffled,
+                programming_data=prog_data,
             )
         )
         snapshot_order += 1

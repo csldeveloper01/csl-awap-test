@@ -16,6 +16,8 @@ import {
   assignAdminAssessmentQuestions,
   getAdminQuestionPools,
   bulkAssignQuestionsToPool,
+  saveAdminQuestionCoding,
+  saveAdminProgrammingTestCase,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
@@ -560,16 +562,27 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     setShowEditorModal(true);
   };
 
-  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string }) => {
+  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any }) => {
     try {
       setSavingQuestion(true);
+      let targetQId = editingQuestion?.id;
       if (editingQuestion) {
         await updateAdminQuestion(editingQuestion.id, formData);
-        alert('Question updated successfully. Changes will apply to future assessments.');
       } else {
-        await createAdminQuestion(formData);
-        alert('New question created successfully.');
+        const created = await createAdminQuestion(formData);
+        targetQId = created.id;
       }
+
+      if (formData.section_type === 'CODING' && formData.coding_details && targetQId) {
+        await saveAdminQuestionCoding(targetQId, formData.coding_details);
+        if (Array.isArray(formData.coding_details.test_cases)) {
+          for (const tc of formData.coding_details.test_cases) {
+            await saveAdminProgrammingTestCase(targetQId, tc);
+          }
+        }
+      }
+
+      alert(editingQuestion ? 'Question updated successfully.' : 'New question created successfully.');
       setShowEditorModal(false);
       setEditingQuestion(null);
       await loadQuestions();

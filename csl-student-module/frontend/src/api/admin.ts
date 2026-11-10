@@ -198,7 +198,7 @@ export interface AdminAssessment {
   opened_at?: string | null;
   closed_at?: string | null;
   close_policy: 'ALLOW_FINISH' | 'STRICT_CUTOFF';
-  delivery_mode?: 'MCQ' | 'PDF_CODING';
+  delivery_mode?: 'MCQ' | 'CODING' | 'PDF_CODING';
   pdf_filename?: string | null;
   pdf_file_size?: number | null;
   pdf_uploaded_at?: string | null;
@@ -358,7 +358,7 @@ export interface AdminAttemptReview {
   flag_reason: string;
   total_questions: number;
   answered_count: number;
-  delivery_mode?: 'MCQ' | 'PDF_CODING';
+  delivery_mode?: 'MCQ' | 'CODING' | 'PDF_CODING';
   is_manual_evaluation_pending?: boolean;
   pdf_filename?: string;
   pdf_file_size?: number;
@@ -405,7 +405,7 @@ export interface AdminResult {
   assessment_code?: string;
   department: string;
   year_of_study: string;
-  delivery_mode?: 'MCQ' | 'PDF_CODING';
+  delivery_mode?: 'MCQ' | 'CODING' | 'PDF_CODING';
   is_manual_evaluation_pending?: boolean;
   pdf_filename?: string;
   state: string;

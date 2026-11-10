@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { type AdminQuestion, type AdminAssessment, type AdminSection, getAdminSections } from '../../api/admin';
+import {
+  type AdminQuestion,
+  type AdminAssessment,
+  type AdminSection,
+  type AdminProgrammingTestCase,
+  getAdminSections,
+  fetchAdminQuestionCoding,
+  deleteAdminProgrammingTestCase,
+} from '../../api/admin';
 import { formatApiError } from '../../utils/errorFormatter';
 
 interface AdminQuestionEditorModalProps {
@@ -49,6 +57,23 @@ export function AdminQuestionEditorModal({
   const [marks, setMarks] = useState<number>(1);
   const [isArchived, setIsArchived] = useState(false);
 
+  // Coding Question State (Phase 3.1)
+  const [codingConstraints, setCodingConstraints] = useState('');
+  const [codingInputFormat, setCodingInputFormat] = useState('');
+  const [codingOutputFormat, setCodingOutputFormat] = useState('');
+  const [codingTimeLimit, setCodingTimeLimit] = useState<number>(2.0);
+  const [codingMemoryLimit, setCodingMemoryLimit] = useState<number>(256);
+  const [codingAllowedLanguages, setCodingAllowedLanguages] = useState<string[]>(['python', 'java']);
+  const [codingBoilerplate, setCodingBoilerplate] = useState<Record<string, string>>({
+    python: "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+    java: "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n"
+  });
+  const [codingTestCases, setCodingTestCases] = useState<AdminProgrammingTestCase[]>([]);
+  const [newTcInput, setNewTcInput] = useState('');
+  const [newTcOutput, setNewTcOutput] = useState('');
+  const [newTcIsPublic, setNewTcIsPublic] = useState(false);
+  const [newTcWeight, setNewTcWeight] = useState<number>(1.0);
+
   // Validation error state
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -79,8 +104,25 @@ export function AdminQuestionEditorModal({
       setCorrectOption(question.correct_option || 'A');
       setExplanation(question.explanation || '');
       setIsActive(question.is_active ?? true);
-      setMarks(question.marks ?? 1);
+      setMarks(question.marks ?? (question.section_type === 'CODING' ? 10 : 1));
       setIsArchived(question.is_archived ?? false);
+
+      if (question.id && question.section_type === 'CODING') {
+        fetchAdminQuestionCoding(question.id)
+          .then((details) => {
+            if (details) {
+              setCodingConstraints(details.constraints || '');
+              setCodingInputFormat(details.input_format || '');
+              setCodingOutputFormat(details.output_format || '');
+              setCodingTimeLimit(details.time_limit_seconds || 2.0);
+              setCodingMemoryLimit(details.memory_limit_mb || 256);
+              setCodingAllowedLanguages(details.allowed_languages || ['python', 'java']);
+              setCodingBoilerplate(details.boilerplate_code || {});
+              setCodingTestCases(details.test_cases || []);
+            }
+          })
+          .catch(() => {});
+      }
 
       initialStateRef.current = JSON.stringify({
         assessmentId: existingAssessmentId,
@@ -224,34 +266,56 @@ export function AdminQuestionEditorModal({
     setErrorMsg('');
 
     // Field validations
-    // assessmentId is optional in Phase 2.1 independent question bank
     if (!prompt.trim()) {
       setErrorMsg('Question prompt / problem statement is required.');
       return;
     }
-    if (!optionA.trim() || !optionB.trim() || !optionC.trim() || !optionD.trim()) {
-      setErrorMsg('All four answer options (A, B, C, D) must be provided.');
-      return;
-    }
-    if (!['A', 'B', 'C', 'D'].includes(correctOption)) {
-      setErrorMsg('A valid correct option key (A, B, C, or D) must be selected.');
-      return;
+
+    if (sectionType === 'CODING') {
+      if (codingTestCases.length === 0) {
+        setErrorMsg('At least one evaluation test case is required for coding questions.');
+        return;
+      }
+      if (Number(marks) <= 0) {
+        setErrorMsg('Question marks must be a positive number (> 0).');
+        return;
+      }
+    } else {
+      if (!optionA.trim() || !optionB.trim() || !optionC.trim() || !optionD.trim()) {
+        setErrorMsg('All four answer options (A, B, C, D) must be provided.');
+        return;
+      }
+      if (!['A', 'B', 'C', 'D'].includes(correctOption)) {
+        setErrorMsg('A valid correct option key (A, B, C, or D) must be selected.');
+        return;
+      }
     }
 
-    const payload: Partial<AdminQuestion> & { assessment_id?: string } = {
+    const payload: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any } = {
       assessment_id: assessmentId.trim() || undefined,
-      marks: Number(marks) || 1,
+      marks: Number(marks) || (sectionType === 'CODING' ? 10 : 1),
       is_archived: isArchived,
       prompt: prompt.trim(),
       section_type: sectionType,
       difficulty,
-      option_a: optionA.trim(),
-      option_b: optionB.trim(),
-      option_c: optionC.trim(),
-      option_d: optionD.trim(),
-      correct_option: correctOption,
+      option_a: sectionType === 'CODING' ? 'N/A (Coding Question)' : optionA.trim(),
+      option_b: sectionType === 'CODING' ? 'N/A (Coding Question)' : optionB.trim(),
+      option_c: sectionType === 'CODING' ? 'N/A (Coding Question)' : optionC.trim(),
+      option_d: sectionType === 'CODING' ? 'N/A (Coding Question)' : optionD.trim(),
+      correct_option: sectionType === 'CODING' ? 'A' : correctOption,
       explanation: explanation.trim(),
       is_active: isActive,
+      coding_details: sectionType === 'CODING' ? {
+        problem_statement: prompt.trim(),
+        constraints: codingConstraints.trim(),
+        input_format: codingInputFormat.trim(),
+        output_format: codingOutputFormat.trim(),
+        time_limit_seconds: Number(codingTimeLimit) || 2.0,
+        memory_limit_mb: Number(codingMemoryLimit) || 256,
+        allowed_languages: codingAllowedLanguages,
+        boilerplate_code: codingBoilerplate,
+        test_cases: codingTestCases,
+      } : undefined,
     };
 
     try {
@@ -259,6 +323,38 @@ export function AdminQuestionEditorModal({
     } catch (err: unknown) {
       setErrorMsg(formatApiError(err, 'Failed to save question.'));
     }
+  };
+
+  const handleAddTestCase = () => {
+    if (newTcOutput === '') {
+      setErrorMsg('Expected output is required for the test case.');
+      return;
+    }
+    setErrorMsg('');
+    const tc: AdminProgrammingTestCase = {
+      input_text: newTcInput,
+      expected_output: newTcOutput,
+      is_public: newTcIsPublic,
+      marks_weightage: Number(newTcWeight) || 1.0,
+      explanation: '',
+      order: codingTestCases.length + 1,
+    };
+    setCodingTestCases([...codingTestCases, tc]);
+    setNewTcInput('');
+    setNewTcOutput('');
+    setNewTcIsPublic(false);
+    setNewTcWeight(1.0);
+  };
+
+  const handleRemoveTestCase = async (index: number, tcId?: string) => {
+    if (tcId && question?.id) {
+      try {
+        await deleteAdminProgrammingTestCase(question.id, tcId);
+      } catch (err) {
+        console.warn('Failed to delete test case via API:', err);
+      }
+    }
+    setCodingTestCases(codingTestCases.filter((_, i) => i !== index));
   };
 
   // Extract code blocks and prose for live preview
@@ -853,7 +949,260 @@ export function AdminQuestionEditorModal({
                   </div>
                 </div>
 
-                {/* 3. Answer Options Card */}
+                {sectionType === 'CODING' ? (
+                  /* ─── CODING QUESTION SPECIFICATION & TEST CASES CARD (Phase 3.1) ─── */
+                  <div
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      borderRadius: '14px',
+                      border: '1.5px solid #CBD5E1',
+                      padding: '20px 22px',
+                      boxShadow: '0 2px 6px rgba(11, 46, 111, 0.03)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '16px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                          💻 Programming Problem Specification
+                        </h4>
+                        <span style={{ fontSize: '11px', color: '#1455B8', fontWeight: 700, backgroundColor: '#EFF6FF', padding: '2px 8px', borderRadius: '4px' }}>
+                          Monaco Playground Active
+                        </span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '12px', color: '#64748B' }}>
+                        Configure problem statement, constraints, input/output specifications, execution limits, and evaluation test cases.
+                      </p>
+                    </div>
+
+                    {/* Constraints */}
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
+                        Constraints
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={codingConstraints}
+                        onChange={(e) => setCodingConstraints(e.target.value)}
+                        placeholder="e.g. 1 <= n <= 10^5, -10^9 <= a[i] <= 10^9"
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    {/* Input Format & Output Format */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
+                          Input Format
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={codingInputFormat}
+                          onChange={(e) => setCodingInputFormat(e.target.value)}
+                          placeholder="e.g. First line contains integer n. Second line contains n space-separated integers."
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
+                          Output Format
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={codingOutputFormat}
+                          onChange={(e) => setCodingOutputFormat(e.target.value)}
+                          placeholder="e.g. Print a single integer representing the maximum subarray sum."
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Time & Memory Limits */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
+                          Time Limit (Seconds) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.5"
+                          max="10.0"
+                          value={codingTimeLimit}
+                          onChange={(e) => setCodingTimeLimit(Number(e.target.value))}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
+                          Memory Limit (MB) *
+                        </label>
+                        <input
+                          type="number"
+                          min="64"
+                          max="1024"
+                          value={codingMemoryLimit}
+                          onChange={(e) => setCodingMemoryLimit(Number(e.target.value))}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Evaluation Test Cases Section */}
+                    <div style={{ marginTop: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span style={{ fontSize: '13px', fontWeight: 800, color: '#0B2E6F' }}>
+                            Evaluation Test Cases ({codingTestCases.length})
+                          </span>
+                          <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '999px', backgroundColor: '#EFF6FF', color: '#1455B8', fontWeight: 700 }}>
+                            Public Samples: {codingTestCases.filter(t => t.is_public).length}
+                          </span>
+                          <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '999px', backgroundColor: '#FEF3C7', color: '#B45309', fontWeight: 700 }}>
+                            Hidden Evaluation: {codingTestCases.filter(t => !t.is_public).length}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Existing Test Cases Table */}
+                      {codingTestCases.length === 0 ? (
+                        <div style={{ padding: '16px', backgroundColor: '#FEF2F2', border: '1px dashed #FCA5A5', borderRadius: '8px', textAlign: 'center', color: '#991B1B', fontSize: '12px' }}>
+                          ⚠️ At least one test case is required before this problem can be evaluated. Add a sample test case below.
+                        </div>
+                      ) : (
+                        <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', overflow: 'hidden', marginBottom: '14px' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                            <thead style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left' }}>
+                              <tr>
+                                <th style={{ padding: '8px 10px', color: '#475569' }}>#</th>
+                                <th style={{ padding: '8px 10px', color: '#475569' }}>Visibility</th>
+                                <th style={{ padding: '8px 10px', color: '#475569' }}>Input (stdin)</th>
+                                <th style={{ padding: '8px 10px', color: '#475569' }}>Expected Output</th>
+                                <th style={{ padding: '8px 10px', color: '#475569' }}>Weight</th>
+                                <th style={{ padding: '8px 10px', color: '#475569', textAlign: 'right' }}>Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {codingTestCases.map((tc, idx) => (
+                                <tr key={tc.id || idx} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                  <td style={{ padding: '8px 10px', fontWeight: 700 }}>{idx + 1}</td>
+                                  <td style={{ padding: '8px 10px' }}>
+                                    <span style={{
+                                      padding: '2px 6px',
+                                      borderRadius: '4px',
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      backgroundColor: tc.is_public ? '#EFF6FF' : '#FEF3C7',
+                                      color: tc.is_public ? '#1455B8' : '#B45309',
+                                    }}>
+                                      {tc.is_public ? 'PUBLIC' : 'HIDDEN'}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '8px 10px', fontFamily: 'monospace', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {tc.input_text || '(empty)'}
+                                  </td>
+                                  <td style={{ padding: '8px 10px', fontFamily: 'monospace', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {tc.expected_output}
+                                  </td>
+                                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>{tc.marks_weightage || 1.0}</td>
+                                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveTestCase(idx, tc.id)}
+                                      style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '13px' }}
+                                      title="Remove Test Case"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Add New Test Case Inline Form */}
+                      <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '10px', padding: '14px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#0B2E6F', display: 'block', marginBottom: '8px' }}>
+                          + Add Test Case
+                        </span>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '8px' }}>
+                          <div>
+                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '2px' }}>
+                              Standard Input (stdin)
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={newTcInput}
+                              onChange={(e) => setNewTcInput(e.target.value)}
+                              placeholder="Input passed to stdin..."
+                              style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '2px' }}>
+                              Expected Output (stdout) *
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={newTcOutput}
+                              onChange={(e) => setNewTcOutput(e.target.value)}
+                              placeholder="Exact expected stdout..."
+                              style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={newTcIsPublic}
+                                onChange={(e) => setNewTcIsPublic(e.target.checked)}
+                                style={{ accentColor: '#1455B8' }}
+                              />
+                              <span>Public Sample Case</span>
+                            </label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569' }}>Weight:</label>
+                              <input
+                                type="number"
+                                min="0.1"
+                                step="0.5"
+                                value={newTcWeight}
+                                onChange={(e) => setNewTcWeight(Number(e.target.value))}
+                                style={{ width: '60px', padding: '4px 6px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '12px' }}
+                              />
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleAddTestCase}
+                            style={{
+                              padding: '6px 14px',
+                              backgroundColor: '#1455B8',
+                              color: '#FFFFFF',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Add to Test Cases
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* 3. Answer Options Card */}
                 <div
                   style={{
                     backgroundColor: '#FFFFFF',
@@ -1115,9 +1464,11 @@ export function AdminQuestionEditorModal({
                     />
                   </div>
                 </div>
+              </>
+            )}
               </div>
 
-              {/* ────────────────────────────────────────────────────────
+            {/* ────────────────────────────────────────────────────────
                   RIGHT COLUMN: LIVE PREVIEW & METADATA (approx 35%)
                   ──────────────────────────────────────────────────────── */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

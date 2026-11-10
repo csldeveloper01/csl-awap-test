@@ -79,6 +79,14 @@ class CandidateEligibleAssessmentsView(APIView):
         college_id = request.query_params.get("college_id")
         from django.db.models import Q
 
+        # If drive_code not provided in request but candidate registered through a drive, scope to that drive
+        if not drive_code and candidate:
+            active_drive_reg = candidate.drive_registrations.filter(
+                registration_status="REGISTERED"
+            ).select_related("drive").first()
+            if active_drive_reg and active_drive_reg.drive:
+                drive_code = active_drive_reg.drive.drive_code or active_drive_reg.drive.code
+
         if drive_code:
             # Mode B: Drive-Based Assessment
             drive = Drive.objects.filter(
@@ -1698,13 +1706,39 @@ class StudentCodeRunView(APIView):
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
         if attempt.state in AssessmentAttempt.TERMINAL_STATES:
             return Response({"detail": f"Attempt is {attempt.state}; code execution is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+        if attempt.is_expired():
+            return Response({"detail": "Assessment time has expired. Code execution is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
 
-        from .coding_service import execute_single_run
+        # Validate question belongs to this attempt
+        snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
+        if not snapshot and not attempt.questions.filter(id=question_id).exists():
+            return Response({"detail": "This question does not belong to the specified assessment attempt."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .coding_service import execute_single_run, normalize_code_output
         from .models import ProgrammingQuestion
 
         prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
-        time_limit = prog_q.time_limit_seconds if prog_q else 2.0
-        memory_limit = prog_q.memory_limit_mb if prog_q else 256
+        time_limit = (
+            snapshot.programming_data.get("time_limit_seconds")
+            if (snapshot and snapshot.programming_data)
+            else (prog_q.time_limit_seconds if prog_q else 2.0)
+        ) or 2.0
+        memory_limit = (
+            snapshot.programming_data.get("memory_limit_mb")
+            if (snapshot and snapshot.programming_data)
+            else (prog_q.memory_limit_mb if prog_q else 256)
+        ) or 256
+
+        allowed_languages = (
+            snapshot.programming_data.get("allowed_languages")
+            if (snapshot and snapshot.programming_data)
+            else (prog_q.allowed_languages if prog_q else ["python", "java"])
+        )
+        if allowed_languages and language not in [l.lower() for l in allowed_languages]:
+            return Response(
+                {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if custom_input is not None:
             res = execute_single_run(
@@ -1726,31 +1760,54 @@ class StudentCodeRunView(APIView):
             })
         else:
             sample_results = []
-            if prog_q:
-                public_cases = prog_q.test_cases.filter(is_public=True).order_by("order", "created_at")
-                for tc in public_cases:
-                    res = execute_single_run(
-                        language=language,
-                        source_code=source_code,
-                        stdin=tc.input_text or "",
-                        time_limit=time_limit,
-                        memory_limit_mb=memory_limit,
-                    )
-                    actual = res.get("stdout", "").strip().replace("\r\n", "\n")
-                    expected = (tc.expected_output or "").strip().replace("\r\n", "\n")
-                    passed = (res.get("verdict") == "ACCEPTED") and (actual == expected)
-                    sample_results.append({
-                        "test_case_id": str(tc.id),
+            sample_cases = []
+            if snapshot and snapshot.programming_data and snapshot.programming_data.get("test_cases"):
+                sample_cases = [tc for tc in snapshot.programming_data["test_cases"] if tc.get("is_public")]
+            elif prog_q:
+                sample_cases = [
+                    {
+                        "id": str(tc.id),
                         "input_text": tc.input_text,
                         "expected_output": tc.expected_output,
-                        "actual_output": res.get("stdout"),
-                        "stderr": res.get("stderr"),
-                        "passed": passed,
-                        "execution_time_ms": res.get("execution_time_ms"),
-                    })
+                    }
+                    for tc in prog_q.test_cases.filter(is_public=True, is_active=True).order_by("order", "created_at")
+                ]
+
+            for tc in sample_cases:
+                tc_in = tc.get("input_text", "")
+                tc_exp = tc.get("expected_output", "")
+                res = execute_single_run(
+                    language=language,
+                    source_code=source_code,
+                    stdin=tc_in or "",
+                    time_limit=time_limit,
+                    memory_limit_mb=memory_limit,
+                )
+                actual = normalize_code_output(res.get("stdout", ""))
+                expected = normalize_code_output(tc_exp)
+                passed = (res.get("verdict") == "ACCEPTED") and (actual == expected)
+                sample_results.append({
+                    "test_case_id": str(tc.get("id")),
+                    "input_text": tc_in,
+                    "expected_output": tc_exp,
+                    "actual_output": res.get("stdout"),
+                    "passed": passed,
+                    "verdict": res.get("verdict"),
+                    "execution_time_ms": res.get("execution_time_ms"),
+                    "memory_used_kb": res.get("memory_used_kb"),
+                })
+
+            all_passed = all(r["passed"] for r in sample_results) if sample_results else False
+            first_fail = next((r["verdict"] for r in sample_results if not r["passed"]), "ACCEPTED")
+            overall_verdict = "ACCEPTED" if all_passed else first_fail
 
             return Response({
-                "mode": "SAMPLE_TEST_CASES",
+                "mode": "SAMPLE_CASES",
+                "verdict": overall_verdict,
+                "status": overall_verdict,
+                "total_samples": len(sample_results),
+                "passed_samples": sum(1 for r in sample_results if r["passed"]),
+                "results": sample_results,
                 "sample_results": sample_results,
             })
 
@@ -1780,11 +1837,42 @@ class StudentCodeSubmitView(APIView):
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
         if attempt.state in AssessmentAttempt.TERMINAL_STATES:
             return Response({"detail": f"Attempt is {attempt.state}; code submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+        if attempt.is_expired():
+            return Response({"detail": "Assessment time has expired. Submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Validate question belongs to this attempt
+        snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
+        if not snapshot and not attempt.questions.filter(id=question_id).exists():
+            return Response({"detail": "This question does not belong to the specified assessment attempt."}, status=status.HTTP_400_BAD_REQUEST)
 
         from .models import ProgrammingQuestion
         from .coding_service import evaluate_submission
 
         prog_q = get_object_or_404(ProgrammingQuestion, question_id=question_id)
+
+        allowed_languages = (
+            snapshot.programming_data.get("allowed_languages")
+            if (snapshot and snapshot.programming_data)
+            else (prog_q.allowed_languages if prog_q else ["python", "java"])
+        )
+        if allowed_languages and language not in [l.lower() for l in allowed_languages]:
+            return Response(
+                {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Disallow grading a problem with 0 test cases
+        has_cases = False
+        if snapshot and snapshot.programming_data and snapshot.programming_data.get("test_cases"):
+            has_cases = len(snapshot.programming_data["test_cases"]) > 0
+        else:
+            has_cases = prog_q.test_cases.filter(is_active=True).exists()
+
+        if not has_cases:
+            return Response(
+                {"detail": "This coding problem has no configured test cases and cannot be evaluated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         eval_result = evaluate_submission(
             programming_question=prog_q,

@@ -117,8 +117,7 @@ export function AssessmentRegisterPage() {
   const [manualCodeInput, setManualCodeInput] = useState('');
   const [resolvingCode, setResolvingCode] = useState(false);
   const [showCodeSection, setShowCodeSection] = useState(Boolean(codeParam || driveParam));
-  const [accessOption, setAccessOption] = useState<'STANDALONE' | 'DRIVE'>(driveParam ? 'DRIVE' : 'STANDALONE');
-  const [eightDigitCode, setEightDigitCode] = useState(driveParam && /^\d{8}$/.test(driveParam) ? driveParam : '');
+  const [eightDigitCode, setEightDigitCode] = useState(driveParam || codeParam || '');
 
   // Registration form state
   const [formData, setFormData] = useState<RegistrationPayload>({
@@ -338,7 +337,7 @@ export function AssessmentRegisterPage() {
   const handleFetchAssessments = async (overrideDriveCode?: string) => {
     setLoadingAssessments(true);
     try {
-      const activeCode = overrideDriveCode !== undefined ? overrideDriveCode : (accessOption === 'DRIVE' ? eightDigitCode : undefined);
+      const activeCode = overrideDriveCode !== undefined ? overrideDriveCode : (eightDigitCode.trim() || driveCode.trim() || undefined);
       const resp = await getCandidateAssessments(activeCode || undefined);
       setCandidateInfo(resp.candidate);
       setCandidateAssessments(resp.assessments);
@@ -420,12 +419,11 @@ export function AssessmentRegisterPage() {
     setFieldErrors({});
     setLoading(true);
 
-    if (accessOption === 'DRIVE') {
-      if (!eightDigitCode || eightDigitCode.trim().length !== 8) {
-        setError('Please enter a valid 8-digit numeric Drive code.');
-        setLoading(false);
-        return;
-      }
+    // Drive code is optional: validate format only if entered
+    if (eightDigitCode.trim() && eightDigitCode.trim().length < 4) {
+      setError('Please enter a valid Drive or event access code, or leave it blank for open assessments.');
+      setLoading(false);
+      return;
     }
 
     const payload: RegistrationPayload = {
@@ -437,7 +435,7 @@ export function AssessmentRegisterPage() {
       department: formData.department.trim(),
       year_of_study: formData.year_of_study,
       phone_number: formData.phone_number.trim(),
-      drive_code: accessOption === 'DRIVE' ? eightDigitCode.trim() : (driveCode || undefined),
+      drive_code: (eightDigitCode.trim() || driveCode.trim() || undefined),
       access_code: accessCode || undefined,
       invite_token: inviteToken || undefined,
       assessment_id: assessmentId || undefined,
@@ -457,7 +455,7 @@ export function AssessmentRegisterPage() {
       }
 
       // Fetch candidate's assigned assessments
-      await handleFetchAssessments(accessOption === 'DRIVE' ? eightDigitCode.trim() : undefined);
+      await handleFetchAssessments((eightDigitCode.trim() || driveCode.trim()) || undefined);
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response) {
         const data = err.response.data;
@@ -2247,84 +2245,52 @@ export function AssessmentRegisterPage() {
             </div>
           </div>
 
-          {/* Assessment Access Mode (Phase 2.2.3 Mode A vs Mode B) */}
+          {/* Drive / Event Access Code (Optional Extension) */}
           <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '14px', marginTop: '6px' }}>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-              Assessment Access Option *
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-              <button
-                type="button"
-                onClick={() => { setAccessOption('STANDALONE'); setEightDigitCode(''); setResolvedInfo(null); }}
-                style={{
-                  padding: '10px',
-                  borderRadius: '8px',
-                  border: accessOption === 'STANDALONE' ? '2px solid #1455B8' : '1px solid #CBD5E1',
-                  backgroundColor: accessOption === 'STANDALONE' ? '#EFF6FF' : '#FFFFFF',
-                  color: accessOption === 'STANDALONE' ? '#1455B8' : '#64748B',
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                }}
-              >
-                Option A — Open Assessment
-              </button>
-              <button
-                type="button"
-                onClick={() => setAccessOption('DRIVE')}
-                style={{
-                  padding: '10px',
-                  borderRadius: '8px',
-                  border: accessOption === 'DRIVE' ? '2px solid #1455B8' : '1px solid #CBD5E1',
-                  backgroundColor: accessOption === 'DRIVE' ? '#EFF6FF' : '#FFFFFF',
-                  color: accessOption === 'DRIVE' ? '#1455B8' : '#64748B',
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                }}
-              >
-                Option B — Drive-Based Assessment
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <label htmlFor="drive_code_input" style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                Drive / Event Access Code <span style={{ fontWeight: 400, color: '#64748B' }}>(Optional)</span>
+              </label>
+              {eightDigitCode && (
+                <button
+                  type="button"
+                  onClick={() => { setEightDigitCode(''); setDriveCode(''); setResolvedInfo(null); }}
+                  style={{ background: 'none', border: 'none', color: '#DC2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                >
+                  Clear Code
+                </button>
+              )}
             </div>
-
-            {accessOption === 'STANDALONE' ? (
-              <p style={{ margin: 0, fontSize: '12px', color: '#64748B', lineHeight: 1.4 }}>
-                Explore open, standalone assessments available to your institution without an event code.
-              </p>
-            ) : (
-              <div>
-                <label htmlFor="eight_digit_drive_code" style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Enter 8-digit Drive Code *
-                </label>
-                <input
-                  id="eight_digit_drive_code"
-                  type="text"
-                  maxLength={8}
-                  placeholder="e.g. 84920147"
-                  value={eightDigitCode}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 8);
-                    setEightDigitCode(val);
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #94A3B8',
-                    fontSize: '15px',
-                    letterSpacing: '2px',
-                    fontWeight: 700,
-                    boxSizing: 'border-box',
-                    outlineColor: '#1455B8',
-                  }}
-                />
-                <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
-                  Enter the exact 8-digit numeric code provided by your administrator or institution.
-                </span>
-              </div>
-            )}
+            <input
+              id="drive_code_input"
+              type="text"
+              maxLength={20}
+              placeholder="e.g. 84920147 (or leave blank for open college assessments)"
+              value={eightDigitCode}
+              onChange={(e) => {
+                const val = e.target.value.trim();
+                setEightDigitCode(val);
+                setDriveCode(val);
+              }}
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                borderRadius: '8px',
+                border: eightDigitCode ? '1.5px solid #1455B8' : '1px solid #CBD5E1',
+                fontSize: '13px',
+                color: '#111111',
+                fontWeight: eightDigitCode ? 700 : 400,
+                letterSpacing: eightDigitCode ? '1px' : 'normal',
+                boxSizing: 'border-box',
+                outlineColor: '#1455B8',
+                backgroundColor: '#FFFFFF',
+              }}
+            />
+            <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+              {eightDigitCode
+                ? '✓ Your registration will be attached to this recruitment drive.'
+                : 'Leave blank to register directly for assessments assigned to your institution.'}
+            </span>
           </div>
 
           <button

@@ -191,11 +191,11 @@ export function AdminAssessmentsView({
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   // PDF Assessment Mode State
-  const [createDeliveryMode, setCreateDeliveryMode] = useState<'MCQ' | 'PDF_CODING'>('MCQ');
+  const [createDeliveryMode, setCreateDeliveryMode] = useState<'MCQ' | 'CODING' | 'PDF_CODING'>('MCQ');
   const [createUseCustomCode, setCreateUseCustomCode] = useState(false);
   const [createPdfFile, setCreatePdfFile] = useState<File | null>(null);
 
-  const [editDeliveryMode, setEditDeliveryMode] = useState<'MCQ' | 'PDF_CODING'>('MCQ');
+  const [editDeliveryMode, setEditDeliveryMode] = useState<'MCQ' | 'CODING' | 'PDF_CODING'>('MCQ');
   const [editPdfFile, setEditPdfFile] = useState<File | null>(null);
   const [editPdfFilename, setEditPdfFilename] = useState<string | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
@@ -815,7 +815,7 @@ export function AdminAssessmentsView({
           sections: payloadSections,
           is_standalone: createIsStandalone,
           drive_ids: createIsStandalone ? [] : createSelectedDriveIds,
-          eligible_college_ids: createIsStandalone ? createForm.eligible_college_ids : [],
+          eligible_college_ids: createForm.eligible_college_ids,
         });
       }
 
@@ -965,7 +965,7 @@ export function AdminAssessmentsView({
         sections: payloadSections,
         is_standalone: editIsStandalone,
         drive_ids: editIsStandalone ? [] : editSelectedDriveIds,
-        eligible_college_ids: editIsStandalone ? editEligibleCollegeIds : [],
+        eligible_college_ids: editEligibleCollegeIds,
       });
 
       if (editDeliveryMode === 'PDF_CODING' && editPdfFile) {
@@ -2257,6 +2257,70 @@ export function AdminAssessmentsView({
             )}
 
             <form onSubmit={handleCreateSubmit}>
+              {/* Assessment Type Selector (Phase 3.1) */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  Assessment Type *
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setCreateDeliveryMode('MCQ')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: createDeliveryMode === 'MCQ' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: createDeliveryMode === 'MCQ' ? '#EFF6FF' : '#FFFFFF',
+                      color: createDeliveryMode === 'MCQ' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    📝 MCQ Assessment
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCreateDeliveryMode('CODING')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: createDeliveryMode === 'CODING' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: createDeliveryMode === 'CODING' ? '#EFF6FF' : '#FFFFFF',
+                      color: createDeliveryMode === 'CODING' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    💻 Coding Assessment
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCreateDeliveryMode('PDF_CODING')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: createDeliveryMode === 'PDF_CODING' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: createDeliveryMode === 'PDF_CODING' ? '#EFF6FF' : '#FFFFFF',
+                      color: createDeliveryMode === 'PDF_CODING' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    📄 PDF Paper Mode
+                  </button>
+                </div>
+                <div style={{ fontSize: '11px', color: '#64748B', marginTop: '5px' }}>
+                  {createDeliveryMode === 'MCQ' && 'Multiple Choice questions with automated grading and proctoring.'}
+                  {createDeliveryMode === 'CODING' && 'Interactive Monaco code playground with test case evaluation and Judge0 sandbox.'}
+                  {createDeliveryMode === 'PDF_CODING' && 'Candidate downloads PDF question paper for offline or paper coding.'}
+                </div>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '14px', marginBottom: '14px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
@@ -2628,42 +2692,43 @@ export function AdminAssessmentsView({
                 </div>
               </div>
 
-              {/* Eligible Colleges Selection (Only for Standalone assessments) */}
-              {createIsStandalone ? (
+              {/* Eligible Colleges Selection (Always preserved for MCQ and Coding) */}
               <div style={{ marginBottom: '20px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
                   Assign Participating Colleges ({createForm.eligible_college_ids.length} selected)
                 </label>
                 <div style={{ border: '1px solid #CBD5E1', borderRadius: '6px', padding: '10px', maxHeight: '140px', overflowY: 'auto', backgroundColor: '#F8FAFC' }}>
-                  {colleges.map((c) => {
-                    const isChecked = createForm.eligible_college_ids.includes(c.id);
-                    return (
-                      <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '13px', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setCreateForm({ ...createForm, eligible_college_ids: [...createForm.eligible_college_ids, c.id] });
-                            } else {
-                              setCreateForm({
-                                ...createForm,
-                                eligible_college_ids: createForm.eligible_college_ids.filter((id) => id !== c.id),
-                              });
-                            }
-                          }}
-                        />
-                        <strong>[{c.code}]</strong> {c.name}
-                      </label>
-                    );
-                  })}
+                  {colleges.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '12px', color: '#94A3B8' }}>No active colleges found in the directory.</p>
+                  ) : (
+                    colleges.map((c) => {
+                      const isChecked = createForm.eligible_college_ids.includes(c.id);
+                      return (
+                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '13px', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setCreateForm({ ...createForm, eligible_college_ids: [...createForm.eligible_college_ids, c.id] });
+                              } else {
+                                setCreateForm({
+                                  ...createForm,
+                                  eligible_college_ids: createForm.eligible_college_ids.filter((id) => id !== c.id),
+                                });
+                              }
+                            }}
+                          />
+                          <strong>[{c.code}]</strong> {c.name}
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
+                <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+                  Students registered from these colleges will see this assessment in their dashboard.
+                </span>
               </div>
-              ) : (
-              <div style={{ marginBottom: '20px', padding: '12px 16px', backgroundColor: '#EFF6FF', borderRadius: '8px', border: '1px solid #BFDBFE', fontSize: '13px', color: '#1E40AF' }}>
-                ℹ Participating colleges are automatically inherited from the selected Drive(s). Standalone college assignment is not applicable for Drive-based assessments.
-              </div>
-              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
@@ -2735,6 +2800,65 @@ export function AdminAssessmentsView({
             )}
 
             <form onSubmit={handleEditSubmit}>
+              {/* Assessment Type Selector (Phase 3.1) */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  Assessment Type *
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setEditDeliveryMode('MCQ')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: editDeliveryMode === 'MCQ' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: editDeliveryMode === 'MCQ' ? '#EFF6FF' : '#FFFFFF',
+                      color: editDeliveryMode === 'MCQ' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    📝 MCQ Assessment
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditDeliveryMode('CODING')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: editDeliveryMode === 'CODING' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: editDeliveryMode === 'CODING' ? '#EFF6FF' : '#FFFFFF',
+                      color: editDeliveryMode === 'CODING' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    💻 Coding Assessment
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditDeliveryMode('PDF_CODING')}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: editDeliveryMode === 'PDF_CODING' ? '2px solid #1455B8' : '1px solid #CBD5E1',
+                      backgroundColor: editDeliveryMode === 'PDF_CODING' ? '#EFF6FF' : '#FFFFFF',
+                      color: editDeliveryMode === 'PDF_CODING' ? '#1455B8' : '#64748B',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                    }}
+                  >
+                    📄 PDF Paper Mode
+                  </button>
+                </div>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px', marginBottom: '14px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>

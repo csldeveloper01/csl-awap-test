@@ -338,3 +338,8 @@ else:
             "TIMEOUT": 300,
         }
     }
+
+
+# Judge0 Code Execution Engine Configuration (Phase 3.1)
+JUDGE0_API_URL = os.getenv('JUDGE0_API_URL', '')
+JUDGE0_API_KEY = os.getenv('JUDGE0_API_KEY', '')

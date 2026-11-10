@@ -500,3 +500,240 @@ class Phase3WorkflowsTestCase(TestCase):
         self.assertFalse(tr_data["is_public"])
         self.assertEqual(tr_data["expected_output"], "SecretOutput")
         self.assertEqual(tr_data["actual_output"], "Wrong")
+
+    def test_part4_importer_validation_edge_cases(self):
+        """
+        Phase 3.1: Importer validation tests:
+        1. Reject missing expected_output field.
+        2. Accept explicitly empty expected_output ("").
+        3. Reject non-positive marks.
+        4. Reject non-positive weightage.
+        5. Reject unsupported languages.
+        6. Protect historical test case results on OVERWRITE duplicate policy.
+        """
+        self.client.force_authenticate(user=self.admin_user)
+
+        # 1. Reject missing expected_output
+        missing_out_payload = {
+            "questions": [{
+                "title": "Missing Out Q",
+                "problem_statement": "Do something",
+                "section_type": "CODING",
+                "marks": 10,
+                "allowed_languages": ["python"],
+                "test_cases": [{"input_text": "5"}] # No expected_output
+            }]
+        }
+        res1 = self.client.post("/api/csl-admin/questions/import-coding-json/", missing_out_payload, format="json")
+        self.assertEqual(res1.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 2. Accept explicitly empty expected_output ("")
+        empty_out_payload = {
+            "questions": [{
+                "title": "Empty Output Q",
+                "problem_statement": "Output nothing",
+                "section_type": "CODING",
+                "marks": 10,
+                "allowed_languages": ["python"],
+                "test_cases": [{"input_text": "5", "expected_output": "", "marks_weightage": 1.0}]
+            }]
+        }
+        res2 = self.client.post("/api/csl-admin/questions/import-coding-json/", empty_out_payload, format="json")
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res2.data["imported_count"], 1)
+
+        # 3. Reject non-positive marks
+        non_pos_marks_payload = {
+            "questions": [{
+                "title": "Non Pos Marks Q",
+                "marks": -5,
+                "test_cases": [{"input_text": "5", "expected_output": "5"}]
+            }]
+        }
+        res3 = self.client.post("/api/csl-admin/questions/import-coding-json/", non_pos_marks_payload, format="json")
+        self.assertEqual(res3.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 4. Reject non-positive weightage
+        non_pos_weight_payload = {
+            "questions": [{
+                "title": "Non Pos Weight Q",
+                "marks": 10,
+                "test_cases": [{"input_text": "5", "expected_output": "5", "marks_weightage": 0.0}]
+            }]
+        }
+        res4 = self.client.post("/api/csl-admin/questions/import-coding-json/", non_pos_weight_payload, format="json")
+        self.assertEqual(res4.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 5. Reject unsupported languages
+        bad_lang_payload = {
+            "questions": [{
+                "title": "Bad Lang Q",
+                "marks": 10,
+                "allowed_languages": ["brainfuck_lang"],
+                "test_cases": [{"input_text": "5", "expected_output": "5"}]
+            }]
+        }
+        res5 = self.client.post("/api/csl-admin/questions/import-coding-json/", bad_lang_payload, format="json")
+        self.assertEqual(res5.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 6. Historical attempt result protection on OVERWRITE
+        # Create candidate attempt with a submission linked to the test case
+        q_bank = QuestionBank.objects.filter(prompt="Empty Output Q").first()
+        prog = q_bank.programming_details
+        original_tc = prog.test_cases.first()
+
+        history_cand = Candidate.objects.create(
+            full_name="History Candidate",
+            register_number="HIST-001",
+            email="hist@alpha.edu",
+            college_ref=self.college_a,
+            college=self.college_a.name,
+            is_active=True,
+        )
+        hist_assessment = Assessment.objects.create(
+            title="History Assess",
+                        duration_minutes=60,
+            delivery_mode=Assessment.DeliveryMode.CODING,
+            status=Assessment.Status.OPEN,
+        )
+
+        attempt = AssessmentAttempt.objects.create(
+            candidate=history_cand,
+            assessment=hist_assessment,
+            state=AssessmentAttempt.State.SUBMITTED,
+            started_at=timezone.now(),
+            deadline=timezone.now() + timedelta(hours=1),
+        )
+        submission = CodeSubmission.objects.create(
+            attempt=attempt,
+            candidate=history_cand,
+            programming_question=prog,
+            language="python",
+            source_code="print()",
+            verdict=CodeSubmission.Verdict.ACCEPTED,
+        )
+        tr = CodeTestResult.objects.create(
+            submission=submission,
+            test_case=original_tc,
+            status=CodeSubmission.Verdict.ACCEPTED,
+            passed=True,
+        )
+
+        # Now overwrite the question with new test cases
+        overwrite_payload = {
+            "duplicate_policy": "OVERWRITE",
+            "questions": [{
+                "title": "Empty Output Q",
+                "marks": 15,
+                "test_cases": [
+                    {"input_text": "new_1", "expected_output": "out_1", "marks_weightage": 1.0},
+                    {"input_text": "new_2", "expected_output": "out_2", "marks_weightage": 1.0},
+                ]
+            }]
+        }
+        res6 = self.client.post("/api/csl-admin/questions/import-coding-json/", overwrite_payload, format="json")
+        self.assertIn(res6.status_code, [status.HTTP_200_OK, status.HTTP_201_CREATED])
+        self.assertEqual(res6.data["updated_count"], 1)
+
+        # Verify historical test result was NOT cascade deleted!
+        tr.refresh_from_db()
+        self.assertTrue(tr.passed)
+        # Original test case was archived (is_active=False)
+        original_tc.refresh_from_db()
+        self.assertFalse(original_tc.is_active)
+        # Active test cases count is 2
+        self.assertEqual(prog.test_cases.filter(is_active=True).count(), 2)
+
+    def test_part5_immutable_attempt_question_snapshots(self):
+        """
+        Phase 3.1: Immutable Attempt Question Snapshots
+        Starting an attempt creates a frozen snapshot of coding details and test cases.
+        Subsequent question edits do not alter the candidate's active attempt questions.
+        """
+        coding_assessment = Assessment.objects.create(
+            title="Coding Snapshot Assess",
+            duration_minutes=60,
+            aptitude_count=0,
+            coding_count=1,
+            delivery_mode=Assessment.DeliveryMode.CODING,
+            status=Assessment.Status.OPEN,
+        )
+        coding_assessment.eligible_colleges.add(self.college_a)
+
+        coding_q = QuestionBank.objects.create(
+            prompt="Original Statement",
+            section_type="CODING",
+            marks=10,
+            option_a="N/A", option_b="N/A", option_c="N/A", option_d="N/A",
+            correct_option="A"
+        )
+        prog = ProgrammingQuestion.objects.create(
+            question=coding_q,
+            problem_statement="Original Problem Statement",
+            time_limit_seconds=2.0,
+            memory_limit_mb=128,
+            allowed_languages=["python"],
+        )
+        ProgrammingTestCase.objects.create(
+            programming_question=prog,
+            is_public=True,
+            input_text="1",
+            expected_output="1",
+            marks_weightage=1.0,
+            order=1,
+        )
+        ProgrammingTestCase.objects.create(
+            programming_question=prog,
+            is_public=False,
+            input_text="2",
+            expected_output="2",
+            marks_weightage=1.0,
+            order=2,
+        )
+        coding_assessment.questions.add(coding_q)
+
+        cand = Candidate.objects.create(
+            full_name="Snapshot Candidate",
+            register_number="SNAP-001",
+            email="snap@alpha.edu",
+            college_ref=self.college_a,
+            college=self.college_a.name,
+            is_active=True,
+        )
+
+        # Enroll candidate in assessment
+        AssessmentRegistration.objects.create(
+            candidate=cand,
+            assessment=coding_assessment,
+        )
+
+        # Start attempt
+        token = generate_candidate_token(str(cand.id))
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        start_res = client.post("/api/assessment/start/", {"assessment_id": str(coding_assessment.id)})
+        self.assertEqual(start_res.status_code, status.HTTP_200_OK)
+        attempt_id = start_res.data["id"]
+
+        attempt = AssessmentAttempt.objects.get(id=attempt_id)
+        snapshot = attempt.question_snapshots.filter(question_id=coding_q.id).first()
+        self.assertIsNotNone(snapshot)
+        self.assertIn("test_cases", snapshot.programming_data)
+        self.assertEqual(len(snapshot.programming_data["test_cases"]), 2)
+        original_statement = snapshot.programming_data["problem_statement"]
+
+        # Admin edits the original question in the Question Bank
+        coding_q.prompt = "MODIFIED PROBLEM STATEMENT BY ADMIN"
+        coding_q.save()
+        prog.problem_statement = "MODIFIED PROBLEM STATEMENT BY ADMIN"
+        prog.save()
+
+        # Retrieve questions as candidate during the attempt
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {generate_candidate_token(str(cand.id), str(attempt.id))}")
+        attempt_res = client.get(f"/api/assessment/attempts/{attempt.id}/")
+        self.assertEqual(attempt_res.status_code, status.HTTP_200_OK)
+
+        q_item = next(q for q in attempt_res.data["questions"] if q["question_id"] == coding_q.id)
+        # Candidate continues to receive the FROZEN snapshot problem statement!
+        self.assertEqual(q_item["programming_details"]["problem_statement"], original_statement)

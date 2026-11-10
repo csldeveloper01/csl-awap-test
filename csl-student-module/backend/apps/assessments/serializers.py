@@ -125,6 +125,36 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
 
     def get_programming_details(self, obj):
         try:
+            # 1. Prefer immutable snapshot
+            if getattr(obj, "programming_data", None):
+                prog = obj.programming_data
+                sample_cases = [
+                    {
+                        "id": str(tc.get("id")),
+                        "input_text": tc.get("input_text", ""),
+                        "expected_output": tc.get("expected_output", ""),
+                        "explanation": tc.get("explanation", ""),
+                        "marks_weightage": tc.get("marks_weightage", 1.0),
+                    }
+                    for tc in prog.get("test_cases", [])
+                    if tc.get("is_public")
+                ]
+                return {
+                    "problem_statement": prog.get("problem_statement") or obj.prompt,
+                    "constraints": prog.get("constraints", ""),
+                    "input_format": prog.get("input_format", ""),
+                    "output_format": prog.get("output_format", ""),
+                    "allowed_languages": prog.get("allowed_languages") or ["python", "java"],
+                    "boilerplate_code": prog.get("boilerplate_code") or {
+                        "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+                        "java": "import java.util.*;\nimport java.io.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Write your solution here\n    }\n}\n"
+                    },
+                    "time_limit_seconds": prog.get("time_limit_seconds", 2.0),
+                    "memory_limit_mb": prog.get("memory_limit_mb", 256),
+                    "sample_test_cases": sample_cases,
+                }
+
+            # 2. Live model fallback
             q = obj.question
             if hasattr(q, "programming_details") and q.programming_details:
                 prog = q.programming_details
@@ -136,7 +166,7 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
                         "explanation": tc.explanation,
                         "marks_weightage": tc.marks_weightage,
                     }
-                    for tc in prog.test_cases.filter(is_public=True).order_by("order", "created_at")
+                    for tc in prog.test_cases.filter(is_public=True, is_active=True).order_by("order", "created_at")
                 ]
                 return {
                     "problem_statement": prog.problem_statement or q.prompt,

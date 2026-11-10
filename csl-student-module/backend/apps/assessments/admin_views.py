@@ -4279,8 +4279,13 @@ class AdminProgrammingTestCaseView(APIView):
         if not target_tc_id:
             return Response({"detail": "test_case_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         tc = get_object_or_404(ProgrammingTestCase, id=target_tc_id, programming_question__question=question)
-        tc.delete()
-        return Response({"success": True, "detail": "Test case deleted."}, status=status.HTTP_200_OK)
+        if tc.results.exists():
+            tc.is_active = False
+            tc.save(update_fields=["is_active"])
+            return Response({"success": True, "detail": "Test case archived to preserve historical candidate attempt results."}, status=status.HTTP_200_OK)
+        else:
+            tc.delete()
+            return Response({"success": True, "detail": "Test case deleted."}, status=status.HTTP_200_OK)
 
 
 
@@ -4400,33 +4405,79 @@ class AdminQuestionImportCodingJsonView(APIView):
             valid_tcs = []
             if isinstance(raw_tcs, list):
                 for tc_idx, tc_raw in enumerate(raw_tcs):
-                    tc_out = str(tc_raw.get("expected_output") or tc_raw.get("output") or "").strip()
-                    if tc_out == "":
-                        errors.append(f"Test case {tc_idx + 1} is missing 'expected_output'.")
-                    else:
-                        valid_tcs.append({
-                            "input_text": str(tc_raw.get("input_text") if tc_raw.get("input_text") is not None else (tc_raw.get("input") or "")),
-                            "expected_output": tc_out,
-                            "is_public": bool(tc_raw.get("is_public", False)),
-                            "marks_weightage": float(tc_raw.get("marks_weightage") or tc_raw.get("weight") or 1.0),
-                            "explanation": str(tc_raw.get("explanation") or ""),
-                            "order": int(tc_raw.get("order", tc_idx + 1)),
-                        })
+                    if not isinstance(tc_raw, dict):
+                        errors.append(f"Test case {tc_idx + 1} must be a JSON object.")
+                        continue
+                    if "expected_output" not in tc_raw and "output" not in tc_raw:
+                        errors.append(f"Test case {tc_idx + 1} is missing 'expected_output' field.")
+                        continue
+                    raw_val = tc_raw.get("expected_output") if "expected_output" in tc_raw else tc_raw.get("output")
+                    if raw_val is None:
+                        errors.append(f"Test case {tc_idx + 1} 'expected_output' cannot be null.")
+                        continue
+                    tc_out = str(raw_val)
+
+                    raw_weight = tc_raw.get("marks_weightage") if tc_raw.get("marks_weightage") is not None else tc_raw.get("weight")
+                    try:
+                        weight = float(raw_weight if raw_weight is not None else 1.0)
+                        if weight <= 0:
+                            errors.append(f"Test case {tc_idx + 1} marks_weightage must be positive (> 0).")
+                    except (ValueError, TypeError):
+                        errors.append(f"Test case {tc_idx + 1} marks_weightage must be a valid number.")
+                        weight = 1.0
+
+                    valid_tcs.append({
+                        "input_text": str(tc_raw.get("input_text") if tc_raw.get("input_text") is not None else (tc_raw.get("input") or "")),
+                        "expected_output": tc_out,
+                        "is_public": bool(tc_raw.get("is_public", False)),
+                        "marks_weightage": weight,
+                        "explanation": str(tc_raw.get("explanation") or ""),
+                        "order": int(tc_raw.get("order", tc_idx + 1)),
+                    })
 
             difficulty = (q_raw.get("difficulty") or "MEDIUM").upper()
             if difficulty not in ["EASY", "MEDIUM", "HARD"]:
                 difficulty = "MEDIUM"
 
             section_type = (q_raw.get("section_type") or "CODING").strip()
-            marks = int(q_raw.get("marks") or 10)
-            time_limit = float(q_raw.get("time_limit_seconds") or 2.0)
-            memory_limit = int(q_raw.get("memory_limit_mb") or 256)
+
+            try:
+                marks = int(q_raw.get("marks") if q_raw.get("marks") is not None else 10)
+                if marks <= 0:
+                    errors.append("Question marks must be a positive integer (> 0).")
+            except (ValueError, TypeError):
+                errors.append("Question marks must be a valid integer.")
+                marks = 10
+
+            try:
+                time_limit = float(q_raw.get("time_limit_seconds") if q_raw.get("time_limit_seconds") is not None else 2.0)
+                if time_limit <= 0:
+                    errors.append("time_limit_seconds must be positive (> 0).")
+            except (ValueError, TypeError):
+                errors.append("time_limit_seconds must be a valid number.")
+                time_limit = 2.0
+
+            try:
+                memory_limit = int(q_raw.get("memory_limit_mb") if q_raw.get("memory_limit_mb") is not None else 256)
+                if memory_limit <= 0:
+                    errors.append("memory_limit_mb must be positive (> 0).")
+            except (ValueError, TypeError):
+                errors.append("memory_limit_mb must be a valid integer.")
+                memory_limit = 256
+
+            SUPPORTED_LANGUAGES = {"python", "python3", "java", "javascript", "js", "node", "cpp", "c++", "c", "sql"}
             allowed_langs = q_raw.get("allowed_languages") or ["python", "java"]
+            if not isinstance(allowed_langs, list) or len(allowed_langs) == 0:
+                errors.append("allowed_languages must be a non-empty list of languages.")
+            else:
+                for lang in allowed_langs:
+                    if str(lang).lower().strip() not in SUPPORTED_LANGUAGES:
+                        errors.append(f"Unsupported language '{lang}'. Supported: {', '.join(sorted(SUPPORTED_LANGUAGES))}.")
+
             boilerplate = q_raw.get("boilerplate_code") or {
                 "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
                 "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n"
             }
-
             # Check existing duplicate
             existing_q = QuestionBank.objects.filter(prompt__iexact=title).first()
             is_duplicate = bool(existing_q)
@@ -4519,7 +4570,14 @@ class AdminQuestionImportCodingJsonView(APIView):
                                 "boilerplate_code": item["boilerplate"],
                             }
                         )
-                        prog.test_cases.all().delete()
+                        # Preserve historical test results by soft-retiring active cases with existing attempts
+                        for existing_tc in prog.test_cases.filter(is_active=True):
+                            if existing_tc.results.exists():
+                                existing_tc.is_active = False
+                                existing_tc.save(update_fields=["is_active"])
+                            else:
+                                existing_tc.delete()
+
                         for tc_data in item["test_cases"]:
                             ProgrammingTestCase.objects.create(
                                 programming_question=prog,
@@ -4529,6 +4587,7 @@ class AdminQuestionImportCodingJsonView(APIView):
                                 marks_weightage=tc_data["marks_weightage"],
                                 explanation=tc_data["explanation"],
                                 order=tc_data["order"],
+                                is_active=True,
                             )
                         updated_count += 1
                     else: # CREATE_NEW

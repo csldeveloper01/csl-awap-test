@@ -75,7 +75,17 @@ class Judge0Client:
     def execute(self, language: str, source_code: str, stdin: str = "", time_limit: float = 2.0, memory_limit_mb: int = 256) -> Dict[str, Any]:
         import requests
         lang_key = language.lower().strip()
-        lang_id = JUDGE0_LANGUAGE_IDS.get(lang_key, 71)
+        if lang_key not in JUDGE0_LANGUAGE_IDS:
+            return {
+                "verdict": "INTERNAL_ERROR",
+                "stdout": "",
+                "stderr": f"Language '{language}' is not supported by the execution sandbox.",
+                "compile_output": "",
+                "execution_time_ms": 0.0,
+                "memory_used_kb": 0,
+                "is_sandboxed": True,
+            }
+        lang_id = JUDGE0_LANGUAGE_IDS[lang_key]
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -379,7 +389,11 @@ def evaluate_submission(
     from .models import CodeSubmission, CodeTestResult
     from django.db.models import Max
 
-    test_cases = list(programming_question.test_cases.all().order_by("order", "created_at"))
+    # Check attempt question snapshot for immutable frozen test cases
+    snapshot = attempt.question_snapshots.filter(question_id=programming_question.question_id).first() if attempt else None
+    snapshot_tc_data = snapshot.programming_data.get("test_cases") if (snapshot and snapshot.programming_data) else None
+
+    test_cases = list(programming_question.test_cases.filter(is_active=True).order_by("order", "created_at"))
     time_limit = programming_question.time_limit_seconds or 2.0
     memory_limit = programming_question.memory_limit_mb or 256
 

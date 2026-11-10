@@ -42,6 +42,13 @@ class ComprehensiveAssessmentTests(TestCase):
             is_staff=True,
             is_superuser=True,
         )
+        from .models import College
+        self.college = College.objects.create(
+            name="Rathinam College of Arts and Science",
+            code="RCAS",
+            is_active=True,
+            is_verified=True,
+        )
         self.config = AssessmentConfig.objects.create(
             title="CSL Initial Assessment",
             duration_minutes=60,

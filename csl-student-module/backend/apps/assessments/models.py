@@ -293,6 +293,7 @@ class Assessment(models.Model):
 
     class DeliveryMode(models.TextChoices):
         MCQ = "MCQ", "Multiple Choice (MCQ)"
+        CODING = "CODING", "Coding Assessment (Monaco Playground)"
         PDF_CODING = "PDF_CODING", "PDF Assessment Mode"
 
     class Visibility(models.TextChoices):
@@ -1063,6 +1064,9 @@ class AttemptQuestionSnapshot(models.Model):
     # The actual original key that maps to the correct option for this shuffled display
     correct_option_key = models.CharField(max_length=1, help_text="A, B, C, or D for this snapshot display")
     
+    # Immutable snapshot for coding questions
+    programming_data = models.JSONField(default=dict, blank=True, help_text="Immutable snapshot of problem statement, constraints, formats, limits, boilerplate, and test cases")
+
     # Student's answer
     selected_option = models.CharField(max_length=1, blank=True, default="", help_text="A, B, C, or D")
     is_correct = models.BooleanField(null=True, blank=True)
@@ -1479,6 +1483,7 @@ class ProgrammingTestCase(models.Model):
     marks_weightage = models.FloatField(default=1.0, help_text="Score weightage for passing this test case")
     explanation = models.TextField(blank=True, default="", help_text="Explanation for sample test cases")
     order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True, db_index=True, help_text="Active test case vs retired/archived case preserving evaluation history")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
