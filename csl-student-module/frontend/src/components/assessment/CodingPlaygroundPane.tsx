@@ -48,6 +48,31 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submitResult, setSubmitResult] = useState<CodeSubmitResult | null>(null);
+  const [showPasteWarning, setShowPasteWarning] = useState<boolean>(false);
+
+  const handleEditorDidMount = (editor: any, monaco: any) => {
+    editor.onKeyDown((e: any) => {
+      // Intercept Ctrl+V or Cmd+V
+      if ((e.ctrlKey || e.metaKey) && e.keyCode === monaco.KeyCode.KeyV) {
+        e.preventDefault();
+        e.stopPropagation();
+        setShowPasteWarning(true);
+      }
+    });
+
+    const domNode = editor.getDomNode();
+    if (domNode) {
+      domNode.addEventListener(
+        'paste',
+        (e: ClipboardEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowPasteWarning(true);
+        },
+        true
+      );
+    }
+  };
 
   // Update code when question or language changes
   useEffect(() => {
@@ -306,6 +331,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
         <div style={{ flex: 1, minHeight: '300px' }}>
           <Editor
             height="100%"
+            onMount={handleEditorDidMount}
             language={
               (() => {
                 const l = language.toLowerCase();
@@ -536,6 +562,57 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Paste Deterrence Warning Modal */}
+      {showPasteWarning && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#1E293B',
+              border: '2px solid #EF4444',
+              borderRadius: '14px',
+              padding: '24px 28px',
+              maxWidth: '460px',
+              width: '90%',
+              textAlign: 'center',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚠️</div>
+            <h3 style={{ margin: '0 0 8px 0', color: '#F87171', fontSize: '18px', fontWeight: 800 }}>
+              Clipboard Paste Disabled
+            </h3>
+            <p style={{ margin: '0 0 20px 0', color: '#CBD5E1', fontSize: '13px', lineHeight: 1.6 }}>
+              Pasting external code into the examination environment is strictly prohibited to maintain academic integrity and fair assessment conditions. Please construct and type your solution directly in the Monaco editor.
+            </p>
+            <button
+              onClick={() => setShowPasteWarning(false)}
+              style={{
+                backgroundColor: '#EF4444',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '10px 24px',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              I Understand & Acknowledge
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

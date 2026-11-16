@@ -75,6 +75,10 @@ from .admin_views import (
     AdminProgrammingQuestionDetailView,
     AdminProgrammingTestCaseView,
     AdminQuestionImportCodingJsonView,
+    AdminAssessmentSebConfigView,
+    AdminAssessmentTestRunView,
+    AdminCameraBypassView,
+    AdminAdvancedStudentExportView,
 )
 
 urlpatterns = [
@@ -119,10 +123,13 @@ urlpatterns = [
     path("assessments/<uuid:pk>/audit-logs/", AdminAssessmentAuditLogsView.as_view(), name="admin-assessment-audit-logs"),
     path("assessments/<uuid:pk>/upload-pdf/", AdminAssessmentUploadPdfView.as_view(), name="admin-assessment-upload-pdf"),
     path("assessments/<uuid:pk>/pdf/", AdminAssessmentPdfDownloadView.as_view(), name="admin-assessment-pdf-download"),
+    path("assessments/<uuid:pk>/seb-config/", AdminAssessmentSebConfigView.as_view(), name="admin-assessment-seb-config"),
+    path("assessments/<uuid:pk>/test-run/", AdminAssessmentTestRunView.as_view(), name="admin-assessment-test-run"),
 
     # Candidates & Quick Actions
     path("candidates/", AdminCandidateListView.as_view(), name="admin-candidates"),
     path("candidates/export-csv/", AdminCandidateExportCSVView.as_view(), name="admin-candidates-export-csv"),
+    path("candidates/export-advanced/", AdminAdvancedStudentExportView.as_view(), name="admin-candidates-export-advanced"),
     path("candidates/export-data-csv/", AdminExportCandidateDataCSVView.as_view(), name="admin-candidates-export-data-csv"),
     path("candidates/bulk-delete/", AdminCandidateBulkDeleteView.as_view(), name="admin-candidates-bulk-delete"),
     path("candidates/<uuid:candidate_id>/", AdminCandidateDetailView.as_view(), name="admin-candidate-detail"),
@@ -158,6 +165,7 @@ urlpatterns = [
 
     # Access Grants & Structured Recovery Auditing
     path("access-grants/", AdminAccessGrantListView.as_view(), name="admin-access-grants"),
+    path("camera-bypasses/", AdminCameraBypassView.as_view(), name="admin-camera-bypasses"),
     path("recovery-events/", AdminRecoveryEventsListView.as_view(), name="admin-recovery-events"),
 
     # Platform Configuration

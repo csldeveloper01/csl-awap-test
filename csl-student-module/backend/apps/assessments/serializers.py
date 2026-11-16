@@ -204,6 +204,9 @@ class AssessmentAttemptDetailSerializer(serializers.ModelSerializer):
     delivery_mode = serializers.SerializerMethodField()
     has_pdf = serializers.SerializerMethodField()
     pdf_filename = serializers.SerializerMethodField()
+    is_seb_required = serializers.SerializerMethodField()
+    instructions = serializers.SerializerMethodField()
+    passing_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = AssessmentAttempt
@@ -235,6 +238,11 @@ class AssessmentAttemptDetailSerializer(serializers.ModelSerializer):
             "delivery_mode",
             "has_pdf",
             "pdf_filename",
+            "is_simulation",
+            "camera_calibrated",
+            "is_seb_required",
+            "instructions",
+            "passing_percentage",
         ]
 
     def get_delivery_mode(self, obj):
@@ -258,6 +266,15 @@ class AssessmentAttemptDetailSerializer(serializers.ModelSerializer):
             except Exception:
                 return None
         return None
+
+    def get_is_seb_required(self, obj):
+        return bool(obj.assessment and obj.assessment.is_seb_required)
+
+    def get_instructions(self, obj):
+        return obj.assessment.instructions if obj.assessment else ""
+
+    def get_passing_percentage(self, obj):
+        return obj.assessment.passing_percentage if obj.assessment else None
 
     def get_sections(self, obj):
         if obj.assessment:
@@ -625,6 +642,10 @@ class StudentCandidateAssessmentSerializer(serializers.ModelSerializer):
             "delivery_mode",
             "has_pdf",
             "pdf_filename",
+            "is_seb_required",
+            "instructions",
+            "passing_percentage",
+            "passing_marks",
         ]
 
     delivery_mode = serializers.SerializerMethodField()

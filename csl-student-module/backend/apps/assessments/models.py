@@ -119,6 +119,8 @@ class QuestionBank(models.Model):
     @property
     def can_be_deleted(self) -> bool:
         """Safe dependency rule: cannot be deleted if referenced in historical attempts."""
+        if hasattr(self, "_prefetched_objects_cache") and "attempt_snapshots" in self._prefetched_objects_cache:
+            return len(self.attempt_snapshots.all()) == 0
         return not self.attempt_snapshots.exists()
 
     def __str__(self):
@@ -343,6 +345,30 @@ class Assessment(models.Model):
     aptitude_count = models.PositiveIntegerField(default=25, help_text="Number of aptitude questions to sample")
     coding_count = models.PositiveIntegerField(default=25, help_text="Number of coding questions to sample")
     max_attempts = models.PositiveIntegerField(default=1, help_text="Maximum allowed attempts per candidate")
+
+    # Passing criteria & Instructions
+    passing_marks = models.PositiveIntegerField(null=True, blank=True, help_text="Passing marks cutoff")
+    passing_percentage = models.FloatField(null=True, blank=True, help_text="Passing percentage cutoff")
+    instructions = models.TextField(blank=True, default="", help_text="Specific instructions for candidates")
+
+    # Safe Exam Browser (SEB) Settings
+    is_seb_required = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Require Safe Exam Browser (SEB) for this assessment",
+    )
+    seb_browser_exam_key = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Expected Browser Exam Key (BEK) for SEB validation",
+    )
+    seb_config_key = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Expected Config Key for SEB validation",
+    )
 
     # Proctoring thresholds
     max_tab_switches_warning = models.PositiveIntegerField(default=2, help_text="Permitted tab switch warnings (3rd switch auto-submits)")
@@ -929,6 +955,24 @@ class AssessmentAttempt(models.Model):
     last_recovery_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp of most recent recovery execution")
     recovery_metadata = models.JSONField(default=dict, blank=True, help_text="Session/device recovery audit metadata")
     is_reassigned = models.BooleanField(default=False, help_text="True if candidate was granted a separate new attempt by an admin")
+    is_simulation = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True if this is an Admin Test Run simulation attempt (isolated from production metrics)",
+    )
+    is_seb_verified = models.BooleanField(
+        default=False,
+        help_text="True if attempt was launched and verified via Safe Exam Browser",
+    )
+    camera_calibrated = models.BooleanField(
+        default=False,
+        help_text="True if candidate completed head movement camera calibration",
+    )
+    camera_calibration_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Audit details of camera calibration steps and timestamps",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1094,6 +1138,7 @@ class AdminAccessGrant(models.Model):
         REASSIGN_NEW_ATTEMPT = "REASSIGN_NEW_ATTEMPT", "Reassign New Attempt"
         EXTRA_RECOVERY = "EXTRA_RECOVERY", "Grant Extra Recovery Session"
         UNLOCK_FLAGGED = "UNLOCK_FLAGGED", "Unlock Flagged Attempt"
+        CAMERA_BYPASS = "CAMERA_BYPASS", "Camera Calibration Bypass"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name="access_grants")

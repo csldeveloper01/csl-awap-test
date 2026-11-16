@@ -33,9 +33,24 @@ interface AdminDrivesViewProps {
   colleges?: AdminCollege[];
   assessments?: AdminAssessment[];
   onRefreshAssessments?: () => void;
+  onNavigateToCreateAssessment?: (driveId?: string) => void;
 }
 
-export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAssessments }: AdminDrivesViewProps) {
+export function generate8DigitCode(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let res = '';
+  for (let i = 0; i < 8; i++) {
+    res += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return res;
+}
+
+export function AdminDrivesView({
+  colleges = [],
+  assessments = [],
+  onRefreshAssessments,
+  onNavigateToCreateAssessment,
+}: AdminDrivesViewProps) {
   const [internalAssessments, setInternalAssessments] = useState<AdminAssessment[]>(assessments);
   const [internalColleges, setInternalColleges] = useState<AdminCollege[]>(colleges);
 
@@ -118,7 +133,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
   // Manage Drive Modal State
   const [selectedDriveId, setSelectedDriveId] = useState<string | null>(null);
   const [driveDetail, setDriveDetail] = useState<AdminDriveDetail | null>(null);
-  const [manageTab, setManageTab] = useState<'overview' | 'assessments' | 'analytics' | 'settings' | 'registrations' | 'colleges' | 'invitations' | 'reports'>('overview');
+  const [manageTab, setManageTab] = useState<'assessments' | 'colleges' | 'overview' | 'analytics' | 'settings' | 'registrations' | 'invitations' | 'reports'>('assessments');
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   // Subtab-specific states
@@ -178,7 +193,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
   const totalRegistrations = drives.reduce((acc, d) => acc + (d.registrations_count || 0), 0);
   const totalLinkedAssessments = drives.reduce((acc, d) => acc + (d.assessments_count || 0), 0);
 
-  const handleOpenManage = async (driveId: string, initialTab: typeof manageTab = 'overview') => {
+  const handleOpenManage = async (driveId: string, initialTab: typeof manageTab = 'assessments') => {
     setSelectedDriveId(driveId);
     setLoadingDetail(true);
     setManageTab(initialTab);
@@ -890,7 +905,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
               <input
                 type="text"
                 required
-                placeholder="TN-2026-MEGA"
+                placeholder={createForm.visibility === 'INVITE_ONLY' ? '8-CHAR CODE (e.g. 7K9BX4M2)' : 'TN-2026-MEGA'}
                 value={createForm.code}
                 onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
                 style={{
@@ -904,6 +919,32 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
                   backgroundColor: useCustomCode ? '#FFFFFF' : '#F8FAFC',
                 }}
               />
+              {createForm.visibility === 'INVITE_ONLY' && (
+                <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ fontSize: '11px', color: '#B45309', fontWeight: 600 }}>
+                    🔒 Private Drive 8-Digit Access Code
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUseCustomCode(true);
+                      setCreateForm((prev) => ({ ...prev, code: generate8DigitCode() }));
+                    }}
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      borderRadius: '6px',
+                      backgroundColor: '#FEF3C7',
+                      color: '#92400E',
+                      border: '1px solid #FDE68A',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    🎲 Generate 8-Digit Code
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -935,7 +976,19 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
               </label>
               <select
                 value={createForm.visibility}
-                onChange={(e) => setCreateForm({ ...createForm, visibility: e.target.value as any })}
+                onChange={(e) => {
+                  const vis = e.target.value as any;
+                  setCreateForm((prev) => ({
+                    ...prev,
+                    visibility: vis,
+                    ...(vis === 'INVITE_ONLY' && (!prev.code || prev.code.length !== 8)
+                      ? { code: generate8DigitCode() }
+                      : {}),
+                  }));
+                  if (vis === 'INVITE_ONLY') {
+                    setUseCustomCode(true);
+                  }
+                }}
                 style={{
                   width: '100%',
                   padding: '10px 14px',
@@ -946,7 +999,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
                 }}
               >
                 <option value="PUBLIC">Public (Open for direct candidate link)</option>
-                <option value="INVITE_ONLY">Invite Only (Requires access code / token)</option>
+                <option value="INVITE_ONLY">Invite Only (Requires 8-digit access code / token)</option>
               </select>
             </div>
             <div>
@@ -1507,7 +1560,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
               </div>
             )}
 
-            {/* 6 Subtabs Navigation Bar */}
+            {/* Primary Dual Subtabs & Details Navigation Bar */}
             <div
               style={{
                 display: 'flex',
@@ -1519,11 +1572,12 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
               }}
             >
               {[
-                { key: 'overview', label: 'Overview' },
-                { key: 'assessments', label: `Assessments (${driveDetail.drive_assessments?.length || 0})` },
+                { key: 'assessments', label: `Assigned Assessments (${driveDetail.drive_assessments?.length || 0})` },
+                { key: 'colleges', label: `Assigned Colleges (${driveDetail.eligible_colleges?.length || 0})` },
+                { key: 'overview', label: 'Drive Overview' },
                 { key: 'analytics', label: 'Analytics' },
                 { key: 'registrations', label: `Registrations (${driveDetail.registrations_count || 0})` },
-                { key: 'settings', label: 'Settings & Eligibility' },
+                { key: 'settings', label: 'Settings & Policy' },
                 { key: 'invitations', label: `Invitations (${driveDetail.invitations?.length || 0})` },
               ].map((tab) => (
                 <button
@@ -1677,6 +1731,7 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
                   }}
                 >
                   <select
+                    id="drive-attach-assessment-select"
                     value={selectedAssessmentToAdd}
                     onChange={(e) => setSelectedAssessmentToAdd(e.target.value)}
                     style={{
@@ -1726,61 +1781,139 @@ export function AdminDrivesView({ colleges = [], assessments = [], onRefreshAsse
                   </button>
                 </div>
 
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontWeight: 700 }}>
-                      <th style={{ padding: '10px 12px' }}>Order</th>
-                      <th style={{ padding: '10px 12px' }}>Assessment</th>
-                      <th style={{ padding: '10px 12px' }}>Code</th>
-                      <th style={{ padding: '10px 12px' }}>Duration</th>
-                      <th style={{ padding: '10px 12px' }}>Marks</th>
-                      <th style={{ padding: '10px 12px' }}>Required</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {driveDetail.drive_assessments?.map((da) => (
-                      <tr key={da.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                        <td style={{ padding: '12px', fontWeight: 700 }}>{da.display_order}</td>
-                        <td style={{ padding: '12px', fontWeight: 600, color: '#0F172A' }}>{da.assessment_title}</td>
-                        <td style={{ padding: '12px', fontFamily: 'monospace', color: '#64748B' }}>{da.assessment_code}</td>
-                        <td style={{ padding: '12px' }}>{da.assessment_duration ?? da.duration_minutes ?? 0} mins</td>
-                        <td style={{ padding: '12px' }}>{da.assessment_total_marks ?? da.total_marks ?? 0}</td>
-                        <td style={{ padding: '12px' }}>
-                          <span
-                            style={{
-                              padding: '2px 8px',
-                              borderRadius: '6px',
-                              backgroundColor: da.is_required ? '#DCFCE7' : '#F1F5F9',
-                              color: da.is_required ? '#15803D' : '#64748B',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                            }}
-                          >
-                            {da.is_required ? 'REQUIRED' : 'OPTIONAL'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px', textAlign: 'right' }}>
-                          <button
-                            onClick={() => handleRemoveAssessmentFromDrive(da.assessment)}
-                            style={{
-                              padding: '4px 10px',
-                              borderRadius: '6px',
-                              border: '1px solid #FECACA',
-                              backgroundColor: '#FEF2F2',
-                              color: '#991B1B',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </td>
+                {(!driveDetail.drive_assessments || driveDetail.drive_assessments.length === 0) ? (
+                  <div
+                    style={{
+                      padding: '42px 24px',
+                      textAlign: 'center',
+                      backgroundColor: '#F8FAFC',
+                      borderRadius: '14px',
+                      border: '2px dashed #CBD5E1',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '12px',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '52px',
+                        height: '52px',
+                        borderRadius: '50%',
+                        backgroundColor: '#EFF6FF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '26px',
+                      }}
+                    >
+                      📋
+                    </div>
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                      No Assessments Assigned to this Drive
+                    </h3>
+                    <p style={{ fontSize: '13px', color: '#64748B', maxWidth: '460px', margin: 0, lineHeight: 1.5 }}>
+                      Recruitment drives group assessments together for participating colleges and candidates. Attach an existing assessment above or create a brand new assessment scoped directly to this drive.
+                    </p>
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById('drive-attach-assessment-select');
+                          el?.focus();
+                        }}
+                        style={{
+                          padding: '10px 18px',
+                          borderRadius: '8px',
+                          border: '1px solid #0052CC',
+                          backgroundColor: '#FFFFFF',
+                          color: '#0052CC',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Assign Existing Assessment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDriveId(null);
+                          onNavigateToCreateAssessment?.(driveDetail.id);
+                        }}
+                        style={{
+                          padding: '10px 18px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          backgroundColor: '#0052CC',
+                          color: '#FFFFFF',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 8px rgba(0,82,204,0.25)',
+                        }}
+                      >
+                        + Create New Assessment
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontWeight: 700 }}>
+                        <th style={{ padding: '10px 12px' }}>Order</th>
+                        <th style={{ padding: '10px 12px' }}>Assessment</th>
+                        <th style={{ padding: '10px 12px' }}>Code</th>
+                        <th style={{ padding: '10px 12px' }}>Duration</th>
+                        <th style={{ padding: '10px 12px' }}>Marks</th>
+                        <th style={{ padding: '10px 12px' }}>Required</th>
+                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {driveDetail.drive_assessments?.map((da) => (
+                        <tr key={da.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td style={{ padding: '12px', fontWeight: 700 }}>{da.display_order}</td>
+                          <td style={{ padding: '12px', fontWeight: 600, color: '#0F172A' }}>{da.assessment_title}</td>
+                          <td style={{ padding: '12px', fontFamily: 'monospace', color: '#64748B' }}>{da.assessment_code}</td>
+                          <td style={{ padding: '12px' }}>{da.assessment_duration ?? da.duration_minutes ?? 0} mins</td>
+                          <td style={{ padding: '12px' }}>{da.assessment_total_marks ?? da.total_marks ?? 0}</td>
+                          <td style={{ padding: '12px' }}>
+                            <span
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: '6px',
+                                backgroundColor: da.is_required ? '#DCFCE7' : '#F1F5F9',
+                                color: da.is_required ? '#15803D' : '#64748B',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {da.is_required ? 'REQUIRED' : 'OPTIONAL'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px', textAlign: 'right' }}>
+                            <button
+                              onClick={() => handleRemoveAssessmentFromDrive(da.assessment)}
+                              style={{
+                                padding: '4px 10px',
+                                borderRadius: '6px',
+                                border: '1px solid #FECACA',
+                                backgroundColor: '#FEF2F2',
+                                color: '#991B1B',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             )}
 

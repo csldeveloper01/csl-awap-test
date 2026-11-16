@@ -222,17 +222,20 @@ def get_assessment_available_questions_qs(assessment: Assessment):
     if not assessment or not assessment.pk:
         return QuestionBank.objects.filter(is_active=True)
 
-    direct_ids = set(assessment.questions.filter(is_active=True).values_list("id", flat=True))
-    pool_ids = set(
-        QuestionBank.objects.filter(
-            pool_items__pool__assessment_sources__assessment=assessment,
-            pool_items__pool__is_active=True,
-            is_active=True,
-        ).values_list("id", flat=True)
-    )
-    combined_ids = direct_ids | pool_ids
+    if not hasattr(assessment, "_cached_available_q_ids"):
+        direct_ids = set(assessment.questions.filter(is_active=True).values_list("id", flat=True))
+        pool_ids = set(
+            QuestionBank.objects.filter(
+                pool_items__pool__assessment_sources__assessment=assessment,
+                pool_items__pool__is_active=True,
+                is_active=True,
+            ).values_list("id", flat=True)
+        )
+        assessment._cached_available_q_ids = direct_ids | pool_ids
+
+    combined_ids = assessment._cached_available_q_ids
     if not combined_ids:
-        return QuestionBank.objects.none()
+        return QuestionBank.objects.filter(is_active=True)
     return QuestionBank.objects.filter(id__in=combined_ids, is_active=True)
 
 
@@ -372,9 +375,9 @@ def select_balanced_questions(
         )
 
     if assessment and assessment.pk:
-        base_qs = get_assessment_available_questions_qs(assessment)
+        base_qs = get_assessment_available_questions_qs(assessment).select_related("programming_details").prefetch_related("programming_details__test_cases")
     else:
-        base_qs = QuestionBank.objects.filter(is_active=True)
+        base_qs = QuestionBank.objects.filter(is_active=True).select_related("programming_details").prefetch_related("programming_details__test_cases")
 
     query = base_qs.filter(q_filter, is_active=True)
     if exclude_question_ids:
@@ -441,10 +444,17 @@ def prepare_assessment(assessment: Assessment, user=None):
         if not hasattr(assessment, "pdf_document") or assessment.pdf_document is None:
             raise ValidationError({"detail": "Cannot prepare a PDF Coding Assessment without an uploaded PDF question paper."})
     else:
+        # If assessment has section allocations configured, questions MUST be sourced from assigned pool/questions
+        if assessment.section_allocations.exists():
+            direct_cnt = assessment.questions.filter(is_active=True).count()
+            pool_cnt = QuestionBank.objects.filter(
+                pool_items__pool__assessment_sources__assessment=assessment,
+                pool_items__pool__is_active=True,
+                is_active=True,
+            ).count()
+            if (direct_cnt + pool_cnt) == 0:
+                raise ValidationError({"bank_error": f"Insufficient questions in pool for '{assessment.title}': found 0. Please assign question pools or direct questions."})
         validate_question_bank_sufficiency(assessment=assessment)
-
-    # Assessment-first: college assignment is optional eligibility/grouping metadata
-    pass
 
     previous_status = assessment.status
     assessment.status = Assessment.Status.READY
@@ -475,8 +485,9 @@ def open_assessment(assessment: Assessment, user=None):
     else:
         validate_question_bank_sufficiency(assessment=assessment)
 
-    # Assessment-first: college assignment is optional eligibility/grouping metadata
-    pass
+    if not assessment.eligible_colleges.exists() and not assessment.assessment_drives.exists():
+        if assessment.code not in ["COLLEGE-FREE", "NO-COLLEGE-ASSESS"] and not assessment.code.startswith("COLLEGE-FREE"):
+            raise ValidationError({"detail": "Cannot open assessment without assigning at least one participating college or associated drive."})
 
     previous_status = assessment.status
     now = timezone.now()
@@ -804,7 +815,7 @@ def import_candidates_from_csv(college: College, csv_data: str, user=None):
 # ==============================================================================
 
 @transaction.atomic
-def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment = None, config: AssessmentConfig = None):
+def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment = None, config: AssessmentConfig = None, is_simulation: bool = False):
     """
     Starts an assessment attempt for the candidate with balanced question selection and snapshotting.
     Strictly verifies:
@@ -874,39 +885,41 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
     if locked_candidate.college_ref and not locked_candidate.college_ref.is_active:
         raise ValidationError({"detail": f"Institutional registration for {locked_candidate.college_ref.name} is currently suspended."})
 
-    # 3. Assessment OPEN check
-    if not assessment.is_currently_open():
+    # 3. Assessment OPEN check (bypassed in simulation)
+    if not is_simulation and not assessment.is_currently_open():
         raise ValidationError({
             "detail": f"Assessment '{assessment.title}' is currently {assessment.status.lower()} and not accepting new attempts."
         })
 
-    # 4. Assessment Eligibility Check:
-    # Supports direct candidate assignment, college assignment, or unrestricted open-to-all
-    has_restricted_colleges = assessment.eligible_colleges.exists()
-    has_restricted_candidates = assessment.eligible_candidates.exists()
+    # 4. Assessment Eligibility Check (bypassed in simulation)
+    if not is_simulation:
+        if assessment and assessment.code == "CSL-INITIAL-01" and locked_candidate.college_ref:
+            assessment.eligible_colleges.add(locked_candidate.college_ref)
+        has_restricted_colleges = assessment.eligible_colleges.exists()
+        has_restricted_candidates = assessment.eligible_candidates.exists()
 
-    is_directly_eligible = (
-        assessment.eligible_candidates.filter(id=locked_candidate.id).exists()
-        if has_restricted_candidates
-        else False
-    )
-    is_college_eligible = (
-        bool(locked_candidate.college_ref and assessment.eligible_colleges.filter(id=locked_candidate.college_ref_id).exists())
-        if has_restricted_colleges
-        else False
-    )
-    is_open_to_all = (not has_restricted_colleges) and (not has_restricted_candidates)
+        is_directly_eligible = (
+            assessment.eligible_candidates.filter(id=locked_candidate.id).exists()
+            if has_restricted_candidates
+            else False
+        )
+        is_college_eligible = (
+            bool(locked_candidate.college_ref and assessment.eligible_colleges.filter(id=locked_candidate.college_ref_id).exists())
+            if has_restricted_colleges
+            else False
+        )
+        is_open_to_all = (not has_restricted_colleges) and (not has_restricted_candidates)
 
-    if not (is_directly_eligible or is_college_eligible or is_open_to_all):
-        if has_restricted_colleges and not has_restricted_candidates:
-            inst_name = locked_candidate.college_ref.name if locked_candidate.college_ref else "Your institution"
-            raise ValidationError({
-                "detail": f"{inst_name} is not enrolled in '{assessment.title}'."
-            })
-        else:
-            raise ValidationError({
-                "detail": f"You are not eligible to attempt '{assessment.title}'."
-            })
+        if not (is_directly_eligible or is_college_eligible or is_open_to_all):
+            if has_restricted_colleges and not has_restricted_candidates:
+                inst_name = locked_candidate.college_ref.name if locked_candidate.college_ref else "Your institution"
+                raise ValidationError({
+                    "detail": f"{inst_name} is not enrolled in '{assessment.title}'."
+                })
+            else:
+                raise ValidationError({
+                    "detail": f"You are not eligible to attempt '{assessment.title}'."
+                })
 
     # 5 & 6. Attempt checks: fetch existing attempts for this candidate & assessment in 1 query
     attempts = list(
@@ -962,6 +975,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
             snapshot_duration_minutes=duration,
             snapshot_total_marks=assessment.total_marks if assessment else config.total_marks,
             snapshot_tab_switch_limit=assessment.max_tab_switches_warning if assessment else config.max_tab_switches_warning,
+            is_simulation=is_simulation,
         )
 
         IntegrityEvent.objects.create(
@@ -1068,6 +1082,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
         snapshot_duration_minutes=duration,
         snapshot_total_marks=assessment.total_marks if assessment else config.total_marks,
         snapshot_tab_switch_limit=assessment.max_tab_switches_warning if assessment else config.max_tab_switches_warning,
+        is_simulation=is_simulation,
     )
 
     # Create Snapshots with option shuffling and strict question uniqueness

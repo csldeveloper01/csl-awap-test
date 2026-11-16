@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { formatApiError } from '../../utils/errorFormatter';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
@@ -32,6 +33,8 @@ import {
   getAdminAssessmentPoolSources,
   linkAdminAssessmentPoolSource,
   unlinkAdminAssessmentPoolSource,
+  startAdminTestRun,
+  downloadAdminAssessmentSebConfig,
   type AdminAssessment,
   type AdminAssessmentDetail,
   type AdminCollege,
@@ -46,6 +49,8 @@ interface AdminAssessmentsViewProps {
   onNavigateToQuestions?: (assessmentId?: string) => void;
   initialAssessmentId?: string;
   onClearAssessmentId?: () => void;
+  initialCreateMode?: boolean;
+  initialDriveId?: string;
 }
 
 interface AssessmentSectionDraft {
@@ -60,13 +65,23 @@ export function AdminAssessmentsView({
   onNavigateToQuestions,
   initialAssessmentId,
   onClearAssessmentId,
+  initialCreateMode,
+  initialDriveId,
 }: AdminAssessmentsViewProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [assessments, setAssessments] = useState<AdminAssessment[]>([]);
   const [colleges, setColleges] = useState<AdminCollege[]>([]);
   const [availableSections, setAvailableSections] = useState<AdminSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Full-Page 6-Step Assessment Creation Wizard State
+  const [isCreatingWizard, setIsCreatingWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
+  const [createdAssessmentInfo, setCreatedAssessmentInfo] = useState<{ id: string; title: string; code: string; is_seb_required?: boolean } | null>(null);
+  const [runningTestSimulation, setRunningTestSimulation] = useState<string | null>(null);
+  const [isEditLocked, setIsEditLocked] = useState(false);
 
   // View Mode: Grid (Mockup 3) vs List
   const [viewLayout, setViewLayout] = useState<'GRID' | 'LIST'>('GRID');
@@ -171,9 +186,25 @@ export function AdminAssessmentsView({
     auto_submit_on_tab_limit: true,
     close_policy: 'ALLOW_FINISH' as 'ALLOW_FINISH' | 'STRICT_CUTOFF',
     eligible_college_ids: [] as number[],
+    passing_cutoff_marks: '' as number | '',
+    passing_percentage: '' as number | '',
+    is_seb_required: false,
+    selected_pool_ids: [] as string[],
   });
   const [createError, setCreateError] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+
+  const handleTestRun = async (assessmentId: string) => {
+    try {
+      setRunningTestSimulation(assessmentId);
+      const res = await startAdminTestRun(assessmentId);
+      window.open(`/assessment/exam/${res.attempt_id}?simulation=true`, '_blank');
+    } catch (err: any) {
+      alert(formatApiError(err, 'Failed to launch isolated test run simulation.'));
+    } finally {
+      setRunningTestSimulation(null);
+    }
+  };
 
   // Edit Form State
   const [editForm, setEditForm] = useState({
@@ -258,7 +289,15 @@ export function AdminAssessmentsView({
     fetchColleges();
     fetchSections();
     fetchAdminDrives().then(setAvailableDrives).catch(console.error);
+    getAdminQuestionPools().then(setAvailableQuestionPools).catch(console.error);
   }, [search, statusFilter]);
+
+  useEffect(() => {
+    if (searchParams.get('create') === 'true' || initialCreateMode) {
+      const driveIdFromParam = searchParams.get('driveId') || initialDriveId;
+      handleStartCreateWizard(driveIdFromParam || undefined);
+    }
+  }, [searchParams, initialCreateMode, initialDriveId]);
 
   const handleOpenDetail = async (
     assessmentOrId: AdminAssessment | string,
@@ -693,7 +732,7 @@ export function AdminAssessmentsView({
   };
 
   // Section Allocation Helpers
-  const handleOpenCreateModal = () => {
+  const handleStartCreateWizard = (preselectedDriveId?: string) => {
     setCreateError('');
     setCreateDeliveryMode('MCQ');
     setCreatePdfFile(null);
@@ -707,36 +746,53 @@ export function AdminAssessmentsView({
       auto_submit_on_tab_limit: true,
       close_policy: 'ALLOW_FINISH',
       eligible_college_ids: [],
+      passing_cutoff_marks: '',
+      passing_percentage: '',
+      is_seb_required: false,
+      selected_pool_ids: [],
     });
 
-    // Phase 2.2.2: Reset drive hierarchy states
-    setCreateIsStandalone(true);
-    setCreateSelectedDriveIds([]);
+    if (preselectedDriveId) {
+      setCreateIsStandalone(false);
+      setCreateSelectedDriveIds([preselectedDriveId]);
+    } else {
+      setCreateIsStandalone(true);
+      setCreateSelectedDriveIds([]);
+    }
 
-    // Phase 2.1: Start with empty sections - require explicit admin configuration
     setCreateSections([]);
-    setShowCreateModal(true);
+    setWizardStep(1);
+    setIsCreatingWizard(true);
+    setShowCreateModal(false);
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleOpenCreateModal = () => {
+    handleStartCreateWizard();
+  };
+
+  const handleCreateSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setCreateError('');
     if (!createForm.code.trim()) {
       setCreateError('Assessment code is required.');
+      setWizardStep(1);
       return;
     }
     if (!createForm.title.trim()) {
       setCreateError('Assessment title is required.');
+      setWizardStep(1);
       return;
     }
     if (createDeliveryMode === 'PDF_CODING') {
       if (!createPdfFile) {
         setCreateError('Please select a valid PDF question paper to create a PDF Assessment Mode round.');
+        setWizardStep(1);
         return;
       }
     } else {
       if (createSections.length === 0) {
         setCreateError('Please configure at least one section for this assessment.');
+        setWizardStep(2);
         return;
       }
     }
@@ -753,6 +809,7 @@ export function AdminAssessmentsView({
 
     if (createDeliveryMode !== 'PDF_CODING' && totalQuestions <= 0) {
       setCreateError('Total questions must be greater than 0.');
+      setWizardStep(2);
       return;
     }
 
@@ -771,6 +828,7 @@ export function AdminAssessmentsView({
 
     setCreateSubmitting(true);
     try {
+      let created: any;
       if (createDeliveryMode === 'PDF_CODING') {
         const formData = new FormData();
         formData.append('code', createForm.code.trim().toUpperCase());
@@ -785,29 +843,40 @@ export function AdminAssessmentsView({
         formData.append('max_tab_switches_warning', String(createForm.max_tab_switches_warning));
         formData.append('auto_submit_on_tab_limit', String(createForm.auto_submit_on_tab_limit));
         formData.append('close_policy', createForm.close_policy);
+        formData.append('is_seb_required', String(createForm.is_seb_required));
+        if (createForm.passing_cutoff_marks !== '') {
+          formData.append('passing_marks', String(createForm.passing_cutoff_marks));
+        }
+        if (createForm.passing_percentage !== '') {
+          formData.append('passing_percentage', String(createForm.passing_percentage));
+        }
         if (createPdfFile) {
           formData.append('pdf_file', createPdfFile);
         }
-        createForm.eligible_college_ids.forEach((cid) => {
-          formData.append('eligible_college_ids', String(cid));
-        });
         if (!createIsStandalone && createSelectedDriveIds.length > 0) {
           createSelectedDriveIds.forEach((did) => {
             formData.append('drive_ids', did);
           });
         }
 
-        await createAdminAssessment(formData);
+        created = await createAdminAssessment(formData);
       } else {
         if (!createIsStandalone && createSelectedDriveIds.length === 0) {
           setCreateError('Please select at least one Drive for a Drive-based assessment.');
           setCreateSubmitting(false);
+          setWizardStep(1);
           return;
         }
 
-        await createAdminAssessment({
-          ...createForm,
+        created = await createAdminAssessment({
           code: createForm.code.trim().toUpperCase(),
+          title: createForm.title.trim(),
+          description: createForm.description,
+          duration_minutes: createForm.duration_minutes,
+          max_attempts: createForm.max_attempts,
+          max_tab_switches_warning: createForm.max_tab_switches_warning,
+          auto_submit_on_tab_limit: createForm.auto_submit_on_tab_limit,
+          close_policy: createForm.close_policy,
           delivery_mode: createDeliveryMode,
           total_marks: totalMarks,
           aptitude_count: aptSec ? Number(aptSec.question_count) : (payloadSections.length > 0 ? 0 : Math.floor(totalQuestions / 2)),
@@ -815,11 +884,35 @@ export function AdminAssessmentsView({
           sections: payloadSections,
           is_standalone: createIsStandalone,
           drive_ids: createIsStandalone ? [] : createSelectedDriveIds,
-          eligible_college_ids: createForm.eligible_college_ids,
+          eligible_college_ids: [],
+          passing_marks: createForm.passing_cutoff_marks !== '' ? Number(createForm.passing_cutoff_marks) : null,
+          passing_percentage: createForm.passing_percentage !== '' ? Number(createForm.passing_percentage) : null,
+          is_seb_required: createForm.is_seb_required,
         });
       }
 
-      setShowCreateModal(false);
+      // Link any selected pools if provided
+      if (created?.id && createForm.selected_pool_ids && createForm.selected_pool_ids.length > 0) {
+        for (const poolId of createForm.selected_pool_ids) {
+          try {
+            await linkAdminAssessmentPoolSource(created.id, {
+              pool_id: poolId,
+              question_count: 5,
+              randomize: true,
+            });
+          } catch (e) {
+            console.warn('Failed linking pool during creation:', e);
+          }
+        }
+      }
+
+      setCreatedAssessmentInfo({
+        id: created.id,
+        title: created.title || createForm.title,
+        code: created.code || createForm.code,
+        is_seb_required: Boolean(created.is_seb_required ?? createForm.is_seb_required),
+      });
+      setWizardStep(6);
       fetchAssessments();
       setActionMessage({ text: `Assessment "${createForm.title}" created successfully in DRAFT state.`, type: 'success' });
     } catch (err: any) {
@@ -831,6 +924,8 @@ export function AdminAssessmentsView({
 
   const handleOpenEdit = (assessment: AdminAssessment) => {
     setEditError('');
+    const isLocked = Boolean((assessment.started_attempts_count || 0) > 0 || (assessment.attempts_count || 0) > 0);
+    setIsEditLocked(isLocked);
     const isStandaloneVal = assessment.is_standalone ?? (!assessment.drives || assessment.drives.length === 0);
     setEditIsStandalone(isStandaloneVal);
     setEditSelectedDriveIds(assessment.drives ? assessment.drives.map((d) => d.id) : []);
@@ -1088,6 +1183,1097 @@ export function AdminAssessmentsView({
       </span>
     );
   };
+
+  if (isCreatingWizard) {
+    const totalWizardQuestions = createDeliveryMode === 'PDF_CODING'
+      ? 0
+      : createSections.reduce((sum, s) => sum + Number(s.question_count || 0), 0);
+    const totalWizardMarks = createDeliveryMode === 'PDF_CODING'
+      ? 100
+      : createSections.reduce(
+          (sum, s) => sum + Number(s.question_count || 0) * Number(s.marks_per_question || 1),
+          0
+        );
+
+    return (
+      <div style={{ maxWidth: '960px', margin: '0 auto', paddingBottom: '60px', fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}>
+        {/* Navigation & Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+          <div>
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreatingWizard(false);
+                setSearchParams({ tab: 'assessments' });
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#64748B',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '0 0 8px 0',
+              }}
+            >
+              ← Back to Assessments Directory
+            </button>
+            <h1 style={{ fontSize: '28px', fontWeight: 900, color: '#0F172A', margin: 0 }}>
+              Create Assessment — 6-Step Setup Wizard
+            </h1>
+          </div>
+
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#64748B' }}>
+            Step <strong style={{ color: '#0D52D6', fontSize: '18px' }}>{wizardStep}</strong> of 6
+          </div>
+        </div>
+
+        {/* 6 Steps Progress Bar */}
+        <div style={{ marginBottom: '32px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px', marginBottom: '8px' }}>
+            {[
+              { num: 1, label: '1. Details' },
+              { num: 2, label: '2. Questions & Pools' },
+              { num: 3, label: '3. Marks & Rules' },
+              { num: 4, label: '4. Preview' },
+              { num: 5, label: '5. Review' },
+              { num: 6, label: '6. Confirmation' },
+            ].map((step) => (
+              <div
+                key={step.num}
+                style={{
+                  height: '6px',
+                  borderRadius: '3px',
+                  backgroundColor: wizardStep >= step.num ? '#0D52D6' : '#E2E8F0',
+                  transition: 'background-color 0.2s ease',
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px', fontSize: '11px', fontWeight: 700, color: '#64748B', textAlign: 'center' }}>
+            <span style={{ color: wizardStep === 1 ? '#0D52D6' : undefined }}>1. Details</span>
+            <span style={{ color: wizardStep === 2 ? '#0D52D6' : undefined }}>2. Questions & Pools</span>
+            <span style={{ color: wizardStep === 3 ? '#0D52D6' : undefined }}>3. Marks & Rules</span>
+            <span style={{ color: wizardStep === 4 ? '#0D52D6' : undefined }}>4. Preview</span>
+            <span style={{ color: wizardStep === 5 ? '#0D52D6' : undefined }}>5. Review</span>
+            <span style={{ color: wizardStep === 6 ? '#0D52D6' : undefined }}>6. Confirmation</span>
+          </div>
+        </div>
+
+        {/* Error Alert */}
+        {createError && (
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#FEF2F2',
+              border: '1.5px solid #FCA5A5',
+              color: '#B91C1C',
+              borderRadius: '10px',
+              fontSize: '13px',
+              fontWeight: 600,
+              marginBottom: '20px',
+            }}
+          >
+            ⚠️ {createError}
+          </div>
+        )}
+
+        {/* ─── STEP 1: DETAILS ─── */}
+        {wizardStep === 1 && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '32px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              Step 1: Assessment Details & Delivery Mode
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0' }}>
+              Define the title, code, delivery mode, duration, qualifying criteria, and drive scope.
+            </p>
+
+            {/* Assessment Type Selector */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                Delivery Mode *
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                {[
+                  { mode: 'MCQ', title: '📝 MCQ Assessment', desc: 'Multiple choice questions with automated evaluation & proctoring.' },
+                  { mode: 'CODING', title: '💻 Coding Assessment', desc: 'Interactive Monaco editor with test case grading in Python & Java.' },
+                  { mode: 'PDF_CODING', title: '📄 PDF Paper Mode', desc: 'Candidate downloads PDF question paper for offline / paper coding.' },
+                ].map((item) => (
+                  <button
+                    key={item.mode}
+                    type="button"
+                    onClick={() => setCreateDeliveryMode(item.mode as any)}
+                    style={{
+                      padding: '14px',
+                      borderRadius: '12px',
+                      border: createDeliveryMode === item.mode ? '2px solid #0D52D6' : '1px solid #CBD5E1',
+                      backgroundColor: createDeliveryMode === item.mode ? '#EFF6FF' : '#FFFFFF',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, fontSize: '14px', color: createDeliveryMode === item.mode ? '#0D52D6' : '#0F172A', marginBottom: '4px' }}>
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#64748B', lineHeight: 1.4 }}>
+                      {item.desc}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Title & Code */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Assessment Title *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. CSL Technical Diagnostic — Batch 2026"
+                  value={createForm.title}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCreateForm((prev) => ({
+                      ...prev,
+                      title: val,
+                      code: createUseCustomCode ? prev.code : generateCodeFromTitle(val, 20),
+                    }));
+                  }}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>
+                    Assessment Code *
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={createUseCustomCode}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setCreateUseCustomCode(checked);
+                        if (!checked) {
+                          setCreateForm((prev) => ({ ...prev, code: generateCodeFromTitle(prev.title, 20) }));
+                        }
+                      }}
+                      style={{ accentColor: '#0052CC', cursor: 'pointer' }}
+                    />
+                    Custom
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder="CSL-DIAG-01"
+                  value={createForm.code}
+                  onChange={(e) => setCreateForm({ ...createForm, code: e.target.value.toUpperCase() })}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '14px',
+                    fontFamily: 'monospace',
+                    boxSizing: 'border-box',
+                    textTransform: 'uppercase',
+                    backgroundColor: createUseCustomCode ? '#FFFFFF' : '#F8FAFC',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* PDF File Picker (if PDF mode) */}
+            {createDeliveryMode === 'PDF_CODING' && (
+              <div style={{ marginBottom: '16px', padding: '14px', borderRadius: '10px', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#1E40AF', marginBottom: '6px' }}>
+                  Upload PDF Question Paper *
+                </label>
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  onChange={(e) => setCreatePdfFile(e.target.files?.[0] || null)}
+                  style={{ fontSize: '13px' }}
+                />
+                <span style={{ fontSize: '11px', color: '#64748B', display: 'block', marginTop: '4px' }}>
+                  Candidates will view this PDF document during their examination round.
+                </span>
+              </div>
+            )}
+
+            {/* Duration & Passing Criteria */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Duration (Minutes) *
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={createForm.duration_minutes}
+                  onChange={(e) => setCreateForm({ ...createForm, duration_minutes: Number(e.target.value) })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Passing Cutoff Marks (Optional)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 50"
+                  value={createForm.passing_cutoff_marks}
+                  onChange={(e) => setCreateForm({ ...createForm, passing_cutoff_marks: e.target.value === '' ? '' : Number(e.target.value) })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Passing Percentage (Optional)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  placeholder="e.g. 60%"
+                  value={createForm.passing_percentage}
+                  onChange={(e) => setCreateForm({ ...createForm, passing_percentage: e.target.value === '' ? '' : Number(e.target.value) })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            {/* Candidate Instructions */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                Candidate Instructions & Description
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Guidelines presented to candidates on their instruction screen before starting..."
+                value={createForm.description}
+                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+                style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical' }}
+              />
+            </div>
+
+            {/* Safe Exam Browser (SEB) Toggle */}
+            <div style={{ marginBottom: '20px', padding: '14px', borderRadius: '10px', backgroundColor: '#FFFBEB', border: '1px solid #FDE68A' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={createForm.is_seb_required}
+                  onChange={(e) => setCreateForm({ ...createForm, is_seb_required: e.target.checked })}
+                  style={{ width: '18px', height: '18px', accentColor: '#D97706', cursor: 'pointer' }}
+                />
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#92400E', display: 'block' }}>
+                    🛡️ Enforce Safe Exam Browser (SEB)
+                  </strong>
+                  <span style={{ fontSize: '11px', color: '#B45309' }}>
+                    Require candidates to launch this exam exclusively through Safe Exam Browser with BEK verification.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            {/* Drive Association & Hierarchy */}
+            <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                Drive Association & Institutional Scope
+              </label>
+              <div style={{ display: 'flex', gap: '20px', marginBottom: '12px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="wizardDriveMode"
+                    checked={createIsStandalone}
+                    onChange={() => {
+                      setCreateIsStandalone(true);
+                      setCreateSelectedDriveIds([]);
+                    }}
+                  />
+                  <span>Standalone Assessment (Independent)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="wizardDriveMode"
+                    checked={!createIsStandalone}
+                    onChange={() => setCreateIsStandalone(false)}
+                  />
+                  <span>Assign to Recruitment Drive</span>
+                </label>
+              </div>
+
+              {!createIsStandalone && (
+                <div style={{ marginTop: '10px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', color: '#64748B', marginBottom: '6px' }}>
+                    Select Participating Recruitment Drive:
+                  </label>
+                  {availableDrives.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '12px', color: '#94A3B8' }}>No active drives found. You can link this assessment to a drive later.</p>
+                  ) : (
+                    <select
+                      value={createSelectedDriveIds[0] || ''}
+                      onChange={(e) => setCreateSelectedDriveIds(e.target.value ? [e.target.value] : [])}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', backgroundColor: '#FFFFFF' }}
+                    >
+                      <option value="">Select a drive...</option>
+                      {availableDrives.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          [{d.code}] {d.name} ({d.visibility})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+              <div style={{ fontSize: '11px', color: '#64748B', marginTop: '8px' }}>
+                ℹ Participating colleges are managed at the Drive level. Standalone assessments can be linked to drives at any time.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!createForm.title.trim()) {
+                    setCreateError('Assessment title is required.');
+                    return;
+                  }
+                  if (!createForm.code.trim()) {
+                    setCreateError('Assessment code is required.');
+                    return;
+                  }
+                  setCreateError('');
+                  setWizardStep(2);
+                }}
+                style={{
+                  backgroundColor: '#0D52D6',
+                  color: '#FFFFFF',
+                  padding: '12px 28px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Next: Questions & Pools →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 2: QUESTIONS & POOLS ─── */}
+        {wizardStep === 2 && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '32px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              Step 2: Sections & Question Pool Allocation
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0' }}>
+              Configure independent sections, allocate question quotas, and select reusable Question Pools.
+            </p>
+
+            {createDeliveryMode === 'PDF_CODING' ? (
+              <div style={{ padding: '24px', backgroundColor: '#EFF6FF', borderRadius: '12px', textAlign: 'center', marginBottom: '24px' }}>
+                <p style={{ fontSize: '14px', color: '#1E40AF', fontWeight: 600, margin: 0 }}>
+                  📄 In PDF Paper Mode, all problem statements are contained inside your uploaded question paper PDF. Dynamic section questions are not required.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                  <strong style={{ fontSize: '14px', color: '#0F172A' }}>Configured Sections ({createSections.length})</strong>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInlineSectionTarget('create');
+                      setInlineSectionError('');
+                      setShowInlineSectionModal(true);
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      backgroundColor: '#EEF2FF',
+                      color: '#3730A3',
+                      border: '1px solid #C7D2FE',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + Define New Section
+                  </button>
+                </div>
+
+                {createSections.length === 0 ? (
+                  <div style={{ padding: '24px', textAlign: 'center', backgroundColor: '#F8FAFC', borderRadius: '10px', border: '1px dashed #CBD5E1', marginBottom: '16px', color: '#64748B', fontSize: '13px' }}>
+                    No sections added yet. Select a section from your library below to configure question quotas.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                    {createSections.map((sec, idx) => (
+                      <div
+                        key={sec.section_id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '2fr 1fr 1fr 36px',
+                          gap: '12px',
+                          alignItems: 'center',
+                          backgroundColor: '#F8FAFC',
+                          padding: '12px 16px',
+                          borderRadius: '10px',
+                          border: '1px solid #E2E8F0',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 800, fontSize: '13px', color: '#0F172A' }}>{sec.name}</div>
+                          <span style={{ fontSize: '11px', color: '#3730A3', fontWeight: 600 }}>{sec.code}</span>
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Question Count</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={sec.question_count}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              setCreateSections((prev) =>
+                                prev.map((s, i) => (i === idx ? { ...s, question_count: val } : s))
+                              );
+                            }}
+                            style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Marks/Q</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={sec.marks_per_question}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              setCreateSections((prev) =>
+                                prev.map((s, i) => (i === idx ? { ...s, marks_per_question: val } : s))
+                              );
+                            }}
+                            style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCreateSections((prev) => prev.filter((_, i) => i !== idx))}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#EF4444',
+                            fontSize: '18px',
+                            cursor: 'pointer',
+                          }}
+                          title="Remove section"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add Section Dropdown */}
+                <div style={{ marginBottom: '24px' }}>
+                  <select
+                    onChange={(e) => {
+                      const selectedId = parseInt(e.target.value, 10);
+                      if (!selectedId) return;
+                      const match = availableSections.find((s) => s.id === selectedId);
+                      if (match && !createSections.some((s) => s.section_id === match.id)) {
+                        setCreateSections((prev) => [
+                          ...prev,
+                          {
+                            section_id: match.id,
+                            name: match.name,
+                            code: match.code,
+                            question_count: 10,
+                            marks_per_question: 1,
+                          },
+                        ]);
+                      }
+                      e.target.value = '';
+                    }}
+                    defaultValue=""
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid #CBD5E1',
+                      fontSize: '13px',
+                      backgroundColor: '#FFFFFF',
+                    }}
+                  >
+                    <option value="">+ Add Section from Library...</option>
+                    {availableSections
+                      .filter((s) => !createSections.some((cs) => cs.section_id === s.id))
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.code}) — {s.question_count ?? 0} questions in bank
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Question Pools Selection */}
+                <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', marginBottom: '20px' }}>
+                  <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', marginBottom: '6px' }}>
+                    Link Question Pools (Optional)
+                  </strong>
+                  <span style={{ fontSize: '12px', color: '#64748B', display: 'block', marginBottom: '12px' }}>
+                    Select independent question pools to automatically source questions for this assessment.
+                  </span>
+                  {availableQuestionPools.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: '#94A3B8' }}>No independent question pools found. Questions will be sampled from the central bank.</div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', maxHeight: '140px', overflowY: 'auto' }}>
+                      {availableQuestionPools.map((pool) => {
+                        const isChecked = createForm.selected_pool_ids.includes(pool.id);
+                        return (
+                          <label key={pool.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '6px', backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', fontSize: '12px', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCreateForm({ ...createForm, selected_pool_ids: [...createForm.selected_pool_ids, pool.id] });
+                                } else {
+                                  setCreateForm({ ...createForm, selected_pool_ids: createForm.selected_pool_ids.filter((id) => id !== pool.id) });
+                                }
+                              }}
+                            />
+                            <div>
+                              <strong style={{ color: '#0D52D6' }}>{pool.name}</strong>
+                              <span style={{ color: '#64748B', marginLeft: '4px' }}>({pool.questions_count ?? 0} Qs)</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setWizardStep(1)}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back: Details
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (createDeliveryMode !== 'PDF_CODING' && createSections.length === 0) {
+                    setCreateError('Please configure at least one section for this assessment.');
+                    return;
+                  }
+                  setCreateError('');
+                  setWizardStep(3);
+                }}
+                style={{
+                  backgroundColor: '#0D52D6',
+                  color: '#FFFFFF',
+                  padding: '12px 28px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Next: Marks & Rules →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 3: MARKS & RULES ─── */}
+        {wizardStep === 3 && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '32px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              Step 3: Scoring & Proctoring Rules
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0' }}>
+              Review total marks calculation, tab switch warning thresholds, and submission policies.
+            </p>
+
+            {/* Total Marks Pill */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginBottom: '24px' }}>
+              <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+                <span style={{ fontSize: '12px', color: '#1E40AF', fontWeight: 700, textTransform: 'uppercase' }}>
+                  Total Questions
+                </span>
+                <div style={{ fontSize: '26px', fontWeight: 900, color: '#1D4ED8', marginTop: '4px' }}>
+                  {totalWizardQuestions} Questions
+                </div>
+              </div>
+
+              <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                <span style={{ fontSize: '12px', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>
+                  Computed Total Marks
+                </span>
+                <div style={{ fontSize: '26px', fontWeight: 900, color: '#15803D', marginTop: '4px' }}>
+                  {totalWizardMarks} Marks
+                </div>
+              </div>
+            </div>
+
+            {/* Proctoring Constraints */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Permitted Tab Switch Warnings
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={createForm.max_tab_switches_warning}
+                  onChange={(e) => setCreateForm({ ...createForm, max_tab_switches_warning: Number(e.target.value) })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+                <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+                  Default: 2 warnings (exceeding limit auto-submits attempt).
+                </span>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Max Permitted Attempts
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={createForm.max_attempts}
+                  onChange={(e) => setCreateForm({ ...createForm, max_attempts: Number(e.target.value) })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            {/* Auto Submit & Close Policy */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '14px' }}>
+                <input
+                  type="checkbox"
+                  checked={createForm.auto_submit_on_tab_limit}
+                  onChange={(e) => setCreateForm({ ...createForm, auto_submit_on_tab_limit: e.target.checked })}
+                  style={{ width: '18px', height: '18px', accentColor: '#0D52D6', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: '13px', fontWeight: 600, color: '#1E293B' }}>
+                  Auto-submit assessment attempt when tab switch warning limit is reached
+                </span>
+              </label>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Assessment Close Policy
+                </label>
+                <select
+                  value={createForm.close_policy}
+                  onChange={(e) => setCreateForm({ ...createForm, close_policy: e.target.value as any })}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', backgroundColor: '#FFFFFF' }}
+                >
+                  <option value="ALLOW_FINISH">Allow in-progress candidate attempts to complete normally</option>
+                  <option value="STRICT_CUTOFF">Strict cutoff (terminate active candidate attempts immediately)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setWizardStep(2)}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back: Questions
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateError('');
+                  setWizardStep(4);
+                }}
+                style={{
+                  backgroundColor: '#0D52D6',
+                  color: '#FFFFFF',
+                  padding: '12px 28px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Next: Preview →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 4: PREVIEW ─── */}
+        {wizardStep === 4 && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '32px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              Step 4: Candidate Experience Preview
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0' }}>
+              Visual mockup of how candidates will see and experience this assessment round.
+            </p>
+
+            {/* Candidate View Card Mockup */}
+            <div
+              style={{
+                backgroundColor: '#FAF7F3',
+                borderRadius: '16px',
+                border: '1px solid rgba(245, 184, 61, 0.4)',
+                padding: '24px',
+                marginBottom: '24px',
+                boxShadow: '0 8px 24px -4px rgba(11, 46, 111, 0.06)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <span style={{ backgroundColor: '#0B2E6F', color: '#FFD45C', fontSize: '11px', fontWeight: 800, padding: '2px 8px', borderRadius: '4px' }}>
+                      CSL
+                    </span>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#1455B8', textTransform: 'uppercase' }}>
+                      {createForm.code || 'CODE-PENDING'}
+                    </span>
+                    <span style={{ fontSize: '11px', fontWeight: 700, backgroundColor: '#EFF6FF', color: '#1E40AF', padding: '2px 8px', borderRadius: '4px' }}>
+                      {createDeliveryMode}
+                    </span>
+                    {createForm.is_seb_required && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, backgroundColor: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: '4px' }}>
+                        🛡️ SEB Enforced
+                      </span>
+                    )}
+                  </div>
+                  <h3 style={{ fontSize: '20px', fontWeight: 900, color: '#0B2E6F', margin: 0 }}>
+                    {createForm.title || 'Untitled Assessment'}
+                  </h3>
+                </div>
+
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '4px 10px', borderRadius: '6px' }}>
+                  DRAFT STATE
+                </span>
+              </div>
+
+              {/* Metrics */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px' }}>
+                <div style={{ backgroundColor: '#FFFFFF', padding: '12px', borderRadius: '8px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Duration</span>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A' }}>{createForm.duration_minutes} Mins</div>
+                </div>
+                <div style={{ backgroundColor: '#FFFFFF', padding: '12px', borderRadius: '8px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Questions</span>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A' }}>{totalWizardQuestions} Qs</div>
+                </div>
+                <div style={{ backgroundColor: '#FFFFFF', padding: '12px', borderRadius: '8px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Total Marks</span>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A' }}>{totalWizardMarks} Marks</div>
+                </div>
+                <div style={{ backgroundColor: '#FFFFFF', padding: '12px', borderRadius: '8px', textAlign: 'center', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Passing Criteria</span>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>
+                    {createForm.passing_cutoff_marks ? `${createForm.passing_cutoff_marks} Marks` : createForm.passing_percentage ? `${createForm.passing_percentage}%` : 'Standard'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Section Breakdown Preview */}
+              {createSections.length > 0 && (
+                <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', padding: '12px 16px', border: '1px solid #E2E8F0' }}>
+                  <strong style={{ fontSize: '12px', color: '#0F172A', display: 'block', marginBottom: '6px' }}>Section Breakdown:</strong>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    {createSections.map((s, idx) => (
+                      <span key={idx} style={{ fontSize: '12px', padding: '3px 8px', borderRadius: '4px', backgroundColor: '#EFF6FF', color: '#1D4ED8', fontWeight: 600 }}>
+                        {s.name} ({s.question_count} Qs, {s.question_count * s.marks_per_question} marks)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setWizardStep(3)}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back: Marks & Rules
+              </button>
+              <button
+                type="button"
+                onClick={() => setWizardStep(5)}
+                style={{
+                  backgroundColor: '#0D52D6',
+                  color: '#FFFFFF',
+                  padding: '12px 28px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Next: Review & Confirm →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 5: REVIEW & FINALIZE ─── */}
+        {wizardStep === 5 && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '32px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              Step 5: Pre-Flight Review & Confirmation
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0' }}>
+              Verify all configured parameters before finalizing assessment creation.
+            </p>
+
+            {/* Checklist */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '24px' }}>
+              <div style={{ padding: '12px 16px', borderRadius: '10px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#15803D', fontWeight: 900 }}>✓</span>
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#15803D' }}>Assessment Identity</strong>
+                  <div style={{ fontSize: '12px', color: '#166534' }}>
+                    Title: <strong>{createForm.title}</strong> · Code: <strong>{createForm.code}</strong> · Mode: <strong>{createDeliveryMode}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px 16px', borderRadius: '10px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#15803D', fontWeight: 900 }}>✓</span>
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#15803D' }}>Structure & Scoring</strong>
+                  <div style={{ fontSize: '12px', color: '#166534' }}>
+                    {totalWizardQuestions} Questions · {totalWizardMarks} Total Marks · Duration: {createForm.duration_minutes} Mins
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px 16px', borderRadius: '10px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#15803D', fontWeight: 900 }}>✓</span>
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#15803D' }}>Drive Scope & Hierarchy</strong>
+                  <div style={{ fontSize: '12px', color: '#166534' }}>
+                    {createIsStandalone ? 'Standalone Assessment (Independent)' : `Assigned to Drive #${createSelectedDriveIds[0] || 'Unknown'}`}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px 16px', borderRadius: '10px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#15803D', fontWeight: 900 }}>✓</span>
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#15803D' }}>Integrity & Security Deterrents</strong>
+                  <div style={{ fontSize: '12px', color: '#166534' }}>
+                    Tab Switches Limit: {createForm.max_tab_switches_warning} · SEB Required: {createForm.is_seb_required ? 'Yes' : 'No'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setWizardStep(4)}
+                disabled={createSubmitting}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back: Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCreateSubmit()}
+                disabled={createSubmitting}
+                style={{
+                  backgroundColor: '#0D52D6',
+                  color: '#FFFFFF',
+                  padding: '14px 36px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '15px',
+                  fontWeight: 800,
+                  cursor: createSubmitting ? 'wait' : 'pointer',
+                  boxShadow: '0 4px 14px rgba(13,82,214,0.3)',
+                }}
+              >
+                {createSubmitting ? 'Creating Assessment...' : 'Create Assessment Round'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STEP 6: CONFIRMATION & ACTIONS ─── */}
+        {wizardStep === 6 && createdAssessmentInfo && (
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', padding: '40px 32px', textAlign: 'center', boxShadow: '0 6px 20px rgba(0,0,0,0.04)' }}>
+            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#DCFCE7', color: '#15803D', fontSize: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+              ✓
+            </div>
+
+            <h2 style={{ fontSize: '24px', fontWeight: 900, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+              Assessment Created Successfully!
+            </h2>
+            <p style={{ fontSize: '14px', color: '#64748B', maxWidth: '500px', margin: '0 auto 24px', lineHeight: 1.5 }}>
+              Your assessment <strong>"{createdAssessmentInfo.title}"</strong> ({createdAssessmentInfo.code}) has been created in DRAFT state.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              {/* Isolated Test Simulation */}
+              <button
+                type="button"
+                onClick={() => handleTestRun(createdAssessmentInfo.id)}
+                disabled={runningTestSimulation === createdAssessmentInfo.id}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  backgroundColor: '#4338CA',
+                  color: '#FFFFFF',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: runningTestSimulation === createdAssessmentInfo.id ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 2px 8px rgba(67,56,202,0.3)',
+                }}
+              >
+                🧪 {runningTestSimulation === createdAssessmentInfo.id ? 'Launching...' : 'Run Simulation Test'}
+              </button>
+
+              {/* SEB Config Download if required */}
+              {createdAssessmentInfo.is_seb_required && (
+                <button
+                  type="button"
+                  onClick={() => downloadAdminAssessmentSebConfig(createdAssessmentInfo.id, `${createdAssessmentInfo.code}.seb`)}
+                  style={{
+                    padding: '12px 20px',
+                    borderRadius: '10px',
+                    border: '1px solid #D97706',
+                    backgroundColor: '#FEF3C7',
+                    color: '#92400E',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  🛡️ Download .seb Config
+                </button>
+              )}
+
+              {/* Manage Question Pool */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatingWizard(false);
+                  onNavigateToQuestions?.(createdAssessmentInfo.id);
+                }}
+                style={{
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: '1px solid #0D52D6',
+                  backgroundColor: '#EFF6FF',
+                  color: '#0D52D6',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                📂 Manage Question Pool
+              </button>
+
+              {/* Return to Assessments */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatingWizard(false);
+                  setSearchParams({ tab: 'assessments' });
+                }}
+                style={{
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: '1px solid #CBD5E1',
+                  backgroundColor: '#FFFFFF',
+                  color: '#334155',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                📋 View Assessments Directory
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: '1100px' }}>
@@ -1817,6 +3003,45 @@ export function AdminAssessmentsView({
                     >
                       Delete
                     </button>
+
+                    {/* Row 4: Test Run & SEB Config */}
+                    <button
+                      onClick={() => handleTestRun(a.id)}
+                      disabled={runningTestSimulation === a.id}
+                      style={{
+                        backgroundColor: '#EEF2FF',
+                        color: '#3730A3',
+                        border: 'none',
+                        borderRadius: '12px',
+                        padding: '6px 0',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
+                        gridColumn: a.is_seb_required ? 'auto' : 'span 2',
+                      }}
+                      title="Run an isolated admin simulation attempt without affecting candidate statistics"
+                    >
+                      {runningTestSimulation === a.id ? '...' : '🧪 Test Run'}
+                    </button>
+
+                    {a.is_seb_required && (
+                      <button
+                        onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
+                        style={{
+                          backgroundColor: '#FEF3C7',
+                          color: '#92400E',
+                          border: 'none',
+                          borderRadius: '12px',
+                          padding: '6px 0',
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                        title="Download Safe Exam Browser (.seb) config"
+                      >
+                        🛡️ .seb
+                      </button>
+                    )}
                   </div>
 
                   {/* Right: Manage Question Pool Button, Sufficiency Badge & Active Switch */}
@@ -2129,6 +3354,43 @@ export function AdminAssessmentsView({
                         title="View and manage Question Pool for this assessment">
                         Question Pool
                       </button>
+
+                      <button
+                        onClick={() => handleTestRun(a.id)}
+                        disabled={runningTestSimulation === a.id}
+                        title="Run isolated admin simulation attempt"
+                        style={{
+                          backgroundColor: '#EEF2FF',
+                          color: '#3730A3',
+                          border: '1px solid #C7D2FE',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {runningTestSimulation === a.id ? '...' : '🧪 Test Run'}
+                      </button>
+
+                      {a.is_seb_required && (
+                        <button
+                          onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
+                          title="Download Safe Exam Browser config"
+                          style={{
+                            backgroundColor: '#FEF3C7',
+                            color: '#92400E',
+                            border: '1px solid #FDE68A',
+                            padding: '6px 12px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          🛡️ .seb
+                        </button>
+                      )}
 
                       <button
                         onClick={() => handleOpenEdit(a)}
@@ -2799,15 +4061,41 @@ export function AdminAssessmentsView({
               </div>
             )}
 
+            {isEditLocked && (
+              <div
+                style={{
+                  backgroundColor: '#FEF2F2',
+                  border: '1.5px solid #FCA5A5',
+                  borderRadius: '10px',
+                  padding: '12px 16px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                }}
+              >
+                <span style={{ fontSize: '22px', lineHeight: 1 }}>🔒</span>
+                <div>
+                  <strong style={{ color: '#991B1B', fontSize: '13px', display: 'block' }}>
+                    Assessment Configuration Locked: Candidate Attempts Have Started
+                  </strong>
+                  <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '2px', lineHeight: 1.4 }}>
+                    Candidates have already started or submitted attempts. Core parameters (Assessment Code, Delivery Mode, Duration, Sections, and Questions) are locked to maintain grading integrity and prevent invalidation of candidate sessions.
+                  </div>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleEditSubmit}>
               {/* Assessment Type Selector (Phase 3.1) */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-                  Assessment Type *
+                  Assessment Type * {isEditLocked && <span style={{ color: '#991B1B', fontSize: '11px' }}>(Locked)</span>}
                 </label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                   <button
                     type="button"
+                    disabled={isEditLocked}
                     onClick={() => setEditDeliveryMode('MCQ')}
                     style={{
                       padding: '10px 12px',
@@ -2817,7 +4105,8 @@ export function AdminAssessmentsView({
                       color: editDeliveryMode === 'MCQ' ? '#1455B8' : '#64748B',
                       fontWeight: 700,
                       fontSize: '13px',
-                      cursor: 'pointer',
+                      cursor: isEditLocked ? 'not-allowed' : 'pointer',
+                      opacity: isEditLocked && editDeliveryMode !== 'MCQ' ? 0.6 : 1,
                       textAlign: 'center',
                     }}
                   >
@@ -2825,6 +4114,7 @@ export function AdminAssessmentsView({
                   </button>
                   <button
                     type="button"
+                    disabled={isEditLocked}
                     onClick={() => setEditDeliveryMode('CODING')}
                     style={{
                       padding: '10px 12px',
@@ -2834,7 +4124,8 @@ export function AdminAssessmentsView({
                       color: editDeliveryMode === 'CODING' ? '#1455B8' : '#64748B',
                       fontWeight: 700,
                       fontSize: '13px',
-                      cursor: 'pointer',
+                      cursor: isEditLocked ? 'not-allowed' : 'pointer',
+                      opacity: isEditLocked && editDeliveryMode !== 'CODING' ? 0.6 : 1,
                       textAlign: 'center',
                     }}
                   >
@@ -2842,6 +4133,7 @@ export function AdminAssessmentsView({
                   </button>
                   <button
                     type="button"
+                    disabled={isEditLocked}
                     onClick={() => setEditDeliveryMode('PDF_CODING')}
                     style={{
                       padding: '10px 12px',
@@ -2851,7 +4143,8 @@ export function AdminAssessmentsView({
                       color: editDeliveryMode === 'PDF_CODING' ? '#1455B8' : '#64748B',
                       fontWeight: 700,
                       fontSize: '13px',
-                      cursor: 'pointer',
+                      cursor: isEditLocked ? 'not-allowed' : 'pointer',
+                      opacity: isEditLocked && editDeliveryMode !== 'PDF_CODING' ? 0.6 : 1,
                       textAlign: 'center',
                     }}
                   >
@@ -2862,14 +4155,15 @@ export function AdminAssessmentsView({
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px', marginBottom: '14px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                    Assessment Code *
+                    Assessment Code * {isEditLocked && <span style={{ color: '#991B1B', fontSize: '11px' }}>(Locked)</span>}
                   </label>
                   <input
                     type="text"
                     required
+                    disabled={isEditLocked}
                     value={editForm.code}
                     onChange={(e) => setEditForm({ ...editForm, code: e.target.value.toUpperCase() })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase', backgroundColor: isEditLocked ? '#F1F5F9' : '#FFFFFF', cursor: isEditLocked ? 'not-allowed' : 'text' }}
                   />
                 </div>
                 <div>
@@ -2901,15 +4195,16 @@ export function AdminAssessmentsView({
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                    Duration (Minutes) *
+                    Duration (Minutes) * {isEditLocked && <span style={{ color: '#991B1B', fontSize: '11px' }}>(Locked)</span>}
                   </label>
                   <input
                     type="number"
                     min={1}
                     required
+                    disabled={isEditLocked}
                     value={editForm.duration_minutes}
                     onChange={(e) => setEditForm({ ...editForm, duration_minutes: Number(e.target.value) })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box', backgroundColor: isEditLocked ? '#F1F5F9' : '#FFFFFF', cursor: isEditLocked ? 'not-allowed' : 'text' }}
                   />
                   <span style={{ fontSize: '11px', color: '#64748B' }}>Timer for each candidate</span>
                 </div>
@@ -2998,6 +4293,7 @@ export function AdminAssessmentsView({
                           <input
                             type="number"
                             min={1}
+                            disabled={isEditLocked}
                             value={sec.question_count}
                             onChange={(e) => {
                               const val = Math.max(1, parseInt(e.target.value, 10) || 1);
@@ -3005,7 +4301,7 @@ export function AdminAssessmentsView({
                                 prev.map((s, i) => (i === idx ? { ...s, question_count: val } : s))
                               );
                             }}
-                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: isEditLocked ? '#F1F5F9' : '#FFFFFF', cursor: isEditLocked ? 'not-allowed' : 'text' }}
                           />
                         </div>
                         <div>
@@ -3013,6 +4309,7 @@ export function AdminAssessmentsView({
                           <input
                             type="number"
                             min={1}
+                            disabled={isEditLocked}
                             value={sec.marks_per_question}
                             onChange={(e) => {
                               const val = Math.max(1, parseInt(e.target.value, 10) || 1);
@@ -3020,7 +4317,7 @@ export function AdminAssessmentsView({
                                 prev.map((s, i) => (i === idx ? { ...s, marks_per_question: val } : s))
                               );
                             }}
-                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: isEditLocked ? '#F1F5F9' : '#FFFFFF', cursor: isEditLocked ? 'not-allowed' : 'text' }}
                           />
                         </div>
                         <div style={{ textAlign: 'right' }}>
@@ -3029,26 +4326,31 @@ export function AdminAssessmentsView({
                             {sec.question_count * sec.marks_per_question} marks
                           </strong>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setEditSections((prev) => prev.filter((_, i) => i !== idx))}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#EF4444',
-                            fontSize: '16px',
-                            cursor: 'pointer',
-                            padding: '4px',
-                          }}
-                          title="Remove section association"
-                        >
-                          ✕
-                        </button>
+                        {!isEditLocked ? (
+                          <button
+                            type="button"
+                            onClick={() => setEditSections((prev) => prev.filter((_, i) => i !== idx))}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#EF4444',
+                              fontSize: '16px',
+                              cursor: 'pointer',
+                              padding: '4px',
+                            }}
+                            title="Remove section association"
+                          >
+                            ✕
+                          </button>
+                        ) : (
+                          <div style={{ fontSize: '12px', color: '#94A3B8' }}>🔒</div>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
 
+                {!isEditLocked && (
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <select
                     onChange={(e) => {
@@ -3089,6 +4391,7 @@ export function AdminAssessmentsView({
                       ))}
                   </select>
                 </div>
+                )}
 
                 <div
                   style={{

@@ -212,6 +212,27 @@ export interface AdminAssessment {
   attempts_count: number;
   in_progress_count: number;
   submitted_count: number;
+  passing_marks?: number | null;
+  passing_percentage?: number | null;
+  instructions?: string;
+  is_seb_required?: boolean;
+  seb_browser_exam_key?: string;
+  seb_config_key?: string;
+  started_attempts_count?: number;
+}
+
+export interface AdminCameraBypassItem {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_reg_no: string;
+  candidate_college: string;
+  assessment_id: string;
+  assessment_title: string;
+  reason: string;
+  authorized_by: string;
+  is_used: boolean;
+  created_at: string;
 }
 
 export interface AdminAssessmentDetail extends AdminAssessment {
@@ -1647,3 +1668,62 @@ export const fetchCodingQuestionsJsonTemplate = async (): Promise<any> => {
   const res = await adminApi.get('/questions/import-coding-json/');
   return res.data;
 };
+
+// ==============================================================================
+// PHASE INFINITY EXTENSIONS: SEB, TEST RUN, CAMERA BYPASS, ADVANCED EXPORT
+// ==============================================================================
+
+export async function fetchCameraBypasses(assessmentId?: string): Promise<AdminCameraBypassItem[]> {
+  const params: Record<string, string> = {};
+  if (assessmentId) params.assessment_id = assessmentId;
+  const res = await adminApi.get('/camera-bypasses/', { params });
+  return res.data;
+}
+
+export async function grantCameraBypass(payload: { candidate_id: string; assessment_id: string; reason: string }): Promise<{ success: boolean; message: string; id: string }> {
+  const res = await adminApi.post('/camera-bypasses/', payload);
+  return res.data;
+}
+
+export async function startAdminTestRun(assessmentId: string): Promise<{ success: boolean; attempt_id: string; assessment_id: string; token: string; is_simulation: boolean; exam_url: string }> {
+  const res = await adminApi.post(`/assessments/${assessmentId}/test-run/`);
+  return res.data;
+}
+
+export async function downloadAdminAssessmentSebConfig(assessmentId: string, filename?: string): Promise<void> {
+  const res = await adminApi.get(`/assessments/${assessmentId}/seb-config/`, { responseType: 'blob' });
+  const blob = new Blob([res.data], { type: 'application/seb' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || `assessment_${assessmentId}.seb`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+export async function exportAdvancedStudentData(params?: {
+  format?: 'xlsx' | 'csv';
+  college_id?: number;
+  drive_id?: string;
+  assessment_id?: string;
+  search?: string;
+  thresholds?: string;
+}): Promise<void> {
+  const res = await adminApi.get('/candidates/export-advanced/', {
+    params,
+    responseType: 'blob',
+  });
+  const ext = params?.format === 'csv' ? 'csv' : 'xlsx';
+  const mimeType = ext === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const blob = new Blob([res.data], { type: mimeType });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `csl_student_advanced_export.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}

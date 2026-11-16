@@ -20,6 +20,10 @@ from .views import (
     DriveLinkCandidateView,
     StudentCodeRunView,
     StudentCodeSubmitView,
+    CandidateLoginView,
+    CandidateAssessmentSebConfigView,
+    CandidateCameraBypassStatusView,
+    CandidateAttemptCalibrationView,
 )
 
 urlpatterns = [
@@ -27,6 +31,9 @@ urlpatterns = [
     path("request-college/", StudentInstitutionRequestView.as_view(), name="student-request-college"),
     path("candidate-assessments/", CandidateEligibleAssessmentsView.as_view(), name="candidate-eligible-assessments"),
     path("register/", CandidateRegisterView.as_view(), name="assessment-register"),
+    path("login/", CandidateLoginView.as_view(), name="candidate-login"),
+    path("camera-bypass-status/", CandidateCameraBypassStatusView.as_view(), name="candidate-camera-bypass-status"),
+    path("<uuid:pk>/seb-config/", CandidateAssessmentSebConfigView.as_view(), name="candidate-assessment-seb-config"),
     path("drive-link/", DriveLinkCandidateView.as_view(), name="drive-link-candidate"),
     path("drives/<str:code_or_id>/public/", PublicDriveDetailView.as_view(), name="public-drive-detail"),
     path("resolve-code/", ResolveAccessCodeView.as_view(), name="resolve-access-code"),
@@ -39,6 +46,7 @@ urlpatterns = [
     path("attempts/<uuid:attempt_id>/answer/", SaveAnswerView.as_view(), name="assessment-save-answer"),
     path("attempts/<uuid:attempt_id>/sync-answers/", SyncAnswersView.as_view(), name="assessment-attempt-sync-answers"),
     path("attempts/<uuid:attempt_id>/heartbeat/", AttemptHeartbeatView.as_view(), name="assessment-attempt-heartbeat"),
+    path("attempts/<uuid:attempt_id>/calibration/", CandidateAttemptCalibrationView.as_view(), name="candidate-attempt-calibration"),
     path("attempts/<uuid:attempt_id>/integrity-event/", RecordIntegrityEventView.as_view(), name="assessment-integrity-event"),
     path("attempts/<uuid:attempt_id>/finalize/", FinalizeAssessmentView.as_view(), name="assessment-finalize"),
     path("attempts/<uuid:attempt_id>/result/", AssessmentResultView.as_view(), name="assessment-result"),

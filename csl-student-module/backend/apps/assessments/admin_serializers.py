@@ -226,6 +226,7 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
     drives = serializers.SerializerMethodField()
     drives_count = serializers.SerializerMethodField()
     is_standalone = serializers.SerializerMethodField()
+    started_attempts_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Assessment
@@ -273,6 +274,13 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
             "drives",
             "drives_count",
             "is_standalone",
+            "is_seb_required",
+            "seb_browser_exam_key",
+            "seb_config_key",
+            "passing_marks",
+            "passing_percentage",
+            "instructions",
+            "started_attempts_count",
         ]
 
     def get_pdf_filename(self, obj):
@@ -303,22 +311,32 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
     def get_is_open(self, obj):
         return obj.is_currently_open()
 
+    def _get_explicit_assessment_pool_qs(self, obj):
+        direct_ids = set(obj.questions.filter(is_active=True).values_list("id", flat=True))
+        pool_ids = set(
+            QuestionBank.objects.filter(
+                pool_items__pool__assessment_sources__assessment=obj,
+                pool_items__pool__is_active=True,
+                is_active=True,
+            ).values_list("id", flat=True)
+        )
+        combined_ids = direct_ids | pool_ids
+        if not combined_ids:
+            return QuestionBank.objects.none()
+        return QuestionBank.objects.filter(id__in=combined_ids, is_active=True)
+
     def get_pool_questions_count(self, obj):
-        from .services import get_assessment_available_questions_qs
-        return get_assessment_available_questions_qs(obj).count()
+        return self._get_explicit_assessment_pool_qs(obj).count()
 
     def get_pool_aptitude_count(self, obj):
-        from .services import get_assessment_available_questions_qs
-        return get_assessment_available_questions_qs(obj).filter(section_type=QuestionBank.SectionType.APTITUDE).count()
+        return self._get_explicit_assessment_pool_qs(obj).filter(section_type=QuestionBank.SectionType.APTITUDE).count()
 
     def get_pool_coding_count(self, obj):
-        from .services import get_assessment_available_questions_qs
-        return get_assessment_available_questions_qs(obj).filter(section_type=QuestionBank.SectionType.CODING).count()
+        return self._get_explicit_assessment_pool_qs(obj).filter(section_type=QuestionBank.SectionType.CODING).count()
 
     def get_pool_sufficient(self, obj):
         from django.db.models import Q
-        from .services import get_assessment_available_questions_qs
-        available_qs = get_assessment_available_questions_qs(obj)
+        available_qs = self._get_explicit_assessment_pool_qs(obj)
         if not available_qs.exists():
             return False
         try:
@@ -393,6 +411,9 @@ class AdminAssessmentListSerializer(serializers.ModelSerializer):
         except Exception:
             return True
 
+    def get_started_attempts_count(self, obj):
+        return obj.attempts.filter(started_at__isnull=False, is_simulation=False).count()
+
 
 class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
     eligible_college_ids = serializers.ListField(
@@ -453,6 +474,12 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "drive_ids",
             "sections",
             "is_standalone",
+            "is_seb_required",
+            "seb_browser_exam_key",
+            "seb_config_key",
+            "passing_marks",
+            "passing_percentage",
+            "instructions",
         ]
 
     def validate_code(self, value):
@@ -1088,7 +1115,7 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
 
     def get_pool_memberships(self, obj):
         if not hasattr(obj, "_cached_pool_memberships"):
-            items = obj.pool_items.select_related("pool").filter(pool__is_active=True)
+            items = [item for item in obj.pool_items.all() if item.pool and item.pool.is_active]
             obj._cached_pool_memberships = [
                 {"id": str(item.pool.id), "name": item.pool.name, "code": item.pool.code}
                 for item in items
@@ -1992,6 +2019,13 @@ class AdminDriveCreateUpdateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         college_ids = validated_data.pop("eligible_college_ids", None)
         assessment_ids = validated_data.pop("assessment_ids", None)
+        if validated_data.get("visibility") == Drive.Visibility.INVITE_ONLY and not validated_data.get("drive_code"):
+            import secrets
+            for _ in range(50):
+                candidate_code = f"{secrets.randbelow(90000000) + 10000000:08d}"
+                if not Drive.objects.filter(drive_code=candidate_code).exists():
+                    validated_data["drive_code"] = candidate_code
+                    break
         drive = Drive.objects.create(**validated_data)
         if college_ids is not None:
             drive.eligible_colleges.set(College.objects.filter(id__in=college_ids))

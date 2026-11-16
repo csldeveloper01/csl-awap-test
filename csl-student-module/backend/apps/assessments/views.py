@@ -27,6 +27,7 @@ from .models import (
     DriveRegistration,
     DriveInvitation,
     AssessmentAuditLog,
+    AdminAccessGrant,
 )
 from .serializers import (
     CandidateRegistrationSerializer,
@@ -628,7 +629,7 @@ class CandidateRegisterView(APIView):
                         if not (is_directly_eligible or is_college_eligible or is_open_to_all):
                             return Response(
                                 {"detail": f"You are not eligible for '{target_assessment.title}'."},
-                                status=status.HTTP_403_FORBIDDEN,
+                                status=status.HTTP_400_BAD_REQUEST,
                             )
                 if not target_assessment and college_obj:
                     open_assigned = college_obj.assigned_assessments.filter(status=Assessment.Status.OPEN)
@@ -790,7 +791,7 @@ class CandidateRegisterView(APIView):
                         if not (is_directly_eligible or is_college_eligible or is_open_to_all):
                             return Response(
                                 {"detail": f"You are not eligible for '{target_assessment.title}'."},
-                                status=status.HTTP_403_FORBIDDEN,
+                                status=status.HTTP_400_BAD_REQUEST,
                             )
 
                 candidate = Candidate.objects.create(
@@ -983,6 +984,8 @@ class StartAssessmentView(APIView):
     Step 2: Start or resume assessment attempt.
     Requires CandidateAssessmentAuthentication token.
     Accepts optional assessment_id to target a specific independent assessment.
+    Enforces Safe Exam Browser (SEB) requirement when enabled on assessment.
+    Persists camera calibration and SEB verification status.
     """
     authentication_classes = [CandidateAssessmentAuthentication]
     permission_classes = [AllowAny]
@@ -1018,6 +1021,38 @@ class StartAssessmentView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+        # Enforce Safe Exam Browser (SEB) if required
+        if assessment and assessment.is_seb_required:
+            seb_header = (
+                request.headers.get("X-SafeExamBrowser-RequestHash")
+                or request.META.get("HTTP_X_SAFEEXAMBROWSER_REQUESTHASH")
+            )
+            user_agent = request.META.get("HTTP_USER_AGENT", "")
+            bek_received = (
+                request.headers.get("X-SafeExamBrowser-BrowserExamKey")
+                or request.META.get("HTTP_X_SAFEEXAMBROWSER_BROWSEREXAMKEY")
+                or request.data.get("browser_exam_key")
+            )
+            is_seb_client = bool(seb_header) or ("SEB" in user_agent.upper()) or ("SAFEEXAMBROWSER" in user_agent.upper())
+            if not is_seb_client:
+                return Response(
+                    {
+                        "detail": "This assessment is protected and requires Safe Exam Browser (SEB). Please launch via SEB.",
+                        "is_seb_required": True,
+                        "seb_config_url": f"/api/assessment/{assessment.id}/seb-config/",
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if assessment.seb_browser_exam_key and bek_received:
+                if bek_received.strip() != assessment.seb_browser_exam_key.strip():
+                    return Response(
+                        {
+                            "detail": "Invalid Safe Exam Browser Exam Key. The configuration file being used does not match the official exam key for this assessment.",
+                            "is_seb_required": True,
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
         config = get_or_create_default_config()
         lookup_ms = (time.perf_counter() - view_started) * 1000.0
 
@@ -1025,6 +1060,38 @@ class StartAssessmentView(APIView):
             service_started = time.perf_counter()
             attempt = start_assessment_for_candidate(candidate, assessment=assessment, config=config)
             service_ms = (time.perf_counter() - service_started) * 1000.0
+
+            # Update calibration, bypass, and SEB verification
+            update_fields = []
+            if assessment and assessment.is_seb_required:
+                attempt.is_seb_verified = True
+                update_fields.append("is_seb_verified")
+
+            # Check admin camera bypass if grant_id provided
+            grant_id = request.data.get("bypass_grant_id") or request.data.get("grant_id")
+            if grant_id:
+                bypass_grant = AdminAccessGrant.objects.filter(
+                    id=grant_id,
+                    candidate=candidate,
+                    grant_type="CAMERA_BYPASS",
+                    is_used=False
+                ).first()
+                if bypass_grant:
+                    attempt.camera_calibrated = True
+                    update_fields.append("camera_calibrated")
+                    bypass_grant.is_used = True
+                    bypass_grant.used_at = timezone.now()
+                    bypass_grant.save(update_fields=["is_used", "used_at"])
+            else:
+                if request.data.get("camera_calibrated") is not None:
+                    attempt.camera_calibrated = bool(request.data.get("camera_calibrated"))
+                    update_fields.append("camera_calibrated")
+                if request.data.get("camera_calibration_data"):
+                    attempt.camera_calibration_data = request.data.get("camera_calibration_data")
+                    update_fields.append("camera_calibration_data")
+
+            if update_fields:
+                attempt.save(update_fields=list(set(update_fields)))
 
             token = generate_candidate_token(str(candidate.id), str(attempt.id))
 
@@ -1888,3 +1955,216 @@ class StudentCodeSubmitView(APIView):
         return Response(eval_result, status=status.HTTP_200_OK)
 
 
+
+
+# ==============================================================================
+# PHASE INFINITY EXTENSIONS: STUDENT RE-LOGIN, SEB CONFIG, CAMERA BYPASS & CALIBRATION
+# ==============================================================================
+
+class CandidateLoginView(APIView):
+    """
+    Enables returning students to re-login using Register Number or Email
+    without creating duplicate records. Verifies eligibility and returns active
+    or previous attempt state with a valid assessment token.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        identifier = (
+            request.data.get("identifier")
+            or request.data.get("register_number")
+            or request.data.get("email")
+            or ""
+        ).strip()
+        assessment_id = request.data.get("assessment_id")
+        drive_code = (request.data.get("drive_code") or "").strip()
+
+        if not identifier:
+            return Response(
+                {"detail": "Please provide your Registration Number or Email address to sign in."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cand = Candidate.objects.filter(
+            Q(register_number__iexact=identifier) | Q(email__iexact=identifier.lower())
+        ).first()
+
+        if not cand:
+            return Response(
+                {"detail": f"No candidate record found matching '{identifier}'. Please register first if you are a new candidate."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not cand.is_active:
+            return Response(
+                {"detail": "Your candidate account is currently inactive. Please contact your administrator."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Check drive if provided
+        target_drive = None
+        if drive_code:
+            target_drive = Drive.objects.filter(Q(drive_code=drive_code) | Q(code__iexact=drive_code)).first()
+            if not target_drive:
+                return Response({"detail": f"Drive with code '{drive_code}' not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Query candidate attempts
+        attempt_qs = AssessmentAttempt.objects.filter(candidate=cand)
+        if assessment_id:
+            attempt_qs = attempt_qs.filter(assessment_id=assessment_id)
+
+        active_attempt = attempt_qs.filter(state=AssessmentAttempt.State.IN_PROGRESS).order_by("-created_at").first()
+        last_attempt = attempt_qs.order_by("-created_at").first()
+
+        attempt_for_token = active_attempt or last_attempt
+        token = generate_candidate_token(str(cand.id), str(attempt_for_token.id) if attempt_for_token else None)
+
+        return Response({
+            "candidate_id": str(cand.id),
+            "full_name": cand.full_name,
+            "register_number": cand.register_number,
+            "email": cand.email,
+            "college": cand.college,
+            "college_id": cand.college_ref_id,
+            "assessment_token": token,
+            "active_attempt_id": str(active_attempt.id) if active_attempt else None,
+            "last_attempt_state": last_attempt.state if last_attempt else None,
+            "is_active_attempt": bool(active_attempt),
+            "message": "Sign-in successful. Welcome back!",
+        }, status=status.HTTP_200_OK)
+
+
+class CandidateAssessmentSebConfigView(APIView):
+    """
+    Candidate / public download endpoint for Safe Exam Browser (.seb) XML configuration.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        start_url = request.build_absolute_uri(f"/assessment/register?assessment={assessment.id}")
+        bek = assessment.seb_browser_exam_key or ""
+
+        seb_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>originatorVersion</key>
+    <string>SEB_Win_3.5.0</string>
+    <key>startURL</key>
+    <string>{start_url}</string>
+    <key>sendBrowserExamKey</key>
+    <true/>
+    <key>browserExamKey</key>
+    <string>{bek}</string>
+    <key>browserViewMode</key>
+    <integer>0</integer>
+    <key>allowQuit</key>
+    <true/>
+    <key>allowPreferencesWindow</key>
+    <false/>
+    <key>browserWindowAllowReload</key>
+    <false/>
+    <key>enableAltEsc</key>
+    <false/>
+    <key>enableAltF4</key>
+    <false/>
+    <key>enableAltTab</key>
+    <false/>
+    <key>enableCtrlEsc</key>
+    <false/>
+    <key>enableEsc</key>
+    <false/>
+    <key>enableF1</key>
+    <false/>
+    <key>enableF2</key>
+    <false/>
+    <key>enableF3</key>
+    <false/>
+    <key>enableF4</key>
+    <false/>
+    <key>enableF5</key>
+    <false/>
+    <key>enableF6</key>
+    <false/>
+    <key>enableF7</key>
+    <false/>
+    <key>enableF8</key>
+    <false/>
+    <key>enableF9</key>
+    <false/>
+    <key>enableF10</key>
+    <false/>
+    <key>enableF11</key>
+    <false/>
+    <key>enableF12</key>
+    <false/>
+    <key>enableRightMouse</key>
+    <false/>
+    <key>kioskMode</key>
+    <true/>
+</dict>
+</plist>"""
+
+        response = HttpResponse(seb_xml, content_type="application/seb")
+        response["Content-Disposition"] = f'attachment; filename="assessment_{assessment.code.lower()}.seb"'
+        return response
+
+
+class CandidateCameraBypassStatusView(APIView):
+    """
+    Check whether an administrator has granted a camera calibration bypass
+    for the given candidate and assessment.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        candidate_id = request.query_params.get("candidate_id")
+        assessment_id = request.query_params.get("assessment_id")
+        reg_no = request.query_params.get("register_number")
+
+        qs = AdminAccessGrant.objects.filter(grant_type="CAMERA_BYPASS", is_used=False)
+        if candidate_id:
+            qs = qs.filter(candidate_id=candidate_id)
+        elif reg_no:
+            qs = qs.filter(candidate__register_number__iexact=reg_no.strip())
+        else:
+            return Response({"bypass_granted": False})
+
+        if assessment_id:
+            qs = qs.filter(assessment_id=assessment_id)
+
+        bypass = qs.order_by("-created_at").first()
+        if bypass:
+            return Response({
+                "bypass_granted": True,
+                "reason": bypass.reason,
+                "grant_id": str(bypass.id),
+            })
+        return Response({"bypass_granted": False})
+
+
+class CandidateAttemptCalibrationView(APIView):
+    """
+    Save camera calibration data (head movement verification results) to an attempt.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, attempt_id):
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
+        if not verify_attempt_ownership(request, attempt):
+            return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
+
+        calibrated = request.data.get("camera_calibrated", True)
+        calibration_data = request.data.get("calibration_data", {})
+
+        attempt.camera_calibrated = bool(calibrated)
+        attempt.camera_calibration_data = calibration_data
+        attempt.save(update_fields=["camera_calibrated", "camera_calibration_data"])
+
+        return Response({
+            "success": True,
+            "attempt_id": str(attempt.id),
+            "camera_calibrated": attempt.camera_calibrated,
+        })

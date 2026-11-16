@@ -49,6 +49,18 @@ class ComprehensiveAssessmentTests(TestCase):
             is_active=True,
             is_verified=True,
         )
+        cit = College.objects.filter(code="CIT").first()
+        if cit:
+            cit.aliases = list(set((cit.aliases or []) + ["CIT Coimbatore"]))
+            cit.save()
+        else:
+            College.objects.create(
+                name="Coimbatore Institute of Technology",
+                code="CIT",
+                aliases=["CIT Coimbatore"],
+                is_active=True,
+                is_verified=True,
+            )
         self.config = AssessmentConfig.objects.create(
             title="CSL Initial Assessment",
             duration_minutes=60,

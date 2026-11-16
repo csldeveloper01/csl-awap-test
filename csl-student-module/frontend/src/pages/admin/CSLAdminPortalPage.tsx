@@ -832,6 +832,10 @@ export function CSLAdminPortalPage() {
                 assessments={portalAssessments}
                 colleges={portalColleges}
                 onRefreshAssessments={loadPortalAssessmentsAndColleges}
+                onNavigateToCreateAssessment={(driveId) => {
+                  setActiveTab('assessments');
+                  setSearchParams({ tab: 'assessments', create: 'true', ...(driveId ? { driveId } : {}) });
+                }}
               />
             )}
 

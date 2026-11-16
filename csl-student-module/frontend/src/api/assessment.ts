@@ -73,6 +73,10 @@ export interface CandidateAssessmentItem {
   latest_attempt_id?: string | null;
   latest_attempt_state?: string | null;
   latest_attempt_score?: number | null;
+  is_seb_required?: boolean;
+  instructions?: string;
+  passing_percentage?: number | null;
+  passing_marks?: number | null;
 }
 
 export interface CandidateAssessmentsResponse {
@@ -197,6 +201,11 @@ export interface AttemptDetailResponse {
   }>;
   questions: QuestionSnapshot[];
   assessment_token?: string;
+  is_simulation?: boolean;
+  camera_calibrated?: boolean;
+  is_seb_required?: boolean;
+  instructions?: string;
+  passing_percentage?: number | null;
 }
 
 export interface SectionBreakdown {
@@ -580,3 +589,72 @@ export const getCandidateAssessments = async (driveCode?: string): Promise<Candi
   const res = await assessmentApi.get<CandidateAssessmentsResponse>('/candidate-assessments/', { params });
   return res.data;
 };
+
+export interface CandidateLoginPayload {
+  register_number: string;
+  email?: string;
+  assessment_id?: string;
+  drive_code?: string;
+}
+
+export interface CandidateLoginResponse {
+  success: boolean;
+  message?: string;
+  token: string;
+  candidate: {
+    id: string;
+    full_name: string;
+    register_number: string;
+    email: string;
+    college: string;
+  };
+  active_attempt?: {
+    id: string;
+    state: string;
+    is_simulation?: boolean;
+  } | null;
+}
+
+export const candidateLogin = async (payload: CandidateLoginPayload): Promise<CandidateLoginResponse> => {
+  const res = await assessmentApi.post<CandidateLoginResponse>('/login/', payload);
+  if (res.data.token) {
+    sessionStorage.setItem('csl_assessment_token', res.data.token);
+    sessionStorage.setItem('assessment_token', res.data.token);
+    localStorage.setItem('csl_assessment_token', res.data.token);
+  }
+  return res.data;
+};
+
+export interface CameraBypassStatusResponse {
+  bypass_granted: boolean;
+  candidate_id?: string;
+  assessment_id?: string;
+  reason?: string;
+}
+
+export const checkCameraBypassStatus = async (
+  assessmentId: string,
+  candidateId?: string
+): Promise<CameraBypassStatusResponse> => {
+  const params: Record<string, string> = { assessment_id: assessmentId };
+  if (candidateId) params.candidate_id = candidateId;
+  const res = await assessmentApi.get<CameraBypassStatusResponse>('/camera-bypass-status/', { params });
+  return res.data;
+};
+
+export const downloadCandidateSebConfig = async (assessmentId: string): Promise<Blob> => {
+  const res = await assessmentApi.get(`/${assessmentId}/seb-config/`, { responseType: 'blob' });
+  return res.data;
+};
+
+export const updateAttemptCalibration = async (
+  attemptId: string,
+  calibrationData: {
+    status: 'COMPLETED' | 'SKIPPED_BY_ADMIN' | 'FAILED';
+    poses: Array<{ name: string; timestamp: number; confidence: number }>;
+  }
+): Promise<{ success: boolean; camera_calibrated: boolean }> => {
+  const res = await assessmentApi.post(`/attempts/${attemptId}/calibration/`, calibrationData);
+  return res.data;
+};
+

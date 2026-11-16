@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
   registerCandidate,
+  candidateLogin,
   linkCandidateToDrive,
   getStudentColleges,
   getCandidateAssessments,
@@ -137,12 +138,18 @@ export function AssessmentRegisterPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<boolean>(false);
 
-  // Flow steps: 'register' | 'select_assessment' | 'resume_attempt' | 'already_completed'
-  const [step, setStep] = useState<'register' | 'select_assessment' | 'resume_attempt' | 'already_completed' | 'recover'>('register');
+  // Flow steps: 'register' | 'select_assessment' | 'resume_attempt' | 'already_completed' | 'recover' | 'login'
+  const [step, setStep] = useState<'register' | 'select_assessment' | 'resume_attempt' | 'already_completed' | 'recover' | 'login'>('register');
   const [recoveryRegNumber, setRecoveryRegNumber] = useState('');
   const [recoveryVerification, setRecoveryVerification] = useState('');
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
+
+  // Returning Candidate Login State
+  const [loginRegNumber, setLoginRegNumber] = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [resumableAttempt, setResumableAttempt] = useState<RegisterResponse | null>(null);
   const [candidateInfo, setCandidateInfo] = useState<{
     id: string;
@@ -544,6 +551,201 @@ export function AssessmentRegisterPage() {
     sessionStorage.setItem('csl_assessment_id', assessment.id);
     navigate('/assessment/instructions');
   };
+
+  const handleLoginSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    if (!loginRegNumber.trim() || !loginEmail.trim()) {
+      setLoginError('Both your Register / Roll Number and College Email are required.');
+      return;
+    }
+    setLoginLoading(true);
+    try {
+      const res = await candidateLogin({
+        register_number: loginRegNumber.trim(),
+        email: loginEmail.trim(),
+        drive_code: driveParam || undefined,
+        assessment_id: assessmentParam || undefined,
+      });
+      if (res.active_attempt) {
+        sessionStorage.setItem('csl_attempt_id', res.active_attempt.id);
+      }
+      navigate('/assessment/instructions');
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        'Authentication failed. Please verify your Register Number and Email, or complete new registration.';
+      setLoginError(msg);
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RETURNING CANDIDATE QUICK LOGIN VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+  if (step === 'login') {
+    return (
+      <div
+        style={{
+          width: '100%',
+          minHeight: '100vh',
+          backgroundImage: `url(${backgroundImage})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          boxSizing: 'border-box',
+          padding: '24px 16px',
+          fontFamily: "'Manrope', 'Plus Jakarta Sans', system-ui, sans-serif",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '500px',
+            width: '100%',
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            borderRadius: '20px',
+            boxShadow: '0 25px 60px -15px rgba(11, 46, 111, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.85)',
+            padding: '36px 36px 32px',
+            margin: '16px 48px',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+            <img src={cslTypographyLogo} alt="Creator Space Lab" style={{ height: '36px', width: 'auto' }} />
+          </div>
+
+          <div style={{ textAlign: 'center', marginBottom: '22px' }}>
+            <span
+              style={{
+                display: 'inline-block',
+                padding: '4px 12px',
+                borderRadius: '9999px',
+                backgroundColor: 'rgba(20, 85, 184, 0.08)',
+                color: '#1455B8',
+                fontSize: '11px',
+                fontWeight: 800,
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                marginBottom: '8px',
+              }}
+            >
+              Returning Candidate
+            </span>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+              Sign In to Your Assessment
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
+              Enter your registered credentials to resume or start your eligible examination session.
+            </p>
+          </div>
+
+          {loginError && (
+            <div
+              style={{
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FECACA',
+                color: '#991B1B',
+                padding: '12px 14px',
+                borderRadius: '8px',
+                fontSize: '13px',
+                lineHeight: 1.5,
+                marginBottom: '16px',
+              }}
+            >
+              <strong>Notice:</strong> {loginError}
+            </div>
+          )}
+
+          <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0F172A', marginBottom: '6px' }}>
+                Register / Roll Number *
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. CB.EN.U4CSE21001"
+                value={loginRegNumber}
+                onChange={(e) => setLoginRegNumber(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0F172A', marginBottom: '6px' }}>
+                Registered College Email *
+              </label>
+              <input
+                type="email"
+                placeholder="e.g. student@college.edu"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              style={{
+                width: '100%',
+                padding: '12px',
+                backgroundColor: loginLoading ? '#94A3B8' : '#0052CC',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '10px',
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: loginLoading ? 'not-allowed' : 'pointer',
+                marginTop: '6px',
+              }}
+            >
+              {loginLoading ? 'Verifying Credentials...' : 'Sign In & Access Assessment →'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setLoginError('');
+                setStep('register');
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#64748B',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                marginTop: '4px',
+              }}
+            >
+              ← Back to New Candidate Registration
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PHASE 2.1 STUDENT EMERGENCY RECOVERY VIEW (WORKSTREAM 4)
@@ -1509,6 +1711,44 @@ export function AssessmentRegisterPage() {
             <strong>⚠️ Registration Notice:</strong> {error}
           </div>
         )}
+
+        {/* Quick Sign-In Option for Returning Candidates */}
+        <div
+          style={{
+            backgroundColor: '#F0FDF4',
+            border: '1px solid #BBF7D0',
+            borderRadius: '10px',
+            padding: '10px 14px',
+            marginBottom: '12px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '12.5px',
+          }}
+        >
+          <div style={{ color: '#166534' }}>
+            <strong>Already registered for this drive or assessment?</strong>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setLoginError('');
+              setStep('login');
+            }}
+            style={{
+              padding: '4px 12px',
+              backgroundColor: '#16A34A',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '11.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Sign In Here →
+          </button>
+        </div>
 
         {/* Emergency Session Recovery Banner (Phase 2.1) */}
         <div

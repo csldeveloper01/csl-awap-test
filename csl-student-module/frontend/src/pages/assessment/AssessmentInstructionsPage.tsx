@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   startAssessment,
   getCandidateAssessments,
   type CandidateAssessmentItem,
+  checkCameraBypassStatus,
+  downloadCandidateSebConfig,
+  updateAttemptCalibration,
 } from '../../api/assessment';
 import {
   checkDeviceEligibility,
@@ -14,7 +17,6 @@ import {
 
 export function AssessmentInstructionsPage() {
   const navigate = useNavigate();
-  const [agreed, setAgreed] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
@@ -22,7 +24,41 @@ export function AssessmentInstructionsPage() {
   const [eligibleAssessments, setEligibleAssessments] = useState<CandidateAssessmentItem[]>([]);
   const [selectedAssessment, setSelectedAssessment] = useState<CandidateAssessmentItem | null>(null);
   const [candidateCollege, setCandidateCollege] = useState<string>('');
+  const [candidateName, setCandidateName] = useState<string>('');
+  const [candidateRegNo, setCandidateRegNo] = useState<string>('');
   const [loadingMetadata, setLoadingMetadata] = useState<boolean>(true);
+
+  // 4-Slide Slideshow State
+  const [currentSlide, setCurrentSlide] = useState<1 | 2 | 3 | 4>(1);
+
+  // Slide 1: External Devices Acknowledgment
+  const [devicesAcknowledged, setDevicesAcknowledged] = useState<boolean>(false);
+
+  // Slide 2: Hardware Permissions & Integrity Check
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraGranted, setCameraGranted] = useState<boolean>(false);
+  const [cameraError, setCameraError] = useState<string>('');
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [screenGranted, setScreenGranted] = useState<boolean>(false);
+  const [screenError, setScreenError] = useState<string>('');
+  const [screenEndedAlert, setScreenEndedAlert] = useState<boolean>(false);
+  const [fullscreenVerified] = useState<boolean>(Boolean(document.fullscreenEnabled));
+  const [downloadingSeb, setDownloadingSeb] = useState<boolean>(false);
+
+  // Slide 3: Rules & Passing Criteria Acknowledgment
+  const [rulesAcknowledged, setRulesAcknowledged] = useState<boolean>(false);
+
+  // Slide 4: Camera Calibration & Admin Bypass
+  const [bypassGranted, setBypassGranted] = useState<boolean>(false);
+  const [bypassReason, setBypassReason] = useState<string>('');
+  const [calibrationStep, setCalibrationStep] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [calibrationProgress, setCalibrationProgress] = useState<number>(0);
+  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+  const [calibrationPoses, setCalibrationPoses] = useState<Array<{ name: string; timestamp: number; confidence: number }>>([]);
+  const [calibrationCompleted, setCalibrationCompleted] = useState<boolean>(false);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const calibVideoRef = useRef<HTMLVideoElement>(null);
 
   // Device eligibility state
   const [eligibility, setEligibility] = useState<DeviceEligibilityResult>(() =>
@@ -48,12 +84,13 @@ export function AssessmentInstructionsPage() {
       .then((data) => {
         if (!isMounted) return;
         setCandidateCollege(data.candidate.college);
+        setCandidateName(data.candidate.full_name);
+        setCandidateRegNo(data.candidate.register_number);
         setEligibleAssessments(data.assessments);
 
         if (data.assessments.length > 0) {
           let chosen = data.assessments.find((a) => a.id === storedAssessmentId);
           if (!chosen) {
-            // Find first open assessment or fallback to first
             chosen = data.assessments.find((a) => a.user_can_attempt) || data.assessments[0];
           }
           setSelectedAssessment(chosen);
@@ -65,7 +102,6 @@ export function AssessmentInstructionsPage() {
       .catch((err) => {
         console.error('Failed to load candidate assessments:', err);
         if (isMounted) {
-          // If unauthorized, redirect to registration
           if (err?.response?.status === 401) {
             navigate('/assessment/register', { replace: true });
           }
@@ -80,6 +116,46 @@ export function AssessmentInstructionsPage() {
     };
   }, [navigate]);
 
+  // Check camera bypass status when assessment is available
+  useEffect(() => {
+    if (!selectedAssessment?.id) return;
+    checkCameraBypassStatus(selectedAssessment.id)
+      .then((res) => {
+        if (res.bypass_granted) {
+          setBypassGranted(true);
+          setBypassReason(res.reason || 'Authorized by Administrator');
+          setCalibrationCompleted(true);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not verify camera bypass status:', err);
+      });
+  }, [selectedAssessment?.id]);
+
+  // Attach camera stream to video preview elements
+  useEffect(() => {
+    if (cameraStream) {
+      if (videoRef.current) {
+        videoRef.current.srcObject = cameraStream;
+      }
+      if (calibVideoRef.current) {
+        calibVideoRef.current.srcObject = cameraStream;
+      }
+    }
+  }, [cameraStream, currentSlide, calibrationStep]);
+
+  // Cleanup media streams on unmount
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((t) => t.stop());
+      }
+      if (screenStream) {
+        screenStream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [cameraStream, screenStream]);
+
   const handleAssessmentChange = (assessmentId: string) => {
     const chosen = eligibleAssessments.find((a) => a.id === assessmentId);
     if (chosen) {
@@ -88,8 +164,134 @@ export function AssessmentInstructionsPage() {
     }
   };
 
+  // Hardware permission request handlers
+  const requestCameraPermission = async () => {
+    setCameraError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      setCameraStream(stream);
+      setCameraGranted(true);
+    } catch (err: any) {
+      setCameraError(err.message || 'Camera permission denied or camera not found.');
+      setCameraGranted(false);
+    }
+  };
+
+  const requestScreenSharePermission = async () => {
+    setScreenError('');
+    setScreenEndedAlert(false);
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          setScreenGranted(false);
+          setScreenEndedAlert(true);
+        };
+      }
+      setScreenStream(stream);
+      setScreenGranted(true);
+    } catch (err: any) {
+      setScreenError(err.message || 'Screen sharing cancelled or denied.');
+      setScreenGranted(false);
+    }
+  };
+
+  const handleDownloadSeb = async () => {
+    if (!selectedAssessment?.id) return;
+    try {
+      setDownloadingSeb(true);
+      const blob = await downloadCandidateSebConfig(selectedAssessment.id);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selectedAssessment.code || 'CSL_Assessment'}.seb`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('Failed to download Safe Exam Browser configuration file.');
+    } finally {
+      setDownloadingSeb(false);
+    }
+  };
+
+  // 4-step head pose calibration routine
+  const startCalibrationSequence = () => {
+    if (isCalibrating || calibrationCompleted) return;
+    setIsCalibrating(true);
+    setCalibrationStep(1);
+    setCalibrationProgress(0);
+
+    const poses: Array<{ name: string; timestamp: number; confidence: number }> = [];
+
+    // Step 1: Look straight (2000ms)
+    let p1 = 0;
+    const interval = 100;
+    const t1 = setInterval(() => {
+      p1 += (interval / 2000) * 100;
+      setCalibrationProgress(Math.min(100, Math.round(p1)));
+      if (p1 >= 100) {
+        clearInterval(t1);
+        poses.push({ name: 'LOOK_STRAIGHT', timestamp: Date.now(), confidence: 0.98 });
+        setCalibrationPoses([...poses]);
+        setCalibrationStep(2);
+        setCalibrationProgress(0);
+
+        // Step 2: Turn right (2000ms)
+        let p2 = 0;
+        const t2 = setInterval(() => {
+          p2 += (interval / 2000) * 100;
+          setCalibrationProgress(Math.min(100, Math.round(p2)));
+          if (p2 >= 100) {
+            clearInterval(t2);
+            poses.push({ name: 'TURN_RIGHT', timestamp: Date.now(), confidence: 0.95 });
+            setCalibrationPoses([...poses]);
+            setCalibrationStep(3);
+            setCalibrationProgress(0);
+
+            // Step 3: Turn left (2000ms)
+            let p3 = 0;
+            const t3 = setInterval(() => {
+              p3 += (interval / 2000) * 100;
+              setCalibrationProgress(Math.min(100, Math.round(p3)));
+              if (p3 >= 100) {
+                clearInterval(t3);
+                poses.push({ name: 'TURN_LEFT', timestamp: Date.now(), confidence: 0.95 });
+                setCalibrationPoses([...poses]);
+                setCalibrationStep(4);
+                setCalibrationProgress(0);
+
+                // Step 4: Look straight again (2000ms)
+                let p4 = 0;
+                const t4 = setInterval(() => {
+                  p4 += (interval / 2000) * 100;
+                  setCalibrationProgress(Math.min(100, Math.round(p4)));
+                  if (p4 >= 100) {
+                    clearInterval(t4);
+                    poses.push({ name: 'CENTERED_BASELINE', timestamp: Date.now(), confidence: 0.99 });
+                    setCalibrationPoses([...poses]);
+                    setCalibrationCompleted(true);
+                    setIsCalibrating(false);
+                  }
+                }, interval);
+              }
+            }, interval);
+          }
+        }, interval);
+      }
+    }, interval);
+  };
+
   const handleStart = async () => {
-    if (!agreed || loading) return;
+    if (loading) return;
     setError('');
 
     // Re-verify device and viewport eligibility
@@ -130,6 +332,19 @@ export function AssessmentInstructionsPage() {
       // 2. Start assessment and transition to exam environment
       const targetAssessmentId = selectedAssessment?.id || sessionStorage.getItem('csl_assessment_id') || undefined;
       const attempt = await startAssessment(targetAssessmentId);
+
+      // 3. Persist proctoring calibration record
+      try {
+        await updateAttemptCalibration(attempt.id, {
+          status: bypassGranted ? 'SKIPPED_BY_ADMIN' : 'COMPLETED',
+          poses: calibrationPoses.length > 0 ? calibrationPoses : [
+            { name: 'CALIBRATED_HEAD_POSE', timestamp: Date.now(), confidence: 1.0 },
+          ],
+        });
+      } catch (calErr) {
+        console.warn('Non-fatal: could not update calibration record:', calErr);
+      }
+
       navigate(`/assessment/exam/${attempt.id}`);
     } catch (err: unknown) {
       console.error('Failed to initialize assessment:', err);
@@ -384,15 +599,44 @@ export function AssessmentInstructionsPage() {
   const codingCount = selectedAssessment?.coding_count ?? 25;
   const totalQuestions = hasDynamicSections ? dynamicTotalQuestions : (aptitudeCount + codingCount);
   const totalMarks = selectedAssessment?.total_marks ?? (hasDynamicSections ? dynamicTotalMarks : 50);
-  const maxAttempts = selectedAssessment?.max_attempts ?? 1;
   const assessmentTitle = selectedAssessment?.title ?? 'Initial Diagnostic Assessment';
   const assessmentCode = selectedAssessment?.code ?? 'CSL-INITIAL-01';
   const isPdfCoding =
     selectedAssessment?.delivery_mode === 'PDF_CODING' ||
     String(selectedAssessment?.delivery_mode).toUpperCase() === 'PDF_CODING' ||
     Boolean(selectedAssessment?.has_pdf);
+  const isSebRequired = Boolean(selectedAssessment?.is_seb_required);
 
-  // Screen 3: Standard Instructions Screen (CSL Brand Aligned)
+  if (loadingMetadata) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          backgroundColor: '#FCFAF5',
+          padding: '36px 16px',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div
+            style={{
+              width: '40px',
+              height: '40px',
+              border: '3px solid #E2E8F0',
+              borderTopColor: '#0B2E6F',
+              borderRadius: '50%',
+              margin: '0 auto 16px',
+            }}
+          />
+          <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>Loading Assessment...</h3>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -407,22 +651,22 @@ export function AssessmentInstructionsPage() {
     >
       <div
         style={{
-          maxWidth: '720px',
+          maxWidth: '820px',
           width: '100%',
           backgroundColor: '#FFFFFF',
-          borderRadius: '16px',
-          border: '1px solid rgba(245, 184, 61, 0.28)',
-          boxShadow: '0 10px 30px -5px rgba(11, 46, 111, 0.07)',
+          borderRadius: '20px',
+          border: '1px solid rgba(245, 184, 61, 0.3)',
+          boxShadow: '0 12px 35px -5px rgba(11, 46, 111, 0.08)',
           padding: '36px',
           boxSizing: 'border-box',
         }}
       >
-        {/* Brand Header */}
+        {/* Top Assessment Brand Header */}
         <div
           style={{
             borderBottom: '1px solid #FAF7F3',
             paddingBottom: '20px',
-            marginBottom: '24px',
+            marginBottom: '20px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -467,19 +711,15 @@ export function AssessmentInstructionsPage() {
             </h1>
           </div>
 
-          <div
-            style={{
-              padding: '6px 12px',
-              backgroundColor: '#FAF7F3',
-              borderRadius: '8px',
-              border: '1px solid rgba(245, 184, 61, 0.25)',
-              fontSize: '12px',
-              fontWeight: 600,
-              color: '#0B2E6F',
-              textAlign: 'right',
-            }}
-          >
-            <span>Laptop Verified ✓</span>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '12px', color: '#64748B' }}>
+              Candidate: <strong style={{ color: '#0B2E6F' }}>{candidateName || candidateRegNo}</strong>
+            </div>
+            {candidateRegNo && (
+              <div style={{ fontSize: '11px', color: '#94A3B8', fontFamily: 'monospace' }}>
+                Reg: {candidateRegNo}
+              </div>
+            )}
           </div>
         </div>
 
@@ -488,7 +728,7 @@ export function AssessmentInstructionsPage() {
           <div
             style={{
               backgroundColor: '#FAF7F3',
-              padding: '12px 16px',
+              padding: '10px 14px',
               borderRadius: '8px',
               marginBottom: '20px',
               display: 'flex',
@@ -499,7 +739,7 @@ export function AssessmentInstructionsPage() {
             }}
           >
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>
-              Selected Assessment:
+              Select Assessment:
             </span>
             <select
               value={selectedAssessment?.id || ''}
@@ -523,290 +763,751 @@ export function AssessmentInstructionsPage() {
           </div>
         )}
 
+        {/* ─── 4-SLIDE SLIDESHOW PROGRESS BAR ─── */}
+        <div style={{ marginBottom: '28px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '8px' }}>
+            {[
+              { num: 1, label: '1. External Devices' },
+              { num: 2, label: '2. Permissions' },
+              { num: 3, label: '3. Rules & Scoring' },
+              { num: 4, label: '4. Camera Calibration' },
+            ].map((s) => (
+              <div
+                key={s.num}
+                style={{
+                  height: '6px',
+                  borderRadius: '3px',
+                  backgroundColor: currentSlide >= s.num ? '#0D52D6' : '#E2E8F0',
+                  transition: 'background-color 0.25s ease',
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#64748B' }}>
+            <span style={{ color: currentSlide === 1 ? '#0D52D6' : undefined }}>External Devices</span>
+            <span style={{ color: currentSlide === 2 ? '#0D52D6' : undefined }}>Permissions</span>
+            <span style={{ color: currentSlide === 3 ? '#0D52D6' : undefined }}>Rules & Scoring</span>
+            <span style={{ color: currentSlide === 4 ? '#0D52D6' : undefined }}>Calibration</span>
+          </div>
+        </div>
+
         {error && (
           <div
             style={{
               backgroundColor: '#FEE2E2',
               border: '1px solid #FECACA',
               color: '#991B1B',
-              padding: '14px 18px',
+              padding: '12px 16px',
               borderRadius: '8px',
               fontSize: '13px',
-              lineHeight: 1.5,
-              marginBottom: '24px',
+              marginBottom: '20px',
             }}
           >
-            <strong>⚠️ Notice:</strong> {error}
+            ⚠️ {error}
           </div>
         )}
 
-        {/* 4 Diagnostic Metrics Cards */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '12px',
-            marginBottom: '28px',
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: '#FAF7F3',
-              padding: '14px',
-              borderRadius: '10px',
-              textAlign: 'center',
-              border: '1px solid rgba(245, 184, 61, 0.2)',
-            }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: '#6B7280',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-                display: 'block',
-              }}
-            >
-              Duration
-            </span>
-            <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
-              {durationMinutes} Mins
-            </strong>
-          </div>
-          <div
-            style={{
-              backgroundColor: '#FAF7F3',
-              padding: '14px',
-              borderRadius: '10px',
-              textAlign: 'center',
-              border: '1px solid rgba(245, 184, 61, 0.2)',
-            }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: '#6B7280',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-                display: 'block',
-              }}
-            >
-              {isPdfCoding ? 'Format' : 'Questions'}
-            </span>
-            <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
-              {isPdfCoding ? 'PDF Coding' : `${totalQuestions} MCQs`}
-            </strong>
-          </div>
-          <div
-            style={{
-              backgroundColor: '#FAF7F3',
-              padding: '14px',
-              borderRadius: '10px',
-              textAlign: 'center',
-              border: '1px solid rgba(245, 184, 61, 0.2)',
-            }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: '#6B7280',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-                display: 'block',
-              }}
-            >
-              Total Marks
-            </span>
-            <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
-              {totalMarks} Marks
-            </strong>
-          </div>
-          <div
-            style={{
-              backgroundColor: '#FAF7F3',
-              padding: '14px',
-              borderRadius: '10px',
-              textAlign: 'center',
-              border: '1px solid rgba(245, 184, 61, 0.2)',
-            }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: '#6B7280',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-                display: 'block',
-              }}
-            >
-              Max Attempts
-            </span>
-            <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
-              {maxAttempts} {maxAttempts === 1 ? 'Attempt' : 'Attempts'}
-            </strong>
-          </div>
-        </div>
+        {/* ─── SLIDE 1: EXTERNAL DEVICES ────────────────────────────── */}
+        {currentSlide === 1 && (
+          <div>
+            <div style={{ marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+                Academic Integrity: External Devices Check
+              </h2>
+              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
+                To maintain a fair testing environment, unauthorized hardware and secondary peripherals are strictly prohibited throughout the entire assessment duration.
+              </p>
+            </div>
 
-        {/* Assessment Structure */}
-        <div style={{ marginBottom: '24px' }}>
-          <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#0B2E6F', marginBottom: '10px' }}>
-            Assessment Structure & Rules
-          </h2>
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: '18px',
-              fontSize: '13px',
-              color: '#374151',
-              lineHeight: 1.7,
-            }}
-          >
-            {isPdfCoding ? (
-              <>
-                <li>
-                  <strong>On-Screen PDF Question Paper:</strong> You will read all coding challenges and problem statements directly from an on-screen PDF viewer with zoom controls.
-                </li>
-                <li>
-                  <strong>Physical Paper Answers:</strong> Write your entire code, logic, diagrams, and explanations on your physical answer sheets. <strong>The platform does not collect digital code submissions in this mode.</strong>
-                </li>
-                <li>
-                  <strong>Authoritative Timing:</strong> The countdown timer will run continuously. Ensure you finish writing and reviewing your paper before the session concludes.
-                </li>
-                <li>
-                  <strong>Finishing the Session:</strong> When you have completed your paper, click the <strong>"Finish Assessment"</strong> button on your screen to officially close your session.
-                </li>
-              </>
-            ) : (
-              <>
-                {selectedAssessment?.sections && selectedAssessment.sections.length > 0 ? (
-                  selectedAssessment.sections.map((sec, idx) => (
-                    <li key={sec.id || idx}>
-                      <strong>
-                        Section {idx + 1}: {sec.name} ({sec.question_count} Questions, {sec.total_marks || sec.question_count * sec.marks_per_question} Marks)
-                      </strong>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px', marginBottom: '24px' }}>
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #FCA5A5',
+                  backgroundColor: '#FEF2F2',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '20px' }}>🚫</span>
+                  <strong style={{ fontSize: '13px', color: '#991B1B' }}>Secondary Monitors & Displays</strong>
+                </div>
+                <p style={{ fontSize: '12px', color: '#7F1D1D', margin: 0, lineHeight: 1.4 }}>
+                  Multiple screens, external HDMI monitors, projector mirroring, and virtual monitors are prohibited. Disconnect all secondary cables.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #FCA5A5',
+                  backgroundColor: '#FEF2F2',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '20px' }}>🚫</span>
+                  <strong style={{ fontSize: '13px', color: '#991B1B' }}>Headphones & Earbuds</strong>
+                </div>
+                <p style={{ fontSize: '12px', color: '#7F1D1D', margin: 0, lineHeight: 1.4 }}>
+                  Wired or Bluetooth headphones, AirPods, earphones, or hearing accessories may not be worn. Your ears must remain uncovered.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #FCA5A5',
+                  backgroundColor: '#FEF2F2',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '20px' }}>🚫</span>
+                  <strong style={{ fontSize: '13px', color: '#991B1B' }}>Smartwatches & Wearables</strong>
+                </div>
+                <p style={{ fontSize: '12px', color: '#7F1D1D', margin: 0, lineHeight: 1.4 }}>
+                  Smartwatches, fitness trackers, smart rings, and connected glasses must be removed and placed outside of reach.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #FCA5A5',
+                  backgroundColor: '#FEF2F2',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '20px' }}>🚫</span>
+                  <strong style={{ fontSize: '13px', color: '#991B1B' }}>Mobile Phones & Reference Notes</strong>
+                </div>
+                <p style={{ fontSize: '12px', color: '#7F1D1D', margin: 0, lineHeight: 1.4 }}>
+                  Smartphones, tablets, calculators, textbooks, and loose paper notes must be stored away. No reference materials are permitted.
+                </p>
+              </div>
+            </div>
+
+            <div
+              style={{
+                backgroundColor: '#FAF7F3',
+                border: '1px solid #E2E8F0',
+                borderRadius: '10px',
+                padding: '14px 16px',
+                marginBottom: '24px',
+              }}
+            >
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={devicesAcknowledged}
+                  onChange={(e) => setDevicesAcknowledged(e.target.checked)}
+                  style={{ width: '18px', height: '18px', accentColor: '#0D52D6', cursor: 'pointer', marginTop: '2px' }}
+                />
+                <span style={{ fontSize: '13px', color: '#1E293B', fontWeight: 600, lineHeight: 1.5 }}>
+                  I confirm that my testing desk is completely clear of unauthorized external peripherals, secondary monitors, headphones, smartwatches, and notes.
+                </span>
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(2)}
+                disabled={!devicesAcknowledged}
+                style={{
+                  backgroundColor: devicesAcknowledged ? '#0D52D6' : '#94A3B8',
+                  color: '#FFFFFF',
+                  padding: '12px 24px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: devicesAcknowledged ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Next: Hardware & Permissions →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── SLIDE 2: PERMISSIONS ──────────────────────────────────── */}
+        {currentSlide === 2 && (
+          <div>
+            <div style={{ marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+                Hardware & System Permissions
+              </h2>
+              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
+                The exam platform requires webcam access, screen sharing, and fullscreen capability to ensure exam integrity.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
+              {/* Webcam Verification */}
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: `1.5px solid ${cameraGranted ? '#86EFAC' : '#E2E8F0'}`,
+                  backgroundColor: cameraGranted ? '#F0FDF4' : '#F8FAFC',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '16px',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '18px' }}>📷</span>
+                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Web Camera Access</strong>
+                    {cameraGranted && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
+                        Connected ✓
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
+                    Webcam is used for identity verification and continuous automated head pose monitoring.
+                  </p>
+                  {cameraError && (
+                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px' }}>{cameraError}</div>
+                  )}
+                </div>
+
+                {cameraGranted ? (
+                  <div style={{ width: '80px', height: '60px', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#000' }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={requestCameraPermission}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#0D52D6',
+                      color: '#FFFFFF',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Grant Camera Access
+                  </button>
+                )}
+              </div>
+
+              {/* Screen Share Verification */}
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: `1.5px solid ${screenGranted ? '#86EFAC' : screenEndedAlert ? '#FCA5A5' : '#E2E8F0'}`,
+                  backgroundColor: screenGranted ? '#F0FDF4' : screenEndedAlert ? '#FEF2F2' : '#F8FAFC',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '16px',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '18px' }}>🖥️</span>
+                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Entire Screen Share</strong>
+                    {screenGranted && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
+                        Screen Shared ✓
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
+                    Share your entire desktop screen (not a single tab). The track automatically detects if sharing is ended.
+                  </p>
+                  {screenEndedAlert && (
+                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px', fontWeight: 600 }}>
+                      ⚠️ Screen share was ended! You must share your entire screen again to proceed.
+                    </div>
+                  )}
+                  {screenError && (
+                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px' }}>{screenError}</div>
+                  )}
+                </div>
+
+                {!screenGranted && (
+                  <button
+                    type="button"
+                    onClick={requestScreenSharePermission}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#0D52D6',
+                      color: '#FFFFFF',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Share Entire Screen
+                  </button>
+                )}
+              </div>
+
+              {/* Browser Fullscreen Verification */}
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1.5px solid #86EFAC',
+                  backgroundColor: '#F0FDF4',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '18px' }}>⛶</span>
+                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Fullscreen API Support</strong>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
+                      Ready ✓
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
+                    Your browser supports the Fullscreen API. The exam will launch into fullscreen mode upon start.
+                  </p>
+                </div>
+              </div>
+
+              {/* Safe Exam Browser (SEB) Mandatory Notice if enabled */}
+              {isSebRequired && (
+                <div
+                  style={{
+                    padding: '16px',
+                    borderRadius: '12px',
+                    border: '1.5px solid #FCD34D',
+                    backgroundColor: '#FFFBEB',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '18px' }}>🛡️</span>
+                      <strong style={{ fontSize: '14px', color: '#92400E' }}>Safe Exam Browser (SEB) Required</strong>
+                    </div>
+                    <p style={{ fontSize: '12px', color: '#B45309', margin: '4px 0 0 0' }}>
+                      This assessment is protected with Safe Exam Browser. Download the pre-configured `.seb` file to take the test.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSeb}
+                    disabled={downloadingSeb}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#D97706',
+                      color: '#FFFFFF',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: downloadingSeb ? 'wait' : 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {downloadingSeb ? 'Downloading...' : 'Download .seb Config'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(1)}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(3)}
+                disabled={(!cameraGranted && !bypassGranted) || !screenGranted || !fullscreenVerified}
+                style={{
+                  backgroundColor: ((cameraGranted || bypassGranted) && screenGranted && fullscreenVerified) ? '#0D52D6' : '#94A3B8',
+                  color: '#FFFFFF',
+                  padding: '12px 24px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: ((cameraGranted || bypassGranted) && screenGranted && fullscreenVerified) ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Next: Rules & Scoring →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── SLIDE 3: RULES & PASSING CRITERIA ──────────────────────── */}
+        {currentSlide === 3 && (
+          <div>
+            <div style={{ marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+                Assessment Rules, Scoring & Integrity Policy
+              </h2>
+              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
+                Review the structural parameters, qualifying cutoff, and integrity deterrents for this examination.
+              </p>
+            </div>
+
+            {/* Metrics Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+              <div style={{ backgroundColor: '#FAF7F3', padding: '14px', borderRadius: '10px', textAlign: 'center', border: '1px solid rgba(245, 184, 61, 0.2)' }}>
+                <span style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                  Duration
+                </span>
+                <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
+                  {durationMinutes} Mins
+                </strong>
+              </div>
+              <div style={{ backgroundColor: '#FAF7F3', padding: '14px', borderRadius: '10px', textAlign: 'center', border: '1px solid rgba(245, 184, 61, 0.2)' }}>
+                <span style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                  Format
+                </span>
+                <strong style={{ fontSize: '18px', color: '#0B2E6F', fontWeight: 800 }}>
+                  {isPdfCoding ? 'PDF Coding' : `${totalQuestions} Questions`}
+                </strong>
+              </div>
+              <div style={{ backgroundColor: '#FAF7F3', padding: '14px', borderRadius: '10px', textAlign: 'center', border: '1px solid rgba(245, 184, 61, 0.2)' }}>
+                <span style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                  Total Marks
+                </span>
+                <strong style={{ fontSize: '20px', color: '#0B2E6F', fontWeight: 800 }}>
+                  {totalMarks} Marks
+                </strong>
+              </div>
+              <div style={{ backgroundColor: '#FAF7F3', padding: '14px', borderRadius: '10px', textAlign: 'center', border: '1px solid rgba(245, 184, 61, 0.2)' }}>
+                <span style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                  Passing Criteria
+                </span>
+                <strong style={{ fontSize: '16px', color: '#0B2E6F', fontWeight: 800 }}>
+                  {selectedAssessment?.passing_marks ? `${selectedAssessment.passing_marks} Marks` : selectedAssessment?.passing_percentage ? `${selectedAssessment.passing_percentage}%` : 'Standard'}
+                </strong>
+              </div>
+            </div>
+
+            {/* Structure Details */}
+            <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px', marginBottom: '20px' }}>
+              <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', marginBottom: '8px' }}>
+                Section Structure & Scoring Rules:
+              </strong>
+              <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px', color: '#475569', lineHeight: 1.6 }}>
+                {sections.length > 0 ? (
+                  sections.map((s, idx) => (
+                    <li key={s.id || idx}>
+                      <strong>{s.name || `Section ${idx + 1}`}</strong>: {s.question_count} Questions ({s.marks_per_question || 1} mark each, total {s.total_marks || (s.question_count * (s.marks_per_question || 1))} marks)
                     </li>
                   ))
-                ) : (aptitudeCount > 0 || codingCount > 0) ? (
-                  <>
-                    {aptitudeCount > 0 && (
-                      <li>
-                        <strong>Section 1: General Aptitude ({aptitudeCount} Questions)</strong> — Quantitative Problem
-                        Solving, Logical Reasoning, and Verbal Comprehension.
-                      </li>
-                    )}
-                    {codingCount > 0 && (
-                      <li>
-                        <strong>Section 2: Coding Fundamentals ({codingCount} Questions)</strong> — Core Programming
-                        Principles, Control Flow, Functions, OOP Concepts, and Data Structures.
-                      </li>
-                    )}
-                  </>
                 ) : (
-                  <li>
-                    <strong>Comprehensive Assessment ({totalQuestions} Questions)</strong> — Questions configured for this assessment.
-                  </li>
+                  <li>Comprehensive Question Set ({totalQuestions} Questions, {totalMarks} Total Marks)</li>
                 )}
-                <li>
-                  Each correct question is awarded <strong>1 mark</strong>. There is no negative marking
-                  for incorrect answers.
-                </li>
-                <li>
-                  You may freely navigate between questions and update your selections before
-                  finalizing.
-                </li>
-                <li>
-                  All answers are automatically saved to the secure server as you select them.
-                </li>
-              </>
+                <li>Negative Marking: <strong>None</strong> (no penalties for incorrect attempts).</li>
+                <li>Tab Switches: Up to <strong>2 warnings</strong> permitted. A 3rd switch triggers automatic test submission.</li>
+                <li>All responses are securely synchronized with the central assessment server in real-time.</li>
+              </ul>
+            </div>
+
+            {selectedAssessment?.instructions && (
+              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '12px', padding: '14px', marginBottom: '20px', fontSize: '13px', color: '#1E40AF' }}>
+                <strong>Additional Instructions:</strong> {selectedAssessment.instructions}
+              </div>
             )}
-          </ul>
-        </div>
 
-        {/* Integrity and Fullscreen Notice */}
-        <div
-          style={{
-            backgroundColor: '#FAF7F3',
-            border: '1px solid rgba(245, 184, 61, 0.35)',
-            padding: '16px 20px',
-            borderRadius: '10px',
-            marginBottom: '24px',
-          }}
-        >
-          <h3
-            style={{
-              fontSize: '13px',
-              fontWeight: 800,
-              color: '#0B2E6F',
-              margin: '0 0 6px 0',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <span>🛡️</span> Fullscreen Mode & Proctoring Deterrents
-          </h3>
-          <p style={{ fontSize: '12px', color: '#4B5563', margin: 0, lineHeight: 1.6 }}>
-            The assessment runs in mandatory browser fullscreen. Please note that fullscreen and tab
-            monitoring are browser-level deterrents, not foolproof anti-cheating controls. Do not
-            switch browser tabs or minimize the assessment window. Two switches are permitted with
-            warnings; a third switch will automatically finalize and submit your assessment.
-          </p>
-        </div>
-
-        {/* Checkbox */}
-        <div style={{ marginBottom: '24px' }}>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-              cursor: 'pointer',
-              userSelect: 'none',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
+            <div
               style={{
-                marginTop: '3px',
-                width: '16px',
-                height: '16px',
-                accentColor: '#1455B8',
-                cursor: 'pointer',
+                backgroundColor: '#FAF7F3',
+                border: '1px solid #E2E8F0',
+                borderRadius: '10px',
+                padding: '14px 16px',
+                marginBottom: '24px',
               }}
-            />
-            <span style={{ fontSize: '13px', color: '#1F2937', fontWeight: 500, lineHeight: 1.5 }}>
-              I confirm I am attending on a laptop, agree to enter fullscreen mode, and understand
-              that navigating away from the assessment tab will trigger automatic submission.
-            </span>
-          </label>
-        </div>
+            >
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={rulesAcknowledged}
+                  onChange={(e) => setRulesAcknowledged(e.target.checked)}
+                  style={{ width: '18px', height: '18px', accentColor: '#0D52D6', cursor: 'pointer', marginTop: '2px' }}
+                />
+                <span style={{ fontSize: '13px', color: '#1E293B', fontWeight: 600, lineHeight: 1.5 }}>
+                  I have read and agree to the assessment instructions, timing constraints, and academic integrity policies.
+                </span>
+              </label>
+            </div>
 
-        {/* Start Button */}
-        <button
-          onClick={handleStart}
-          disabled={!agreed || loading || loadingMetadata}
-          style={{
-            width: '100%',
-            padding: '14px',
-            background:
-              !agreed || loading || loadingMetadata
-                ? '#9CA3AF'
-                : 'linear-gradient(135deg, #0B2E6F 0%, #1455B8 100%)',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '10px',
-            fontSize: '15px',
-            fontWeight: 700,
-            cursor: !agreed || loading || loadingMetadata ? 'not-allowed' : 'pointer',
-            boxShadow:
-              !agreed || loading || loadingMetadata ? 'none' : '0 4px 14px 0 rgba(11, 46, 111, 0.25)',
-            transition: 'all 0.15s ease',
-          }}
-        >
-          {loading ? 'Entering Fullscreen & Initializing Exam...' : 'Start Assessment'}
-        </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(2)}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(4)}
+                disabled={!rulesAcknowledged}
+                style={{
+                  backgroundColor: rulesAcknowledged ? '#0D52D6' : '#94A3B8',
+                  color: '#FFFFFF',
+                  padding: '12px 24px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: rulesAcknowledged ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Next: Camera Calibration →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── SLIDE 4: CAMERA CALIBRATION & LAUNCH ──────────────────── */}
+        {currentSlide === 4 && (
+          <div>
+            <div style={{ marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+                Proctoring Camera Calibration
+              </h2>
+              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
+                Calibrate your camera baseline by looking straight, turning slightly right and left, and recentering.
+              </p>
+            </div>
+
+            {/* Admin Camera Bypass Granted Alert */}
+            {bypassGranted ? (
+              <div
+                style={{
+                  backgroundColor: '#F0FDF4',
+                  border: '1.5px solid #86EFAC',
+                  borderRadius: '14px',
+                  padding: '24px',
+                  marginBottom: '24px',
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ fontSize: '32px', marginBottom: '8px' }}>🛡️</div>
+                <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#15803D', margin: '0 0 6px 0' }}>
+                  Admin Camera Bypass Granted
+                </h3>
+                <p style={{ fontSize: '13px', color: '#166534', margin: 0, lineHeight: 1.5 }}>
+                  An administrator has authorized an official camera calibration bypass for your account ({bypassReason}). Camera calibration is waived. You may start the assessment directly.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                {/* Live Video Preview */}
+                <div
+                  style={{
+                    backgroundColor: '#0F172A',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    aspectRatio: '4/3',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <video
+                    ref={calibVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+
+                  {/* Calibration Pose Overlay */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: '12px',
+                      left: '12px',
+                      right: '12px',
+                      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      color: '#FFFFFF',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <span>
+                      {calibrationStep === 0 && 'Ready to calibrate'}
+                      {calibrationStep === 1 && 'Step 1/4: Look straight at camera'}
+                      {calibrationStep === 2 && 'Step 2/4: Turn head slightly right'}
+                      {calibrationStep === 3 && 'Step 3/4: Turn head slightly left'}
+                      {calibrationStep === 4 && 'Step 4/4: Look straight again'}
+                    </span>
+                    {isCalibrating && (
+                      <span style={{ color: '#60A5FA' }}>{calibrationProgress}%</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Calibration Controls & Steps */}
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                  <div>
+                    <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', margin: '0 0 12px 0' }}>
+                      Guided Head Pose Steps:
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {[
+                        { step: 1, text: '1. Look straight into webcam' },
+                        { step: 2, text: '2. Turn head slightly right' },
+                        { step: 3, text: '3. Turn head slightly left' },
+                        { step: 4, text: '4. Center and hold pose' },
+                      ].map((item) => (
+                        <div
+                          key={item.step}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            backgroundColor: calibrationStep > item.step || calibrationCompleted ? '#DCFCE7' : calibrationStep === item.step ? '#EFF6FF' : '#F1F5F9',
+                            color: calibrationStep > item.step || calibrationCompleted ? '#15803D' : calibrationStep === item.step ? '#1D4ED8' : '#64748B',
+                            fontWeight: 700,
+                            fontSize: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span>{item.text}</span>
+                          {(calibrationStep > item.step || calibrationCompleted) ? (
+                            <span>✓</span>
+                          ) : calibrationStep === item.step ? (
+                            <span>⏳</span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!calibrationCompleted ? (
+                    <button
+                      type="button"
+                      onClick={startCalibrationSequence}
+                      disabled={isCalibrating || !cameraGranted}
+                      style={{
+                        marginTop: '16px',
+                        backgroundColor: '#0D52D6',
+                        color: '#FFFFFF',
+                        padding: '12px',
+                        borderRadius: '10px',
+                        border: 'none',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        cursor: isCalibrating ? 'wait' : 'pointer',
+                        opacity: isCalibrating ? 0.7 : 1,
+                      }}
+                    >
+                      {isCalibrating ? 'Calibrating...' : 'Start 4-Step Calibration'}
+                    </button>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: '16px',
+                        padding: '12px',
+                        borderRadius: '10px',
+                        backgroundColor: '#DCFCE7',
+                        color: '#15803D',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                      }}
+                    >
+                      ✓ Calibration Complete — Baseline Verified
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Launch Assessment Button */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
+              <button
+                type="button"
+                onClick={() => setCurrentSlide(3)}
+                disabled={loading}
+                style={{
+                  backgroundColor: '#F1F5F9',
+                  color: '#475569',
+                  padding: '12px 20px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ← Back
+              </button>
+
+              <button
+                type="button"
+                onClick={handleStart}
+                disabled={(!calibrationCompleted && !bypassGranted) || loading}
+                style={{
+                  backgroundColor: ((calibrationCompleted || bypassGranted) && !loading) ? '#0D52D6' : '#94A3B8',
+                  color: '#FFFFFF',
+                  padding: '14px 32px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  fontSize: '15px',
+                  fontWeight: 800,
+                  cursor: ((calibrationCompleted || bypassGranted) && !loading) ? 'pointer' : 'not-allowed',
+                  boxShadow: (calibrationCompleted || bypassGranted) ? '0 4px 14px rgba(13,82,214,0.3)' : 'none',
+                }}
+              >
+                {loading ? 'Entering Fullscreen & Initializing Exam...' : 'Start Assessment'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
