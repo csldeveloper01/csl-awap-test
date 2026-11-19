@@ -28,7 +28,12 @@ from .models import (
     DriveInvitation,
     AssessmentAuditLog,
     AdminAccessGrant,
+    ProctoringSession,
+    ProctoringCalibration,
+    ProctoringEvent,
+    ProctoringEvidence,
 )
+from .storage_service import ProctoringEvidenceStorageService
 from .serializers import (
     CandidateRegistrationSerializer,
     StudentCollegeOptionSerializer,
@@ -37,6 +42,11 @@ from .serializers import (
     AnswerSaveSerializer,
     IntegrityEventSerializer,
     AssessmentResultSerializer,
+    ProctoringSessionSerializer,
+    ProctoringEventInputSerializer,
+    ProctoringEventOutputSerializer,
+    ProctoringCalibrationSerializer,
+    ProctoringEvidenceOutputSerializer,
 )
 from .services import (
     start_assessment_for_candidate,
@@ -2168,3 +2178,404 @@ class CandidateAttemptCalibrationView(APIView):
             "attempt_id": str(attempt.id),
             "camera_calibrated": attempt.camera_calibrated,
         })
+
+
+# =============================================================================
+# CSL SENTINEL PROCTORING CANDIDATE VIEWS
+# =============================================================================
+
+class ProctoringSessionInitView(APIView):
+    """
+    Initializes or retrieves the CSL Sentinel proctoring session for an attempt.
+    Enforces candidate attempt ownership and checks for admin bypass grants.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        attempt_id = request.data.get("attempt_id")
+        if not attempt_id:
+            return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
+        if not verify_attempt_ownership(request, attempt):
+            return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
+
+        with transaction.atomic():
+            session, created = ProctoringSession.objects.select_for_update().get_or_create(
+                assessment_session=attempt,
+                defaults={
+                    "student": attempt.candidate,
+                    "assessment": attempt.assessment,
+                    "status": ProctoringSession.SessionStatus.INITIALIZING,
+                    "browser_monitoring_status": ProctoringSession.BrowserMonitoringStatus.ACTIVE,
+                },
+            )
+
+            # Check for administrative camera bypass
+            bypass_qs = AdminAccessGrant.objects.filter(
+                grant_type=AdminAccessGrant.GrantType.CAMERA_BYPASS,
+                candidate=attempt.candidate,
+                is_used=False,
+            )
+            if attempt.assessment_id:
+                from django.db.models import Q
+                bypass_qs = bypass_qs.filter(
+                    Q(assessment__isnull=True) | Q(assessment_id=attempt.assessment_id)
+                )
+            if bypass_qs.exists() and session.face_calibration_status == ProctoringSession.FaceCalibrationStatus.PENDING:
+                session.face_calibration_status = ProctoringSession.FaceCalibrationStatus.SKIPPED_BY_ADMIN
+                session.save(update_fields=["face_calibration_status", "updated_at"])
+
+            if created:
+                ProctoringEvent.objects.create(
+                    proctoring_session=session,
+                    event_type=ProctoringEvent.EventType.SESSION_INITIALIZED,
+                    severity=ProctoringEvent.Severity.INFO,
+                    metadata={"client_agent": request.headers.get("User-Agent", "")[:150]},
+                )
+
+        serializer = ProctoringSessionSerializer(session)
+        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class ProctoringCameraStatusView(APIView):
+    """
+    Updates camera stream connection status and logs disconnect/reconnect events.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        new_status = request.data.get("status")
+        valid_statuses = [c[0] for c in ProctoringSession.CameraStatus.choices]
+        if new_status not in valid_statuses:
+            return Response({"detail": f"Invalid camera status. Valid: {valid_statuses}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_status = session.camera_status
+        session.camera_status = new_status
+
+        if new_status == ProctoringSession.CameraStatus.DISCONNECTED and old_status == ProctoringSession.CameraStatus.ACTIVE:
+            ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ProctoringEvent.EventType.CAMERA_DISCONNECTED,
+                severity=ProctoringEvent.Severity.WARNING,
+                metadata=request.data.get("metadata", {}),
+            )
+            session.recalculate_risk_score()
+        elif new_status == ProctoringSession.CameraStatus.ACTIVE and old_status in (
+            ProctoringSession.CameraStatus.DISCONNECTED,
+            ProctoringSession.CameraStatus.ERROR,
+            ProctoringSession.CameraStatus.PENDING,
+        ):
+            ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ProctoringEvent.EventType.CAMERA_RECONNECTED,
+                severity=ProctoringEvent.Severity.INFO,
+            )
+
+        session.save(update_fields=["camera_status", "updated_at"])
+        return Response({
+            "success": True,
+            "camera_status": session.camera_status,
+            "risk_score": session.risk_score,
+        })
+
+
+class ProctoringCalibrationView(APIView):
+    """
+    Submits 6-pose MediaPipe face landmarker calibration results and stores baseline pose.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        baseline = request.data.get("baseline_orientation", {})
+        results = request.data.get("calibration_results", [])
+        completed = request.data.get("calibration_completed", True)
+
+        with transaction.atomic():
+            cal, _ = ProctoringCalibration.objects.update_or_create(
+                proctoring_session=session,
+                defaults={
+                    "baseline_orientation": baseline,
+                    "calibration_results": results,
+                    "calibration_completed": bool(completed),
+                    "calibrated_at": timezone.now(),
+                },
+            )
+            session.face_calibration_status = (
+                ProctoringSession.FaceCalibrationStatus.COMPLETED
+                if completed
+                else ProctoringSession.FaceCalibrationStatus.FAILED
+            )
+            session.save(update_fields=["face_calibration_status", "updated_at"])
+
+            # Sync attempt level flag for backward compatibility
+            session.assessment_session.camera_calibrated = bool(completed)
+            session.assessment_session.camera_calibration_data = {
+                "baseline": baseline,
+                "completed": bool(completed),
+                "timestamp": str(timezone.now()),
+            }
+            session.assessment_session.save(update_fields=["camera_calibrated", "camera_calibration_data"])
+
+        return Response({
+            "success": True,
+            "face_calibration_status": session.face_calibration_status,
+            "calibration_id": str(cal.id),
+        })
+
+
+class ProctoringScreenShareStatusView(APIView):
+    """
+    Updates display capture stream status and logs screen-share lifecycle events.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        new_status = request.data.get("status")
+        valid_statuses = [s[0] for s in ProctoringSession.ScreenShareStatus.choices]
+        if new_status not in valid_statuses:
+            return Response({"detail": f"Invalid screen share status. Valid: {valid_statuses}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_status = session.screen_share_status
+        session.screen_share_status = new_status
+
+        if new_status == ProctoringSession.ScreenShareStatus.ACTIVE and old_status != ProctoringSession.ScreenShareStatus.ACTIVE:
+            ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ProctoringEvent.EventType.SCREEN_SHARE_STARTED,
+                severity=ProctoringEvent.Severity.INFO,
+            )
+        elif new_status == ProctoringSession.ScreenShareStatus.INTERRUPTED:
+            ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ProctoringEvent.EventType.SCREEN_SHARE_INTERRUPTED,
+                severity=ProctoringEvent.Severity.WARNING,
+                metadata=request.data.get("metadata", {}),
+            )
+            session.recalculate_risk_score()
+        elif new_status == ProctoringSession.ScreenShareStatus.STOPPED:
+            ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ProctoringEvent.EventType.SCREEN_SHARE_STOPPED,
+                severity=ProctoringEvent.Severity.CRITICAL,
+                metadata=request.data.get("metadata", {}),
+            )
+            session.recalculate_risk_score()
+
+        session.save(update_fields=["screen_share_status", "updated_at"])
+        return Response({
+            "success": True,
+            "screen_share_status": session.screen_share_status,
+            "risk_score": session.risk_score,
+        })
+
+
+class ProctoringEventIngestView(APIView):
+    """
+    In-exam telemetry ingestion endpoint for browser integrity, facial presence,
+    pose deviations, and clipboard restriction events.
+    Enforces deduplication and per-minute rate limiting.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = ProctoringEventInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        ev_type = serializer.validated_data["event_type"]
+        severity = serializer.validated_data.get("severity", ProctoringEvent.Severity.INFO)
+        event_id = serializer.validated_data.get("event_id", "").strip()
+        ts = serializer.validated_data.get("timestamp", timezone.now())
+        metadata = serializer.validated_data.get("metadata", {})
+
+        # Rate limiting: max 40 events per minute
+        from datetime import timedelta
+        one_min_ago = timezone.now() - timedelta(seconds=60)
+        recent_count = session.events.filter(created_at__gte=one_min_ago).count()
+        if recent_count >= 40:
+            return Response(
+                {"status": "rate_limited", "detail": "Telemetry ingestion rate limit exceeded."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        # Deduplication
+        if event_id and session.events.filter(event_id=event_id).exists():
+            return Response({
+                "status": "duplicate_ignored",
+                "risk_score": session.risk_score,
+                "risk_level": session.risk_level,
+            }, status=status.HTTP_200_OK)
+
+        with transaction.atomic():
+            ev = ProctoringEvent.objects.create(
+                proctoring_session=session,
+                event_type=ev_type,
+                severity=severity,
+                timestamp=ts,
+                event_id=event_id,
+                metadata=metadata,
+            )
+            session.recalculate_risk_score()
+
+            # Synchronize tab-switch events with AssessmentAttempt
+            if ev_type == ProctoringEvent.EventType.TAB_SWITCHED:
+                attempt = session.assessment_session
+                attempt.tab_switch_count += 1
+                allowed = (
+                    attempt.assessment.max_tab_switches_warning
+                    if attempt.assessment
+                    else (attempt.config.max_tab_switches_warning if attempt.config else 2)
+                )
+                auto_submit = (
+                    attempt.assessment.auto_submit_on_tab_limit
+                    if attempt.assessment
+                    else (attempt.config.auto_submit_on_tab_limit if attempt.config else True)
+                )
+                if auto_submit and attempt.tab_switch_count > allowed:
+                    attempt.is_flagged = True
+                    attempt.flag_reason = (
+                        f"TAB_SWITCH_LIMIT_EXCEEDED: Exceeded permitted tab switches "
+                        f"({attempt.tab_switch_count} switches recorded, limit is {allowed})"
+                    )
+                attempt.save(update_fields=["tab_switch_count", "is_flagged", "flag_reason", "updated_at"])
+                if auto_submit and attempt.tab_switch_count > allowed:
+                    finalize_assessment_attempt(attempt, final_state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW)
+
+            elif ev_type == ProctoringEvent.EventType.FULLSCREEN_EXITED:
+                attempt = session.assessment_session
+                attempt.fullscreen_exit_count += 1
+                attempt.save(update_fields=["fullscreen_exit_count", "updated_at"])
+
+        return Response({
+            "status": "recorded",
+            "event_id": ev.id,
+            "event_type": ev.event_type,
+            "risk_score": session.risk_score,
+            "risk_level": session.risk_level,
+        }, status=status.HTTP_201_CREATED)
+
+
+class ProctoringEvidenceUploadView(APIView):
+    """
+    Receives frame snapshot (JPEG) and uploads it securely to Neon/S3 or local storage.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        raw_bytes = None
+        if "frame" in request.FILES:
+            raw_bytes = request.FILES["frame"].read()
+        elif "frame_base64" in request.data:
+            import base64
+            b64_str = request.data["frame_base64"]
+            if "," in b64_str:
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                raw_bytes = base64.b64decode(b64_str)
+            except Exception:
+                return Response({"detail": "Invalid base64 frame encoding."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not raw_bytes:
+            return Response({"detail": "No image frame provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        evidence_type = request.data.get("evidence_type", ProctoringEvidence.EvidenceType.WEBCAM_SNAPSHOT)
+        related_event_id = request.data.get("related_event_id")
+        related_event = None
+        if related_event_id:
+            related_event = session.events.filter(id=related_event_id).first()
+
+        saved = ProctoringEvidenceStorageService.save_snapshot(
+            session_id=session.id,
+            raw_bytes=raw_bytes,
+            filename_prefix=evidence_type.lower(),
+        )
+
+        evidence = ProctoringEvidence.objects.create(
+            proctoring_session=session,
+            related_event=related_event,
+            evidence_type=evidence_type,
+            storage_path=saved["storage_path"],
+            storage_type=saved["storage_type"],
+            metadata=request.data.get("metadata", {}),
+        )
+
+        return Response({
+            "success": True,
+            "evidence_id": str(evidence.id),
+            "evidence_type": evidence.evidence_type,
+            "storage_type": evidence.storage_type,
+            "captured_at": evidence.captured_at,
+        }, status=status.HTTP_201_CREATED)
+
+
+class ProctoringSessionStatusView(APIView):
+    """
+    Returns current proctoring session state, active warnings, and risk score.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = ProctoringSessionSerializer(session)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ProctoringSessionEndView(APIView):
+    """
+    Finalizes the proctoring session upon assessment submission.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        if not verify_attempt_ownership(request, session.assessment_session):
+            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        session.status = ProctoringSession.SessionStatus.COMPLETED
+        session.ended_at = timezone.now()
+        session.save(update_fields=["status", "ended_at", "updated_at"])
+
+        ProctoringEvent.objects.create(
+            proctoring_session=session,
+            event_type=ProctoringEvent.EventType.SESSION_TERMINATED,
+            severity=ProctoringEvent.Severity.INFO,
+        )
+
+        return Response({
+            "success": True,
+            "status": session.status,
+            "ended_at": session.ended_at,
+        }, status=status.HTTP_200_OK)
+

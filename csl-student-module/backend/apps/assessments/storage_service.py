@@ -194,3 +194,94 @@ class AssessmentPdfStorageService:
         except Exception as exc:
             logger.warning("Failed to delete PDF object from S3 (%s): %s", s3_key, exc)
             return False
+
+
+class ProctoringEvidenceStorageService:
+    """
+    Storage service for CSL Sentinel examination proctoring evidence snapshots.
+    Stores JPEG snapshots in Neon Object Storage / AWS S3 when configured,
+    or falls back gracefully to Django's local media directory.
+    """
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        return AssessmentPdfStorageService.is_configured()
+
+    @classmethod
+    def save_snapshot(cls, session_id: Any, raw_bytes: bytes, filename_prefix: str = "snapshot") -> Dict[str, Any]:
+        """
+        Saves snapshot frame (JPEG) to S3 or local disk.
+        Returns:
+        {
+            "storage_path": str,
+            "storage_type": "S3" | "LOCAL",
+        }
+        """
+        unique_token = uuid.uuid4().hex[:16]
+        object_key = f"proctoring/{session_id}/{filename_prefix}_{unique_token}.jpg"
+
+        if cls.is_configured():
+            cfg = AssessmentPdfStorageService.get_config()
+            bucket = cfg["bucket"]
+            try:
+                client = AssessmentPdfStorageService.get_s3_client()
+                client.put_object(
+                    Bucket=bucket,
+                    Key=object_key,
+                    Body=raw_bytes,
+                    ContentType="image/jpeg",
+                    Metadata={
+                        "session_id": str(session_id),
+                        "token": unique_token,
+                    },
+                )
+                logger.info("Uploaded proctoring snapshot to S3: bucket=%s, key=%s", bucket, object_key)
+                return {
+                    "storage_path": object_key,
+                    "storage_type": "S3",
+                }
+            except Exception as exc:
+                logger.warning("S3 upload failed for proctoring snapshot, falling back to local: %s", exc)
+
+        # Local storage fallback
+        from django.conf import settings
+        local_dir = os.path.join(settings.MEDIA_ROOT, "proctoring_evidence", str(session_id))
+        os.makedirs(local_dir, exist_ok=True)
+        local_file_name = f"{filename_prefix}_{unique_token}.jpg"
+        full_local_path = os.path.join(local_dir, local_file_name)
+        with open(full_local_path, "wb") as f:
+            f.write(raw_bytes)
+        rel_path = f"proctoring_evidence/{session_id}/{local_file_name}"
+        logger.info("Saved proctoring snapshot locally at %s", full_local_path)
+        return {
+            "storage_path": rel_path,
+            "storage_type": "LOCAL",
+        }
+
+    @classmethod
+    def get_snapshot_bytes(cls, storage_path: str, storage_type: str = "LOCAL") -> bytes:
+        """
+        Retrieves snapshot bytes from S3 or local storage.
+        """
+        if storage_type == "S3" and cls.is_configured():
+            cfg = AssessmentPdfStorageService.get_config()
+            bucket = cfg["bucket"]
+            try:
+                client = AssessmentPdfStorageService.get_s3_client()
+                response = client.get_object(Bucket=bucket, Key=storage_path)
+                body = response.get("Body")
+                if body:
+                    return body.read()
+                return b""
+            except Exception as exc:
+                logger.error("Failed to read snapshot from S3 (%s): %s", storage_path, exc)
+                return b""
+
+        # Local fallback
+        from django.conf import settings
+        full_path = os.path.join(settings.MEDIA_ROOT, storage_path)
+        if os.path.exists(full_path):
+            with open(full_path, "rb") as f:
+                return f.read()
+        return b""
+

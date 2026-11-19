@@ -3,6 +3,7 @@ import Editor from '@monaco-editor/react';
 import {
   runCode,
   submitCode,
+  recordProctoringEvent,
   type QuestionSnapshot,
   type CodeRunResult,
   type CodeSubmitResult,
@@ -12,12 +13,14 @@ interface CodingPlaygroundPaneProps {
   attemptId: string;
   question: QuestionSnapshot;
   onAnswerSaved?: (code: string) => void;
+  proctoringSessionId?: string;
 }
 
 export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   attemptId,
   question,
   onAnswerSaved,
+  proctoringSessionId,
 }) => {
   const details = question.programming_details;
   const allowedLanguages = details?.allowed_languages && details.allowed_languages.length > 0
@@ -50,16 +53,40 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   const [submitResult, setSubmitResult] = useState<CodeSubmitResult | null>(null);
   const [showPasteWarning, setShowPasteWarning] = useState<boolean>(false);
 
+  const triggerPasteRestrictionNotice = () => {
+    setShowPasteWarning(true);
+
+    // Report to CSL Sentinel telemetry backend
+    const activeSessionId = proctoringSessionId || sessionStorage.getItem('csl_proctoring_session_id');
+    if (activeSessionId) {
+      recordProctoringEvent(activeSessionId, {
+        event_type: 'CLIPBOARD_PASTE_ATTEMPT',
+        severity: 'WARNING',
+        event_id: `paste_${Date.now()}`,
+        metadata: {
+          key: 'paste',
+          target: 'MonacoEditor',
+          question_order: question.question_order,
+        },
+      }).catch(console.warn);
+    }
+  };
+
   const handleEditorDidMount = (editor: any, monaco: any) => {
+    // 1. Intercept keyboard shortcuts (Ctrl+V, Cmd+V, Shift+Insert)
     editor.onKeyDown((e: any) => {
-      // Intercept Ctrl+V or Cmd+V
-      if ((e.ctrlKey || e.metaKey) && e.keyCode === monaco.KeyCode.KeyV) {
+      const isPaste =
+        ((e.ctrlKey || e.metaKey) && (e.keyCode === monaco.KeyCode.KeyV || e.code === 'KeyV')) ||
+        (e.shiftKey && (e.keyCode === monaco.KeyCode.Insert || e.code === 'Insert'));
+
+      if (isPaste) {
         e.preventDefault();
         e.stopPropagation();
-        setShowPasteWarning(true);
+        triggerPasteRestrictionNotice();
       }
     });
 
+    // 2. Intercept native DOM paste event on Monaco editor container
     const domNode = editor.getDomNode();
     if (domNode) {
       domNode.addEventListener(
@@ -67,10 +94,24 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
         (e: ClipboardEvent) => {
           e.preventDefault();
           e.stopPropagation();
-          setShowPasteWarning(true);
+          e.stopImmediatePropagation();
+          triggerPasteRestrictionNotice();
         },
         true
       );
+    }
+
+    // 3. Disable Monaco Editor built-in clipboard paste action
+    try {
+      const pasteAction = editor.getAction('editor.action.clipboardPasteAction');
+      if (pasteAction) {
+        pasteAction.run = () => {
+          triggerPasteRestrictionNotice();
+          return Promise.resolve();
+        };
+      }
+    } catch (actErr) {
+      console.warn('Monaco clipboard action override notice:', actErr);
     }
   };
 
@@ -588,12 +629,28 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
             }}
           >
-            <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚠️</div>
-            <h3 style={{ margin: '0 0 8px 0', color: '#F87171', fontSize: '18px', fontWeight: 800 }}>
-              Clipboard Paste Disabled
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🛡️</div>
+            <span
+              style={{
+                display: 'inline-block',
+                backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                color: '#EF4444',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 800,
+                letterSpacing: '0.05em',
+                marginBottom: '10px',
+              }}
+            >
+              CSL SENTINEL
+            </span>
+            <h3 style={{ margin: '0 0 10px 0', color: '#F87171', fontSize: '17px', fontWeight: 800, letterSpacing: '0.02em' }}>
+              AI PROCTORING ENABLED — CLIPBOARD RESTRICTION ACTIVE
             </h3>
             <p style={{ margin: '0 0 20px 0', color: '#CBD5E1', fontSize: '13px', lineHeight: 1.6 }}>
-              Pasting external code into the examination environment is strictly prohibited to maintain academic integrity and fair assessment conditions. Please construct and type your solution directly in the Monaco editor.
+              External clipboard pasting is strictly prohibited during the assessment to preserve examination integrity.
+              Please construct and type your solution directly within the Monaco Editor.
             </p>
             <button
               onClick={() => setShowPasteWarning(false)}

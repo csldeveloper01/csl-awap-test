@@ -24,9 +24,27 @@ from .views import (
     CandidateAssessmentSebConfigView,
     CandidateCameraBypassStatusView,
     CandidateAttemptCalibrationView,
+    ProctoringSessionInitView,
+    ProctoringCameraStatusView,
+    ProctoringCalibrationView,
+    ProctoringScreenShareStatusView,
+    ProctoringEventIngestView,
+    ProctoringEvidenceUploadView,
+    ProctoringSessionStatusView,
+    ProctoringSessionEndView,
 )
 
 urlpatterns = [
+    # CSL Sentinel Examination Integrity APIs
+    path("proctoring/init/", ProctoringSessionInitView.as_view(), name="proctoring-session-init"),
+    path("proctoring/<uuid:session_id>/camera-status/", ProctoringCameraStatusView.as_view(), name="proctoring-camera-status"),
+    path("proctoring/<uuid:session_id>/calibration/", ProctoringCalibrationView.as_view(), name="proctoring-calibration"),
+    path("proctoring/<uuid:session_id>/screen-share-status/", ProctoringScreenShareStatusView.as_view(), name="proctoring-screen-share-status"),
+    path("proctoring/<uuid:session_id>/events/", ProctoringEventIngestView.as_view(), name="proctoring-events-ingest"),
+    path("proctoring/<uuid:session_id>/evidence/", ProctoringEvidenceUploadView.as_view(), name="proctoring-evidence-upload"),
+    path("proctoring/<uuid:session_id>/status/", ProctoringSessionStatusView.as_view(), name="proctoring-session-status"),
+    path("proctoring/<uuid:session_id>/end/", ProctoringSessionEndView.as_view(), name="proctoring-session-end"),
+
     path("colleges/", StudentCollegesListView.as_view(), name="student-colleges-list"),
     path("request-college/", StudentInstitutionRequestView.as_view(), name="student-request-college"),
     path("candidate-assessments/", CandidateEligibleAssessmentsView.as_view(), name="candidate-eligible-assessments"),

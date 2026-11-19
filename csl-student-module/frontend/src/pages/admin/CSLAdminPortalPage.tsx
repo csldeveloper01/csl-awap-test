@@ -14,6 +14,7 @@ import { AdminLiveAttemptsView } from './AdminLiveAttemptsView';
 import { AdminAttemptReviewView } from './AdminAttemptReviewView';
 import { AdminResultsView } from './AdminResultsView';
 import { AdminIntegrityEventsView } from './AdminIntegrityEventsView';
+import { AdminSentinelView } from './AdminSentinelView';
 import { AdminUsersView } from './AdminUsersView';
 import { AdminDrivesView } from './AdminDrivesView';
 import { undoAdminAuditAction } from '../../api/admin';
@@ -473,7 +474,8 @@ export function CSLAdminPortalPage() {
     { key: 'drives', label: 'Drives', icon: <DrivesIcon size={18} /> },
     { key: 'questions', label: 'Question Bank', icon: <QuestionBankIcon size={18} /> },
     { key: 'results', label: 'Results', icon: <ResultsIcon size={18} /> },
-    { key: 'integrity', label: 'Integrity', icon: <IntegrityIcon size={18} /> },
+    { key: 'sentinel', label: 'Sentinel AI', icon: <IntegrityIcon size={18} /> },
+    { key: 'integrity', label: 'Integrity Logs', icon: <DeviceIcon size={18} /> },
     { key: 'live', label: 'Live Sessions', icon: <LiveSessionsIcon size={18} /> },
   ];
 
@@ -879,6 +881,13 @@ export function CSLAdminPortalPage() {
 
             {activeTab === 'results' && (
               <AdminResultsView onReviewAttempt={handleOpenReview} />
+            )}
+
+            {activeTab === 'sentinel' && (
+              <AdminSentinelView
+                assessments={portalAssessments}
+                onReviewAttempt={handleOpenReview}
+              />
             )}
 
             {activeTab === 'integrity' && (

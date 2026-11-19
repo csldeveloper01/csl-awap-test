@@ -11,6 +11,10 @@ from .models import (
     AssessmentConfig,
     IntegrityEvent,
     QuestionBank,
+    ProctoringSession,
+    ProctoringCalibration,
+    ProctoringEvent,
+    ProctoringEvidence,
 )
 
 
@@ -759,3 +763,87 @@ class StudentCandidateAssessmentSerializer(serializers.ModelSerializer):
                 "order": 2,
             })
         return legacy
+
+
+# =============================================================================
+# CSL SENTINEL PROCTORING CANDIDATE SERIALIZERS
+# =============================================================================
+
+class ProctoringCalibrationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProctoringCalibration
+        fields = [
+            "id",
+            "baseline_orientation",
+            "calibration_results",
+            "calibration_completed",
+            "calibrated_at",
+        ]
+
+
+class ProctoringEventInputSerializer(serializers.Serializer):
+    event_type = serializers.ChoiceField(choices=ProctoringEvent.EventType.choices)
+    severity = serializers.ChoiceField(choices=ProctoringEvent.Severity.choices, default=ProctoringEvent.Severity.INFO)
+    timestamp = serializers.DateTimeField(required=False, default=timezone.now)
+    event_id = serializers.CharField(required=False, allow_blank=True, default="")
+    metadata = serializers.DictField(required=False, default=dict)
+
+
+class ProctoringEventOutputSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProctoringEvent
+        fields = [
+            "id",
+            "event_type",
+            "severity",
+            "timestamp",
+            "event_id",
+            "metadata",
+            "created_at",
+        ]
+
+
+class ProctoringEvidenceOutputSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProctoringEvidence
+        fields = [
+            "id",
+            "evidence_type",
+            "captured_at",
+            "metadata",
+            "created_at",
+        ]
+
+
+class ProctoringSessionSerializer(serializers.ModelSerializer):
+    calibration = ProctoringCalibrationSerializer(read_only=True)
+    recent_events = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProctoringSession
+        fields = [
+            "id",
+            "assessment_session",
+            "student",
+            "assessment",
+            "status",
+            "camera_status",
+            "face_calibration_status",
+            "screen_share_status",
+            "browser_monitoring_status",
+            "started_at",
+            "ended_at",
+            "risk_score",
+            "risk_level",
+            "risk_breakdown",
+            "review_status",
+            "calibration",
+            "recent_events",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_recent_events(self, obj):
+        events = obj.events.order_by("-created_at")[:10]
+        return ProctoringEventOutputSerializer(events, many=True).data
+

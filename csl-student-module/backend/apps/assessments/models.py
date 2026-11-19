@@ -1302,6 +1302,7 @@ class AssessmentAuditLog(models.Model):
         DRIVE_INVITATION_REVOKED = "DRIVE_INVITATION_REVOKED", "Drive Invitation Revoked"
         ACTION_REVERSED = "ACTION_REVERSED", "Administrative Action Reversed / Undone"
         INSTITUTION_REQUESTED = "INSTITUTION_REQUESTED", "Student Institution Requested"
+        PROCTORING_SESSION_REVIEWED = "PROCTORING_SESSION_REVIEWED", "Proctoring Session Reviewed"
 
     class ReversalStatus(models.TextChoices):
         NOT_REVERSIBLE = "NOT_REVERSIBLE", "Not Reversible"
@@ -1616,4 +1617,370 @@ class CodeTestResult(models.Model):
 
     def __str__(self):
         return f"Result for {self.test_case.id}: {'PASS' if self.passed else 'FAIL'}"
+
+
+# =============================================================================
+# CSL SENTINEL — AI-ASSISTED EXAMINATION INTEGRITY MODELS
+# =============================================================================
+
+class ProctoringSession(models.Model):
+    """
+    Primary security session tracking the multi-layered proctoring lifecycle
+    for an assessment attempt.
+    """
+    class SessionStatus(models.TextChoices):
+        INITIALIZING = "INITIALIZING", "Initializing"
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+        COMPLETED = "COMPLETED", "Completed"
+        TERMINATED_VIOLATION = "TERMINATED_VIOLATION", "Terminated (Violation)"
+
+    class CameraStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        INITIALIZING = "INITIALIZING", "Initializing"
+        ACTIVE = "ACTIVE", "Active"
+        DISCONNECTED = "DISCONNECTED", "Disconnected"
+        ERROR = "ERROR", "Hardware Error"
+
+    class FaceCalibrationStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        IN_PROGRESS = "IN_PROGRESS", "In Progress"
+        COMPLETED = "COMPLETED", "Completed"
+        FAILED = "FAILED", "Failed"
+        SKIPPED_BY_ADMIN = "SKIPPED_BY_ADMIN", "Skipped by Administrator"
+
+    class ScreenShareStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        INITIALIZING = "INITIALIZING", "Initializing"
+        ACTIVE = "ACTIVE", "Active"
+        INTERRUPTED = "INTERRUPTED", "Interrupted"
+        STOPPED = "STOPPED", "Stopped"
+
+    class BrowserMonitoringStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+
+    class RiskLevel(models.TextChoices):
+        LOW = "LOW", "Low Risk"
+        MEDIUM = "MEDIUM", "Medium Risk"
+        HIGH = "HIGH", "High Risk"
+        CRITICAL = "CRITICAL", "Critical Risk"
+
+    class ReviewStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending Review"
+        CLEARED = "CLEARED", "Cleared"
+        NEEDS_REVIEW = "NEEDS_REVIEW", "Needs Review"
+        CONFIRMED_VIOLATION = "CONFIRMED_VIOLATION", "Confirmed Violation"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment_session = models.OneToOneField(
+        AssessmentAttempt,
+        on_delete=models.CASCADE,
+        related_name="proctoring_session",
+    )
+    student = models.ForeignKey(
+        Candidate,
+        on_delete=models.CASCADE,
+        related_name="proctoring_sessions",
+    )
+    assessment = models.ForeignKey(
+        Assessment,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="proctoring_sessions",
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=SessionStatus.choices,
+        default=SessionStatus.INITIALIZING,
+        db_index=True,
+    )
+    camera_status = models.CharField(
+        max_length=30,
+        choices=CameraStatus.choices,
+        default=CameraStatus.PENDING,
+    )
+    face_calibration_status = models.CharField(
+        max_length=30,
+        choices=FaceCalibrationStatus.choices,
+        default=FaceCalibrationStatus.PENDING,
+    )
+    screen_share_status = models.CharField(
+        max_length=30,
+        choices=ScreenShareStatus.choices,
+        default=ScreenShareStatus.PENDING,
+    )
+    browser_monitoring_status = models.CharField(
+        max_length=30,
+        choices=BrowserMonitoringStatus.choices,
+        default=BrowserMonitoringStatus.PENDING,
+    )
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    # Risk scoring & explanation
+    risk_score = models.PositiveIntegerField(
+        default=0,
+        help_text="Calculated explainable risk score (0-100)",
+    )
+    risk_level = models.CharField(
+        max_length=20,
+        choices=RiskLevel.choices,
+        default=RiskLevel.LOW,
+        db_index=True,
+    )
+    risk_breakdown = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Explainable factor weights and infraction counts",
+    )
+
+    # Administrator review workflow
+    review_status = models.CharField(
+        max_length=30,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+        db_index=True,
+    )
+    review_notes = models.TextField(blank=True, default="")
+    reviewed_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_proctoring_sessions",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "risk_level"]),
+            models.Index(fields=["review_status", "risk_score"]),
+        ]
+
+    def __str__(self):
+        return f"ProctoringSession {self.id} ({self.student.full_name} - {self.status})"
+
+    def recalculate_risk_score(self):
+        """
+        Calculates an explainable risk indicator based on verified proctoring events.
+        Does not automatically disqualify candidates; serves as an administrative prioritization signal.
+        """
+        weights = {
+            ProctoringEvent.EventType.FACE_NOT_DETECTED: 15,
+            ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED: 30,
+            ProctoringEvent.EventType.HEAD_ORIENTATION_DEVIATION: 10,
+            ProctoringEvent.EventType.SCREEN_SHARE_STOPPED: 35,
+            ProctoringEvent.EventType.SCREEN_SHARE_INTERRUPTED: 20,
+            ProctoringEvent.EventType.TAB_SWITCHED: 15,
+            ProctoringEvent.EventType.FULLSCREEN_EXITED: 10,
+            ProctoringEvent.EventType.CLIPBOARD_PASTE_ATTEMPT: 15,
+            ProctoringEvent.EventType.PAGE_UNLOAD_ATTEMPT: 25,
+        }
+        breakdown = {}
+        total = 0
+        from django.db.models import Count
+        counts = (
+            self.events.values("event_type")
+            .annotate(count=Count("id"))
+            .order_by("event_type")
+        )
+        for item in counts:
+            ev_type = item["event_type"]
+            c = item["count"]
+            w = weights.get(ev_type, 0)
+            score_pts = min(w * c, w * 3)  # capped per event category
+            total += score_pts
+            breakdown[ev_type] = {
+                "count": c,
+                "weight": w,
+                "contribution": score_pts,
+            }
+
+        self.risk_score = min(100, total)
+        if self.risk_score >= 70:
+            self.risk_level = self.RiskLevel.CRITICAL
+        elif self.risk_score >= 40:
+            self.risk_level = self.RiskLevel.HIGH
+        elif self.risk_score >= 20:
+            self.risk_level = self.RiskLevel.MEDIUM
+        else:
+            self.risk_level = self.RiskLevel.LOW
+        self.risk_breakdown = breakdown
+        self.save(update_fields=["risk_score", "risk_level", "risk_breakdown", "updated_at"])
+        return self.risk_score
+
+
+class ProctoringCalibration(models.Model):
+    """
+    Stores facial landmark baseline orientation and 6-direction calibration results
+    using MediaPipe Face Landmarker.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    proctoring_session = models.OneToOneField(
+        ProctoringSession,
+        on_delete=models.CASCADE,
+        related_name="calibration",
+    )
+    baseline_orientation = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Baseline yaw, pitch, roll in degrees and confidence score",
+    )
+    calibration_results = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Detailed pose verification array (straight, left, right, up, down, center)",
+    )
+    calibration_completed = models.BooleanField(default=False)
+    calibrated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Calibration for {self.proctoring_session_id} ({'Completed' if self.calibration_completed else 'Pending'})"
+
+
+class ProctoringEvent(models.Model):
+    """
+    Fine-grained, timestamped examination integrity telemetry event.
+    """
+    class EventType(models.TextChoices):
+        # Face & Head Pose
+        FACE_NOT_DETECTED = "FACE_NOT_DETECTED", "Face Not Detected"
+        MULTIPLE_FACES_DETECTED = "MULTIPLE_FACES_DETECTED", "Multiple Faces Detected"
+        HEAD_ORIENTATION_DEVIATION = "HEAD_ORIENTATION_DEVIATION", "Head Orientation Deviation"
+        FACE_DETECTED = "FACE_DETECTED", "Face Detected"
+        # Camera
+        CAMERA_DISCONNECTED = "CAMERA_DISCONNECTED", "Camera Disconnected"
+        CAMERA_RECONNECTED = "CAMERA_RECONNECTED", "Camera Reconnected"
+        # Screen Share
+        SCREEN_SHARE_STARTED = "SCREEN_SHARE_STARTED", "Screen Share Started"
+        SCREEN_SHARE_STOPPED = "SCREEN_SHARE_STOPPED", "Screen Share Stopped"
+        SCREEN_SHARE_INTERRUPTED = "SCREEN_SHARE_INTERRUPTED", "Screen Share Interrupted"
+        SCREEN_SHARE_RESTORED = "SCREEN_SHARE_RESTORED", "Screen Share Restored"
+        # Browser Activity
+        TAB_SWITCHED = "TAB_SWITCHED", "Tab Switched (Hidden)"
+        TAB_RETURNED = "TAB_RETURNED", "Tab Returned (Visible)"
+        WINDOW_UNFOCUSED = "WINDOW_UNFOCUSED", "Window Unfocused (Blur)"
+        WINDOW_FOCUSED = "WINDOW_FOCUSED", "Window Focused"
+        FULLSCREEN_EXITED = "FULLSCREEN_EXITED", "Fullscreen Exited"
+        FULLSCREEN_RESTORED = "FULLSCREEN_RESTORED", "Fullscreen Restored"
+        PAGE_UNLOAD_ATTEMPT = "PAGE_UNLOAD_ATTEMPT", "Page Unload Attempt"
+        # Coding Playground
+        CLIPBOARD_PASTE_ATTEMPT = "CLIPBOARD_PASTE_ATTEMPT", "Clipboard Paste Blocked"
+        # Lifecycle
+        SESSION_INITIALIZED = "SESSION_INITIALIZED", "Session Initialized"
+        SESSION_TERMINATED = "SESSION_TERMINATED", "Session Terminated"
+
+    class Severity(models.TextChoices):
+        INFO = "INFO", "Informational"
+        WARNING = "WARNING", "Warning"
+        CRITICAL = "CRITICAL", "Critical / High Risk"
+
+    id = models.BigAutoField(primary_key=True)
+    proctoring_session = models.ForeignKey(
+        ProctoringSession,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    event_type = models.CharField(
+        max_length=60,
+        choices=EventType.choices,
+        db_index=True,
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        default=Severity.INFO,
+        db_index=True,
+    )
+    timestamp = models.DateTimeField(default=timezone.now)
+    event_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Client deduplication ID",
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["proctoring_session", "event_type"]),
+            models.Index(fields=["proctoring_session", "event_id"]),
+            models.Index(fields=["severity", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.proctoring_session_id}: {self.event_type} [{self.severity}]"
+
+
+class ProctoringEvidence(models.Model):
+    """
+    Cryptographically referenced snapshot evidence associated with proctoring sessions.
+    Stores file keys in S3/Neon or relative local paths.
+    """
+    class EvidenceType(models.TextChoices):
+        WEBCAM_SNAPSHOT = "WEBCAM_SNAPSHOT", "Webcam Snapshot"
+        SCREEN_SNAPSHOT = "SCREEN_SNAPSHOT", "Screen Snapshot"
+        CALIBRATION_FRAME = "CALIBRATION_FRAME", "Calibration Baseline Frame"
+
+    class StorageType(models.TextChoices):
+        S3 = "S3", "Neon / S3 Storage"
+        LOCAL = "LOCAL", "Local File Storage"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    proctoring_session = models.ForeignKey(
+        ProctoringSession,
+        on_delete=models.CASCADE,
+        related_name="evidences",
+    )
+    related_event = models.ForeignKey(
+        ProctoringEvent,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="evidences",
+    )
+    evidence_type = models.CharField(
+        max_length=40,
+        choices=EvidenceType.choices,
+        default=EvidenceType.WEBCAM_SNAPSHOT,
+    )
+    storage_path = models.CharField(
+        max_length=500,
+        help_text="S3 key or relative media storage path",
+    )
+    storage_type = models.CharField(
+        max_length=20,
+        choices=StorageType.choices,
+        default=StorageType.LOCAL,
+    )
+    captured_at = models.DateTimeField(default=timezone.now)
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Snapshot metadata (e.g. detected face count, estimated yaw/pitch)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-captured_at"]
+        indexes = [
+            models.Index(fields=["proctoring_session", "captured_at"]),
+        ]
+
+    def __str__(self):
+        return f"Evidence {self.id} for {self.proctoring_session_id} ({self.evidence_type})"
+
 

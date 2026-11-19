@@ -3,6 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import { SecurePdfViewer } from '../../components/assessment/SecurePdfViewer';
 import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygroundPane';
+import { ProctoringStatusPanel } from '../../components/assessment/ProctoringStatusPanel';
+import {
+  getProctoringStreams,
+  updateCachedScreenStream,
+  clearProctoringStreams,
+} from '../../utils/proctoringStreamStore';
 import {
   getAttemptState,
   saveAnswer,
@@ -11,8 +17,11 @@ import {
   recordIntegrityEvent,
   finalizeAssessment,
   fetchAttemptPdfBlob,
+  initProctoringSession,
+  endProctoringSession,
   type AttemptDetailResponse,
   type QuestionSnapshot,
+  type ProctoringSessionResponse,
 } from '../../api/assessment';
 
 interface PendingAnswerRecord {
@@ -90,6 +99,41 @@ export function AssessmentExamPage() {
   const [pdfLoading, setPdfLoading] = useState<boolean>(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
+  // CSL Sentinel Proctoring Session State
+  const [proctoringSession, setProctoringSession] = useState<ProctoringSessionResponse | null>(null);
+  const [proctoringCamStream, setProctoringCamStream] = useState<MediaStream | null>(null);
+  const [proctoringScStream, setProctoringScStream] = useState<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (!attemptId) return;
+    const cached = getProctoringStreams();
+    if (cached.session && cached.cameraStream && cached.screenStream) {
+      setProctoringSession(cached.session);
+      setProctoringCamStream(cached.cameraStream);
+      setProctoringScStream(cached.screenStream);
+    } else {
+      initProctoringSession(attemptId)
+        .then((sess) => {
+          setProctoringSession(sess);
+          sessionStorage.setItem('csl_proctoring_session_id', sess.id);
+          if (!cached.cameraStream) {
+            navigator.mediaDevices?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
+              .then((cStream) => setProctoringCamStream(cStream))
+              .catch(console.warn);
+          } else {
+            setProctoringCamStream(cached.cameraStream);
+          }
+          if (!cached.screenStream) {
+            navigator.mediaDevices?.getDisplayMedia({ video: { displaySurface: 'monitor' } as any })
+              .then((sStream) => setProctoringScStream(sStream))
+              .catch(console.warn);
+          } else {
+            setProctoringScStream(cached.screenStream);
+          }
+        })
+        .catch(console.warn);
+    }
+  }, [attemptId]);
 
   const isPageHiddenRef = useRef<boolean>(false);
 
@@ -377,6 +421,10 @@ export function AssessmentExamPage() {
     if (!attemptId || submitting) return;
     setSubmitting(true);
     try {
+      if (proctoringSession) {
+        endProctoringSession(proctoringSession.id).catch(console.warn);
+      }
+      clearProctoringStreams();
       // Guaranteed sync of all local pending answers before finalization
       await flushPendingQueue();
       const res = await finalizeAssessment(attemptId);
@@ -392,7 +440,7 @@ export function AssessmentExamPage() {
       alert(`Error submitting assessment: ${errMsg || 'Please notify your test invigilator.'}`);
       setSubmitting(false);
     }
-  }, [attemptId, submitting, navigate, flushPendingQueue]);
+  }, [attemptId, submitting, navigate, flushPendingQueue, proctoringSession]);
 
   const handleAutoSubmitOnTimeout = useCallback(async () => {
     if (!attemptId || submitting) return;
@@ -401,14 +449,19 @@ export function AssessmentExamPage() {
       'Assessment duration elapsed. Your test is being automatically submitted...'
     );
     try {
+      if (proctoringSession) {
+        endProctoringSession(proctoringSession.id).catch(console.warn);
+      }
+      clearProctoringStreams();
       await flushPendingQueue();
       const res = await finalizeAssessment(attemptId);
       localStorage.removeItem(`csl_pending_answers_${attemptId}`);
       navigate(`/assessment/results/${res?.id || attemptId}`, { replace: true });
     } catch {
+      clearProctoringStreams();
       navigate(`/assessment/results/${attemptId}`, { replace: true });
     }
-  }, [attemptId, submitting, navigate, flushPendingQueue]);
+  }, [attemptId, submitting, navigate, flushPendingQueue, proctoringSession]);
 
   // 2. Countdown Timer derived from authoritative server deadline
   useEffect(() => {
@@ -1698,6 +1751,7 @@ export function AssessmentExamPage() {
                 <CodingPlaygroundPane
                   attemptId={attemptId || attempt.id}
                   question={currentQ}
+                  proctoringSessionId={proctoringSession?.id}
                   onAnswerSaved={(code) => {
                     handleSelectOption(currentQ.question_order, code);
                   }}
@@ -2436,6 +2490,19 @@ export function AssessmentExamPage() {
             </p>
           </div>
         </div>
+      )}
+
+      {/* CSL Sentinel Live Proctoring Status Widget */}
+      {proctoringSession && proctoringCamStream && proctoringScStream && (
+        <ProctoringStatusPanel
+          session={proctoringSession}
+          cameraStream={proctoringCamStream}
+          screenStream={proctoringScStream}
+          onScreenShareReconnected={(newStream) => {
+            setProctoringScStream(newStream);
+            updateCachedScreenStream(newStream);
+          }}
+        />
       )}
     </div>
   );

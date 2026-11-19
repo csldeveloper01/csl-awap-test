@@ -21,6 +21,10 @@ from .models import (
     DriveAssessment,
     DriveRegistration,
     DriveInvitation,
+    ProctoringSession,
+    ProctoringCalibration,
+    ProctoringEvent,
+    ProctoringEvidence,
 )
 
 
@@ -2060,3 +2064,187 @@ class AdminDriveCreateUpdateSerializer(serializers.ModelSerializer):
                     da.display_order = idx + 1
                     da.save(update_fields=["display_order"])
         return instance
+
+
+# =============================================================================
+# CSL SENTINEL PROCTORING ADMIN SERIALIZERS
+# =============================================================================
+
+class AdminProctoringEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProctoringEvent
+        fields = [
+            "id",
+            "event_type",
+            "severity",
+            "timestamp",
+            "event_id",
+            "metadata",
+            "created_at",
+        ]
+
+
+class AdminProctoringEvidenceSerializer(serializers.ModelSerializer):
+    view_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProctoringEvidence
+        fields = [
+            "id",
+            "evidence_type",
+            "storage_path",
+            "storage_type",
+            "captured_at",
+            "metadata",
+            "view_url",
+            "created_at",
+        ]
+
+    def get_view_url(self, obj):
+        return f"/api/csl-admin/proctoring/evidence/{obj.id}/view/"
+
+
+class AdminProctoringSessionListSerializer(serializers.ModelSerializer):
+    candidate_name = serializers.CharField(source="student.full_name", read_only=True)
+    candidate_email = serializers.CharField(source="student.email", read_only=True)
+    register_number = serializers.CharField(source="student.register_number", read_only=True)
+    college_name = serializers.CharField(source="student.college_ref.name", default="—", read_only=True)
+    assessment_title = serializers.CharField(source="assessment.title", default="—", read_only=True)
+    assessment_code = serializers.CharField(source="assessment.code", default="—", read_only=True)
+    events_count = serializers.SerializerMethodField()
+    evidences_count = serializers.SerializerMethodField()
+    latest_event = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProctoringSession
+        fields = [
+            "id",
+            "assessment_session_id",
+            "student_id",
+            "candidate_name",
+            "candidate_email",
+            "register_number",
+            "college_name",
+            "assessment_id",
+            "assessment_title",
+            "assessment_code",
+            "status",
+            "camera_status",
+            "face_calibration_status",
+            "screen_share_status",
+            "browser_monitoring_status",
+            "risk_score",
+            "risk_level",
+            "review_status",
+            "started_at",
+            "ended_at",
+            "events_count",
+            "evidences_count",
+            "latest_event",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_events_count(self, obj):
+        return obj.events.count()
+
+    def get_evidences_count(self, obj):
+        return obj.evidences.count()
+
+    def get_latest_event(self, obj):
+        ev = obj.events.order_by("-created_at").first()
+        if not ev:
+            return None
+        return {
+            "event_type": ev.event_type,
+            "severity": ev.severity,
+            "timestamp": ev.timestamp,
+        }
+
+
+class AdminProctoringSessionDetailSerializer(serializers.ModelSerializer):
+    candidate = serializers.SerializerMethodField()
+    assessment_details = serializers.SerializerMethodField()
+    calibration = serializers.SerializerMethodField()
+    events = serializers.SerializerMethodField()
+    evidences = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.CharField(source="reviewed_by.username", default=None, read_only=True)
+
+    class Meta:
+        model = ProctoringSession
+        fields = [
+            "id",
+            "assessment_session_id",
+            "student_id",
+            "candidate",
+            "assessment_id",
+            "assessment_details",
+            "status",
+            "camera_status",
+            "face_calibration_status",
+            "screen_share_status",
+            "browser_monitoring_status",
+            "started_at",
+            "ended_at",
+            "risk_score",
+            "risk_level",
+            "risk_breakdown",
+            "review_status",
+            "review_notes",
+            "reviewed_by_name",
+            "reviewed_at",
+            "calibration",
+            "events",
+            "evidences",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_candidate(self, obj):
+        c = obj.student
+        return {
+            "id": str(c.id),
+            "full_name": c.full_name,
+            "email": c.email,
+            "register_number": c.register_number,
+            "college_name": c.college_ref.name if c.college_ref else (c.college or "—"),
+            "department": c.department,
+        }
+
+    def get_assessment_details(self, obj):
+        a = obj.assessment
+        if not a:
+            return None
+        return {
+            "id": str(a.id),
+            "title": a.title,
+            "code": a.code,
+            "delivery_mode": a.delivery_mode,
+            "duration_minutes": a.duration_minutes,
+        }
+
+    def get_calibration(self, obj):
+        cal = getattr(obj, "calibration", None)
+        if not cal:
+            return None
+        return {
+            "id": str(cal.id),
+            "baseline_orientation": cal.baseline_orientation,
+            "calibration_results": cal.calibration_results,
+            "calibration_completed": cal.calibration_completed,
+            "calibrated_at": cal.calibrated_at,
+        }
+
+    def get_events(self, obj):
+        qs = obj.events.order_by("-created_at")[:100]
+        return AdminProctoringEventSerializer(qs, many=True).data
+
+    def get_evidences(self, obj):
+        qs = obj.evidences.order_by("-captured_at")[:50]
+        return AdminProctoringEvidenceSerializer(qs, many=True).data
+
+
+class AdminProctoringReviewActionSerializer(serializers.Serializer):
+    review_status = serializers.ChoiceField(choices=ProctoringSession.ReviewStatus.choices)
+    review_notes = serializers.CharField(required=False, allow_blank=True, default="")
+

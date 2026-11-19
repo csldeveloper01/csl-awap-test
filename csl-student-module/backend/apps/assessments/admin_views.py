@@ -33,7 +33,12 @@ from .models import (
     DriveAssessment,
     DriveRegistration,
     DriveInvitation,
+    ProctoringSession,
+    ProctoringCalibration,
+    ProctoringEvent,
+    ProctoringEvidence,
 )
+from .storage_service import ProctoringEvidenceStorageService
 from .admin_permissions import IsCSLAdminUser
 from .csv_importer import decode_csv_bytes, parse_and_validate_csv, SUPPORTED_ENCODINGS
 from .tokens import generate_candidate_token
@@ -72,6 +77,11 @@ from .admin_serializers import (
     AdminDriveAssessmentSerializer,
     AdminDriveRegistrationSerializer,
     AdminDriveInvitationSerializer,
+    AdminProctoringSessionListSerializer,
+    AdminProctoringSessionDetailSerializer,
+    AdminProctoringEventSerializer,
+    AdminProctoringEvidenceSerializer,
+    AdminProctoringReviewActionSerializer,
 )
 from django.http import HttpResponse
 from .services import (
@@ -5204,3 +5214,150 @@ class AdminAdvancedStudentExportView(APIView):
         )
         response["Content-Disposition"] = 'attachment; filename="csl_student_advanced_export.xlsx"'
         return response
+
+
+# =============================================================================
+# CSL SENTINEL PROCTORING ADMIN VIEWS
+# =============================================================================
+
+class AdminProctoringSessionsListView(APIView):
+    """
+    Lists and filters proctoring sessions for the CSL Sentinel Admin Dashboard.
+    Supports filtering by assessment, session status, review status, and risk level.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        qs = (
+            ProctoringSession.objects.select_related("student", "student__college_ref", "assessment")
+            .prefetch_related("events", "evidences")
+            .order_by("-created_at")
+        )
+
+        assessment_id = request.query_params.get("assessment_id")
+        if assessment_id:
+            qs = qs.filter(assessment_id=assessment_id)
+
+        session_status = request.query_params.get("status")
+        if session_status:
+            qs = qs.filter(status=session_status)
+
+        review_status = request.query_params.get("review_status")
+        if review_status:
+            qs = qs.filter(review_status=review_status)
+
+        risk_level = request.query_params.get("risk_level")
+        if risk_level:
+            qs = qs.filter(risk_level=risk_level)
+
+        flagged_only = request.query_params.get("flagged")
+        if flagged_only in ("true", "1", "True"):
+            qs = qs.filter(Q(risk_level__in=["HIGH", "CRITICAL"]) | Q(review_status="NEEDS_REVIEW"))
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(
+                Q(student__full_name__icontains=search)
+                | Q(student__email__icontains=search)
+                | Q(student__register_number__icontains=search)
+                | Q(assessment__title__icontains=search)
+                | Q(assessment__code__icontains=search)
+            )
+
+        serializer = AdminProctoringSessionListSerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminProctoringSessionDetailView(APIView):
+    """
+    Detailed audit dossier for a single proctoring session, including
+    calibration data, chronological event timeline, snapshot evidence, and risk breakdown.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(
+            ProctoringSession.objects.select_related("student", "student__college_ref", "assessment", "reviewed_by"),
+            id=session_id,
+        )
+        serializer = AdminProctoringSessionDetailSerializer(session)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminProctoringSessionReviewView(APIView):
+    """
+    Allows administrators to record manual review decisions (CLEARED, NEEDS_REVIEW, CONFIRMED_VIOLATION)
+    with audit logging.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(ProctoringSession, id=session_id)
+        serializer = AdminProctoringReviewActionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        rev_status = serializer.validated_data["review_status"]
+        notes = serializer.validated_data.get("review_notes", "").strip()
+
+        with transaction.atomic():
+            session.review_status = rev_status
+            session.review_notes = notes
+            session.reviewed_by = request.user
+            session.reviewed_at = timezone.now()
+            session.save(update_fields=["review_status", "review_notes", "reviewed_by", "reviewed_at", "updated_at"])
+
+            # Also update attempt flag state if confirmed violation or cleared
+            attempt = session.assessment_session
+            if rev_status == ProctoringSession.ReviewStatus.CONFIRMED_VIOLATION:
+                attempt.is_flagged = True
+                attempt.flag_reason = f"PROCTORING_VIOLATION_CONFIRMED: {notes}"
+                attempt.save(update_fields=["is_flagged", "flag_reason", "updated_at"])
+            elif rev_status == ProctoringSession.ReviewStatus.CLEARED:
+                if attempt.is_flagged and "PROCTORING" in attempt.flag_reason:
+                    attempt.is_flagged = False
+                    attempt.flag_reason = ""
+                    attempt.save(update_fields=["is_flagged", "flag_reason", "updated_at"])
+
+            AssessmentAuditLog.objects.create(
+                action=AssessmentAuditLog.Action.PROCTORING_SESSION_REVIEWED,
+                entity_type="PROCTORING_SESSION",
+                entity_id=str(session.id),
+                performed_by=request.user,
+                performed_by_name=getattr(request.user, "username", "Admin"),
+                details={
+                    "proctoring_session_id": str(session.id),
+                    "attempt_id": str(attempt.id),
+                    "candidate_id": str(session.student_id),
+                    "review_status": rev_status,
+                    "review_notes": notes,
+                },
+            )
+
+        return Response({
+            "success": True,
+            "session_id": str(session.id),
+            "review_status": session.review_status,
+            "reviewed_at": session.reviewed_at,
+        }, status=status.HTTP_200_OK)
+
+
+class AdminProctoringEvidenceView(APIView):
+    """
+    Secure endpoint streaming snapshot evidence image directly to authenticated administrators.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request, evidence_id):
+        evidence = get_object_or_404(ProctoringEvidence, id=evidence_id)
+        raw_bytes = ProctoringEvidenceStorageService.get_snapshot_bytes(
+            storage_path=evidence.storage_path,
+            storage_type=evidence.storage_type,
+        )
+        if not raw_bytes:
+            return Response({"detail": "Snapshot file not found on storage backend."}, status=status.HTTP_404_NOT_FOUND)
+
+        response = HttpResponse(raw_bytes, content_type="image/jpeg")
+        response["Content-Disposition"] = f'inline; filename="evidence_{evidence.id}.jpg"'
+        return response
+

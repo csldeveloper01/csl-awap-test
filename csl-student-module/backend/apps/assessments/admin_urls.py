@@ -79,9 +79,18 @@ from .admin_views import (
     AdminAssessmentTestRunView,
     AdminCameraBypassView,
     AdminAdvancedStudentExportView,
+    AdminProctoringSessionsListView,
+    AdminProctoringSessionDetailView,
+    AdminProctoringSessionReviewView,
+    AdminProctoringEvidenceView,
 )
 
 urlpatterns = [
+    # CSL Sentinel Examination Integrity Admin APIs
+    path("proctoring/sessions/", AdminProctoringSessionsListView.as_view(), name="admin-proctoring-sessions"),
+    path("proctoring/sessions/<uuid:session_id>/", AdminProctoringSessionDetailView.as_view(), name="admin-proctoring-session-detail"),
+    path("proctoring/sessions/<uuid:session_id>/review/", AdminProctoringSessionReviewView.as_view(), name="admin-proctoring-session-review"),
+    path("proctoring/evidence/<uuid:evidence_id>/view/", AdminProctoringEvidenceView.as_view(), name="admin-proctoring-evidence-view"),
     path("me/", AdminMeView.as_view(), name="admin-me"),
     path("stats/", AdminStatsView.as_view(), name="admin-stats"),
     path("users/", AdminUserManagementView.as_view(), name="admin-users"),

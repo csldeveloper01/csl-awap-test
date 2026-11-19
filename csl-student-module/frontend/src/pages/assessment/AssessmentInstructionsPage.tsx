@@ -6,7 +6,6 @@ import {
   type CandidateAssessmentItem,
   checkCameraBypassStatus,
   downloadCandidateSebConfig,
-  updateAttemptCalibration,
 } from '../../api/assessment';
 import {
   checkDeviceEligibility,
@@ -14,11 +13,17 @@ import {
   MIN_SUPPORTED_HEIGHT,
   type DeviceEligibilityResult,
 } from '../../utils/deviceCheck';
+import { ProctoringInitializer } from '../../components/assessment/ProctoringInitializer';
+import { setProctoringStreams } from '../../utils/proctoringStreamStore';
 
 export function AssessmentInstructionsPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+
+  // CSL Sentinel Security Gate State
+  const [showProctoringGate, setShowProctoringGate] = useState<boolean>(false);
+  const [attemptForProctoring, setAttemptForProctoring] = useState<any>(null);
 
   // Assessment metadata state
   const [eligibleAssessments, setEligibleAssessments] = useState<CandidateAssessmentItem[]>([]);
@@ -54,7 +59,7 @@ export function AssessmentInstructionsPage() {
   const [calibrationStep, setCalibrationStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [calibrationProgress, setCalibrationProgress] = useState<number>(0);
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
-  const [calibrationPoses, setCalibrationPoses] = useState<Array<{ name: string; timestamp: number; confidence: number }>>([]);
+  const [_calibrationPoses, setCalibrationPoses] = useState<Array<{ name: string; timestamp: number; confidence: number }>>([]);
   const [calibrationCompleted, setCalibrationCompleted] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -329,23 +334,13 @@ export function AssessmentInstructionsPage() {
         }
       }
 
-      // 2. Start assessment and transition to exam environment
+      // 2. Start assessment and transition to CSL Sentinel security initialization gate
       const targetAssessmentId = selectedAssessment?.id || sessionStorage.getItem('csl_assessment_id') || undefined;
       const attempt = await startAssessment(targetAssessmentId);
 
-      // 3. Persist proctoring calibration record
-      try {
-        await updateAttemptCalibration(attempt.id, {
-          status: bypassGranted ? 'SKIPPED_BY_ADMIN' : 'COMPLETED',
-          poses: calibrationPoses.length > 0 ? calibrationPoses : [
-            { name: 'CALIBRATED_HEAD_POSE', timestamp: Date.now(), confidence: 1.0 },
-          ],
-        });
-      } catch (calErr) {
-        console.warn('Non-fatal: could not update calibration record:', calErr);
-      }
-
-      navigate(`/assessment/exam/${attempt.id}`);
+      // Open CSL Sentinel Mandatory Initialization Gate
+      setAttemptForProctoring(attempt);
+      setShowProctoringGate(true);
     } catch (err: unknown) {
       console.error('Failed to initialize assessment:', err);
 
@@ -633,6 +628,34 @@ export function AssessmentInstructionsPage() {
           />
           <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>Loading Assessment...</h3>
         </div>
+      </div>
+    );
+  }
+
+  // CSL Sentinel Mandatory Security Initialization Gate
+  if (showProctoringGate && attemptForProctoring) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          backgroundColor: '#0F172A',
+          padding: '36px 16px',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        }}
+      >
+        <ProctoringInitializer
+          attemptId={attemptForProctoring.id}
+          bypassGranted={bypassGranted}
+          onSuccess={(session, camStream, scStream) => {
+            setProctoringStreams(session, camStream, scStream);
+            sessionStorage.setItem('csl_proctoring_session_id', session.id);
+            navigate(`/assessment/exam/${attemptForProctoring.id}`);
+          }}
+          onCancel={() => setShowProctoringGate(false)}
+        />
       </div>
     );
   }

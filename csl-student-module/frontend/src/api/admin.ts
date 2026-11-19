@@ -1703,6 +1703,7 @@ export async function downloadAdminAssessmentSebConfig(assessmentId: string, fil
   document.body.removeChild(a);
 }
 
+
 export async function exportAdvancedStudentData(params?: {
   format?: 'xlsx' | 'csv';
   college_id?: number;
@@ -1727,3 +1728,134 @@ export async function exportAdvancedStudentData(params?: {
   window.URL.revokeObjectURL(url);
   document.body.removeChild(a);
 }
+
+// =============================================================================
+// CSL SENTINEL PROCTORING ADMIN APIS
+// =============================================================================
+
+export interface AdminProctoringSessionSummary {
+  id: string;
+  assessment_session_id: string;
+  student_id: string;
+  candidate_name: string;
+  candidate_email: string;
+  register_number: string;
+  college_name: string;
+  assessment_id: string;
+  assessment_title: string;
+  assessment_code: string;
+  status: 'INITIALIZING' | 'ACTIVE' | 'SUSPENDED' | 'COMPLETED' | 'TERMINATED_VIOLATION';
+  camera_status: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'DISCONNECTED' | 'ERROR';
+  face_calibration_status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED' | 'SKIPPED_BY_ADMIN';
+  screen_share_status: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'INTERRUPTED' | 'STOPPED';
+  browser_monitoring_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  risk_score: number;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  review_status: 'PENDING' | 'CLEARED' | 'NEEDS_REVIEW' | 'CONFIRMED_VIOLATION';
+  started_at: string | null;
+  ended_at: string | null;
+  events_count: number;
+  evidences_count: number;
+  latest_event: { event_type: string; severity: string; timestamp: string } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminProctoringSessionDetail {
+  id: string;
+  assessment_session_id: string;
+  student_id: string;
+  candidate: {
+    id: string;
+    full_name: string;
+    email: string;
+    register_number: string;
+    college_name: string;
+    department: string;
+  };
+  assessment_id: string;
+  assessment_details: {
+    id: string;
+    title: string;
+    code: string;
+    delivery_mode: string;
+    duration_minutes: number;
+  } | null;
+  status: string;
+  camera_status: string;
+  face_calibration_status: string;
+  screen_share_status: string;
+  browser_monitoring_status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  risk_score: number;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  risk_breakdown: Record<string, { count: number; weight: number; contribution: number }>;
+  review_status: 'PENDING' | 'CLEARED' | 'NEEDS_REVIEW' | 'CONFIRMED_VIOLATION';
+  review_notes: string;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  calibration: {
+    id: string;
+    baseline_orientation: any;
+    calibration_results: any[];
+    calibration_completed: boolean;
+    calibrated_at: string | null;
+  } | null;
+  events: Array<{
+    id: number;
+    event_type: string;
+    severity: string;
+    timestamp: string;
+    event_id: string;
+    metadata: any;
+    created_at: string;
+  }>;
+  evidences: Array<{
+    id: string;
+    evidence_type: string;
+    storage_path: string;
+    storage_type: string;
+    captured_at: string;
+    metadata: any;
+    view_url: string;
+    created_at: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getAdminProctoringSessions(params?: {
+  assessment_id?: string;
+  status?: string;
+  review_status?: string;
+  risk_level?: string;
+  flagged?: boolean;
+  search?: string;
+}): Promise<AdminProctoringSessionSummary[]> {
+  const res = await adminApi.get<AdminProctoringSessionSummary[]>('/proctoring/sessions/', { params });
+  return res.data;
+}
+
+export async function getAdminProctoringSessionDetail(sessionId: string): Promise<AdminProctoringSessionDetail> {
+  const res = await adminApi.get<AdminProctoringSessionDetail>(`/proctoring/sessions/${sessionId}/`);
+  return res.data;
+}
+
+export async function reviewAdminProctoringSession(
+  sessionId: string,
+  reviewStatus: 'CLEARED' | 'NEEDS_REVIEW' | 'CONFIRMED_VIOLATION',
+  reviewNotes: string = ''
+): Promise<{ success: boolean; session_id: string; review_status: string }> {
+  const res = await adminApi.post(`/proctoring/sessions/${sessionId}/review/`, {
+    review_status: reviewStatus,
+    review_notes: reviewNotes,
+  });
+  return res.data;
+}
+
+export async function fetchAdminProctoringEvidenceBlob(evidenceId: string): Promise<Blob> {
+  const res = await adminApi.get(`/proctoring/evidence/${evidenceId}/view/`, { responseType: 'blob' });
+  return res.data;
+}
+

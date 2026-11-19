@@ -658,3 +658,108 @@ export const updateAttemptCalibration = async (
   return res.data;
 };
 
+// =============================================================================
+// CSL SENTINEL PROCTORING APIS
+// =============================================================================
+
+export interface ProctoringSessionResponse {
+  id: string;
+  assessment_session: string;
+  student: string;
+  assessment: string;
+  status: 'INITIALIZING' | 'ACTIVE' | 'SUSPENDED' | 'COMPLETED' | 'TERMINATED_VIOLATION';
+  camera_status: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'DISCONNECTED' | 'ERROR';
+  face_calibration_status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED' | 'SKIPPED_BY_ADMIN';
+  screen_share_status: 'PENDING' | 'INITIALIZING' | 'ACTIVE' | 'INTERRUPTED' | 'STOPPED';
+  browser_monitoring_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  started_at: string | null;
+  ended_at: string | null;
+  risk_score: number;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  risk_breakdown: Record<string, any>;
+  review_status: 'PENDING' | 'CLEARED' | 'NEEDS_REVIEW' | 'CONFIRMED_VIOLATION';
+  calibration?: any;
+  recent_events?: any[];
+}
+
+export const initProctoringSession = async (attemptId: string): Promise<ProctoringSessionResponse> => {
+  const res = await assessmentApi.post<ProctoringSessionResponse>('/proctoring/init/', { attempt_id: attemptId });
+  return res.data;
+};
+
+export const updateProctoringCameraStatus = async (
+  sessionId: string,
+  cameraStatus: 'ACTIVE' | 'DISCONNECTED' | 'ERROR',
+  metadata: Record<string, any> = {}
+): Promise<{ success: boolean; camera_status: string; risk_score: number }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/camera-status/`, {
+    status: cameraStatus,
+    metadata,
+  });
+  return res.data;
+};
+
+export const submitProctoringCalibration = async (
+  sessionId: string,
+  payload: {
+    baseline_orientation: { yaw: number; pitch: number; roll: number; confidence?: number };
+    calibration_results: any[];
+    calibration_completed: boolean;
+  }
+): Promise<{ success: boolean; face_calibration_status: string; calibration_id: string }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/calibration/`, payload);
+  return res.data;
+};
+
+export const updateProctoringScreenShareStatus = async (
+  sessionId: string,
+  screenShareStatus: 'ACTIVE' | 'INTERRUPTED' | 'STOPPED',
+  metadata: Record<string, any> = {}
+): Promise<{ success: boolean; screen_share_status: string; risk_score: number }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/screen-share-status/`, {
+    status: screenShareStatus,
+    metadata,
+  });
+  return res.data;
+};
+
+export const recordProctoringEvent = async (
+  sessionId: string,
+  payload: {
+    event_type: string;
+    severity?: 'INFO' | 'WARNING' | 'CRITICAL';
+    event_id?: string;
+    metadata?: Record<string, any>;
+  }
+): Promise<{ status: string; event_id?: number; event_type?: string; risk_score: number; risk_level: string }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/events/`, payload);
+  return res.data;
+};
+
+export const uploadProctoringEvidence = async (
+  sessionId: string,
+  frameBase64: string,
+  evidenceType: 'WEBCAM_SNAPSHOT' | 'SCREEN_SNAPSHOT' | 'CALIBRATION_FRAME' = 'WEBCAM_SNAPSHOT',
+  relatedEventId?: number,
+  metadata: Record<string, any> = {}
+): Promise<{ success: boolean; evidence_id: string; storage_type: string }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/evidence/`, {
+    frame_base64: frameBase64,
+    evidence_type: evidenceType,
+    related_event_id: relatedEventId,
+    metadata,
+  });
+  return res.data;
+};
+
+export const getProctoringSessionStatus = async (sessionId: string): Promise<ProctoringSessionResponse> => {
+  const res = await assessmentApi.get<ProctoringSessionResponse>(`/proctoring/${sessionId}/status/`);
+  return res.data;
+};
+
+export const endProctoringSession = async (sessionId: string): Promise<{ success: boolean; status: string }> => {
+  const res = await assessmentApi.post(`/proctoring/${sessionId}/end/`);
+  return res.data;
+};
+
+
