@@ -695,7 +695,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             if "is_standalone" not in validated_data:
                 assessment.is_standalone = not valid_drives.exists()
                 assessment.save(update_fields=["is_standalone"])
-        if sections_data and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
+        if sections_data is not None and assessment.delivery_mode != Assessment.DeliveryMode.PDF_CODING:
             self._sync_sections(assessment, sections_data)
 
         if hasattr(self, "_validated_pdf_metadata"):
@@ -775,7 +775,7 @@ class AdminAssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             if "is_standalone" not in validated_data:
                 assessment.is_standalone = not valid_drives.exists()
                 assessment.save(update_fields=["is_standalone"])
-        if sections_data is not None and assessment.delivery_mode == Assessment.DeliveryMode.MCQ:
+        if sections_data is not None and assessment.delivery_mode != Assessment.DeliveryMode.PDF_CODING:
             self._sync_sections(assessment, sections_data)
 
         if hasattr(self, "_validated_pdf_metadata"):
@@ -1673,6 +1673,11 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
     question_section = serializers.CharField(source="question.section_type", read_only=True)
     question_difficulty = serializers.CharField(source="question.difficulty", read_only=True)
     question_marks = serializers.IntegerField(source="question.marks", read_only=True)
+    question_category = serializers.CharField(source="question.category", read_only=True)
+    question_is_archived = serializers.BooleanField(source="question.is_archived", read_only=True)
+    question_is_active = serializers.BooleanField(source="question.is_active", read_only=True)
+    question_assessment_type = serializers.CharField(source="question.assessment_type", read_only=True)
+    has_programming_details = serializers.SerializerMethodField()
 
     class Meta:
         model = QuestionPoolItem
@@ -1686,7 +1691,18 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
             "question_section",
             "question_difficulty",
             "question_marks",
+            "question_category",
+            "question_is_archived",
+            "question_is_active",
+            "question_assessment_type",
+            "has_programming_details",
         ]
+
+    def get_has_programming_details(self, obj):
+        try:
+            return hasattr(obj.question, "programming_details") and obj.question.programming_details is not None
+        except Exception:
+            return False
 
 
 class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):

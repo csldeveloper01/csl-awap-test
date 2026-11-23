@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import { SecurePdfViewer } from '../../components/assessment/SecurePdfViewer';
 import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygroundPane';
@@ -32,7 +32,16 @@ interface PendingAnswerRecord {
 
 export function AssessmentExamPage() {
   const { attemptId } = useParams<{ attemptId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const urlToken = searchParams.get('token');
+    if (urlToken) {
+      sessionStorage.setItem('csl_assessment_token', urlToken);
+      localStorage.setItem('csl_assessment_token', urlToken);
+    }
+  }, [searchParams]);
 
   const [attempt, setAttempt] = useState<AttemptDetailResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);

@@ -16,7 +16,7 @@ SIGNER_SALT = "csl-assessment-candidate-v1"
 TOKEN_MAX_AGE_SECONDS = 7200  # 2 hours default lifetime
 
 
-def generate_candidate_token(candidate_id: str, attempt_id: str = None) -> str:
+def generate_candidate_token(candidate_id: str, attempt_id: str = None, is_simulation: bool = False) -> str:
     """
     Generate a cryptographic, timestamped token for a candidate and attempt.
     """
@@ -24,6 +24,7 @@ def generate_candidate_token(candidate_id: str, attempt_id: str = None) -> str:
     payload = {
         "candidate_id": str(candidate_id),
         "attempt_id": str(attempt_id) if attempt_id else None,
+        "is_simulation": bool(is_simulation),
     }
     return signer.sign_object(payload)
 
@@ -70,16 +71,22 @@ class CandidateAssessmentAuthentication(BaseAuthentication):
         data = decode_candidate_token(token)
         candidate_id = data.get("candidate_id")
         attempt_id = data.get("attempt_id")
+        is_simulation = bool(data.get("is_simulation", False))
 
         try:
             candidate = Candidate.objects.get(id=candidate_id)
         except Candidate.DoesNotExist:
             raise exceptions.AuthenticationFailed("Candidate identity not found.")
 
+        # Ensure simulation flag matches
+        if bool(getattr(candidate, "is_simulation", False)) != is_simulation:
+            raise exceptions.AuthenticationFailed("Assessment session credential security mismatch.")
+
         # Attach assessment session metadata to request
         request.candidate = candidate
         request.assessment_token_data = data
         request.authenticated_attempt_id = attempt_id
+        request.is_simulation = is_simulation
 
         # Return (candidate, token) as DRF (user, auth) pair
         return (candidate, token)

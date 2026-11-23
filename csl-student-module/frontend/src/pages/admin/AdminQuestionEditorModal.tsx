@@ -14,11 +14,12 @@ interface AdminQuestionEditorModalProps {
   question: AdminQuestion | null; // null if creating, populated if editing
   isOpen: boolean;
   onClose: () => void;
-  onSave: (data: Partial<AdminQuestion> & { assessment_id?: string }) => Promise<void>;
+  onSave: (data: Partial<AdminQuestion> & { assessment_id?: string; pool_id?: string; question_type?: 'MCQ' | 'CODING' }) => Promise<void>;
   saving: boolean;
   assessments?: AdminAssessment[];
   defaultAssessmentId?: string;
   sections?: AdminSection[];
+  forcedType?: 'MCQ' | 'CODING';
 }
 
 export function AdminQuestionEditorModal({
@@ -30,6 +31,7 @@ export function AdminQuestionEditorModal({
   assessments = [],
   defaultAssessmentId = '',
   sections = [],
+  forcedType,
 }: AdminQuestionEditorModalProps) {
   const isEditMode = Boolean(question && question.id);
 
@@ -46,6 +48,16 @@ export function AdminQuestionEditorModal({
       getAdminSections().then(setLoadedSections).catch(() => {});
     }
   }, [sections, isOpen]);
+
+  useEffect(() => {
+    if (forcedType === 'CODING') {
+      setSectionType('CODING');
+      setMarks((prev) => (prev <= 1 ? 10 : prev));
+    } else if (forcedType === 'MCQ' && sectionType === 'CODING') {
+      setSectionType('APTITUDE');
+      setMarks((prev) => (prev === 10 ? 1 : prev));
+    }
+  }, [forcedType, isOpen]);
   const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
   const [optionA, setOptionA] = useState('');
   const [optionB, setOptionB] = useState('');
@@ -493,12 +505,20 @@ export function AdminQuestionEditorModal({
                   letterSpacing: '-0.01em',
                 }}
               >
-                {isEditMode ? `Edit Question #${question!.id}` : 'Create New Question'}
+                {isEditMode
+                  ? `Edit Question #${question!.id}`
+                  : forcedType === 'CODING'
+                  ? 'Create Coding Problem'
+                  : forcedType === 'MCQ'
+                  ? 'Create MCQ Question'
+                  : 'Create New Question'}
               </h2>
               <p style={{ fontSize: '12.5px', color: '#64748B', margin: 0 }}>
                 {isEditMode
-                  ? 'Update the question details. Changes will apply to future assessments.'
-                  : 'Compose a new diagnostic question for the initial assessment pool.'}
+                  ? 'Update question details, options, constraints, or test cases.'
+                  : forcedType === 'CODING'
+                  ? 'Author an algorithmic coding problem with public and hidden test cases.'
+                  : 'Compose a multiple choice question with options, correct answer, and explanation.'}
               </p>
             </div>
           </div>

@@ -56,14 +56,8 @@ export function AssessmentInstructionsPage() {
   // Slide 4: Camera Calibration & Admin Bypass
   const [bypassGranted, setBypassGranted] = useState<boolean>(false);
   const [bypassReason, setBypassReason] = useState<string>('');
-  const [calibrationStep, setCalibrationStep] = useState<0 | 1 | 2 | 3 | 4>(0);
-  const [calibrationProgress, setCalibrationProgress] = useState<number>(0);
-  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
-  const [_calibrationPoses, setCalibrationPoses] = useState<Array<{ name: string; timestamp: number; confidence: number }>>([]);
-  const [calibrationCompleted, setCalibrationCompleted] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const calibVideoRef = useRef<HTMLVideoElement>(null);
 
   // Device eligibility state
   const [eligibility, setEligibility] = useState<DeviceEligibilityResult>(() =>
@@ -129,7 +123,6 @@ export function AssessmentInstructionsPage() {
         if (res.bypass_granted) {
           setBypassGranted(true);
           setBypassReason(res.reason || 'Authorized by Administrator');
-          setCalibrationCompleted(true);
         }
       })
       .catch((err) => {
@@ -139,15 +132,10 @@ export function AssessmentInstructionsPage() {
 
   // Attach camera stream to video preview elements
   useEffect(() => {
-    if (cameraStream) {
-      if (videoRef.current) {
-        videoRef.current.srcObject = cameraStream;
-      }
-      if (calibVideoRef.current) {
-        calibVideoRef.current.srcObject = cameraStream;
-      }
+    if (cameraStream && videoRef.current) {
+      videoRef.current.srcObject = cameraStream;
     }
-  }, [cameraStream, currentSlide, calibrationStep]);
+  }, [cameraStream, currentSlide]);
 
   // Cleanup media streams on unmount
   useEffect(() => {
@@ -228,76 +216,19 @@ export function AssessmentInstructionsPage() {
     }
   };
 
-  // 4-step head pose calibration routine
-  const startCalibrationSequence = () => {
-    if (isCalibrating || calibrationCompleted) return;
-    setIsCalibrating(true);
-    setCalibrationStep(1);
-    setCalibrationProgress(0);
-
-    const poses: Array<{ name: string; timestamp: number; confidence: number }> = [];
-
-    // Step 1: Look straight (2000ms)
-    let p1 = 0;
-    const interval = 100;
-    const t1 = setInterval(() => {
-      p1 += (interval / 2000) * 100;
-      setCalibrationProgress(Math.min(100, Math.round(p1)));
-      if (p1 >= 100) {
-        clearInterval(t1);
-        poses.push({ name: 'LOOK_STRAIGHT', timestamp: Date.now(), confidence: 0.98 });
-        setCalibrationPoses([...poses]);
-        setCalibrationStep(2);
-        setCalibrationProgress(0);
-
-        // Step 2: Turn right (2000ms)
-        let p2 = 0;
-        const t2 = setInterval(() => {
-          p2 += (interval / 2000) * 100;
-          setCalibrationProgress(Math.min(100, Math.round(p2)));
-          if (p2 >= 100) {
-            clearInterval(t2);
-            poses.push({ name: 'TURN_RIGHT', timestamp: Date.now(), confidence: 0.95 });
-            setCalibrationPoses([...poses]);
-            setCalibrationStep(3);
-            setCalibrationProgress(0);
-
-            // Step 3: Turn left (2000ms)
-            let p3 = 0;
-            const t3 = setInterval(() => {
-              p3 += (interval / 2000) * 100;
-              setCalibrationProgress(Math.min(100, Math.round(p3)));
-              if (p3 >= 100) {
-                clearInterval(t3);
-                poses.push({ name: 'TURN_LEFT', timestamp: Date.now(), confidence: 0.95 });
-                setCalibrationPoses([...poses]);
-                setCalibrationStep(4);
-                setCalibrationProgress(0);
-
-                // Step 4: Look straight again (2000ms)
-                let p4 = 0;
-                const t4 = setInterval(() => {
-                  p4 += (interval / 2000) * 100;
-                  setCalibrationProgress(Math.min(100, Math.round(p4)));
-                  if (p4 >= 100) {
-                    clearInterval(t4);
-                    poses.push({ name: 'CENTERED_BASELINE', timestamp: Date.now(), confidence: 0.99 });
-                    setCalibrationPoses([...poses]);
-                    setCalibrationCompleted(true);
-                    setIsCalibrating(false);
-                  }
-                }, interval);
-              }
-            }, interval);
-          }
-        }, interval);
-      }
-    }, interval);
-  };
-
   const handleStart = async () => {
     if (loading) return;
     setError('');
+
+    // Stop any instruction-level preview tracks so ProctoringInitializer has clean, exclusive hardware access
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      setCameraStream(null);
+    }
+    if (screenStream) {
+      screenStream.getTracks().forEach((t) => t.stop());
+      setScreenStream(null);
+    }
 
     // Re-verify device and viewport eligibility
     const currentCheck = checkDeviceEligibility();
@@ -793,7 +724,7 @@ export function AssessmentInstructionsPage() {
               { num: 1, label: '1. External Devices' },
               { num: 2, label: '2. Permissions' },
               { num: 3, label: '3. Rules & Scoring' },
-              { num: 4, label: '4. Camera Calibration' },
+              { num: 4, label: '4. Sentinel Verification' },
             ].map((s) => (
               <div
                 key={s.num}
@@ -810,7 +741,7 @@ export function AssessmentInstructionsPage() {
             <span style={{ color: currentSlide === 1 ? '#0D52D6' : undefined }}>External Devices</span>
             <span style={{ color: currentSlide === 2 ? '#0D52D6' : undefined }}>Permissions</span>
             <span style={{ color: currentSlide === 3 ? '#0D52D6' : undefined }}>Rules & Scoring</span>
-            <span style={{ color: currentSlide === 4 ? '#0D52D6' : undefined }}>Calibration</span>
+            <span style={{ color: currentSlide === 4 ? '#0D52D6' : undefined }}>Sentinel Gate</span>
           </div>
         </div>
 
@@ -1320,21 +1251,21 @@ export function AssessmentInstructionsPage() {
                   cursor: rulesAcknowledged ? 'pointer' : 'not-allowed',
                 }}
               >
-                Next: Camera Calibration →
+                Next: Sentinel Verification →
               </button>
             </div>
           </div>
         )}
 
-        {/* ─── SLIDE 4: CAMERA CALIBRATION & LAUNCH ──────────────────── */}
+        {/* ─── SLIDE 4: SENTINEL VERIFICATION & LAUNCH ──────────────────── */}
         {currentSlide === 4 && (
           <div>
             <div style={{ marginBottom: '20px' }}>
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
-                Proctoring Camera Calibration
+                CSL Sentinel Integrity System Verification Gate
               </h2>
               <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
-                Calibrate your camera baseline by looking straight, turning slightly right and left, and recentering.
+                Review the automated proctoring verification pipeline before launching your assessment.
               </p>
             </div>
 
@@ -1359,133 +1290,52 @@ export function AssessmentInstructionsPage() {
                 </p>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px', marginBottom: '24px' }}>
-                {/* Live Video Preview */}
-                <div
-                  style={{
-                    backgroundColor: '#0F172A',
-                    borderRadius: '16px',
-                    overflow: 'hidden',
-                    position: 'relative',
-                    aspectRatio: '4/3',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <video
-                    ref={calibVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-
-                  {/* Calibration Pose Overlay */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      bottom: '12px',
-                      left: '12px',
-                      right: '12px',
-                      backgroundColor: 'rgba(15, 23, 42, 0.85)',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      color: '#FFFFFF',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                    }}
-                  >
-                    <span>
-                      {calibrationStep === 0 && 'Ready to calibrate'}
-                      {calibrationStep === 1 && 'Step 1/4: Look straight at camera'}
-                      {calibrationStep === 2 && 'Step 2/4: Turn head slightly right'}
-                      {calibrationStep === 3 && 'Step 3/4: Turn head slightly left'}
-                      {calibrationStep === 4 && 'Step 4/4: Look straight again'}
-                    </span>
-                    {isCalibrating && (
-                      <span style={{ color: '#60A5FA' }}>{calibrationProgress}%</span>
-                    )}
+              <div style={{ backgroundColor: '#F8FAFC', borderRadius: '14px', border: '1px solid #E2E8F0', padding: '24px', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', backgroundColor: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+                    🤖
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                      Mandatory 7-Step CSL Sentinel Verification Gate
+                    </h3>
+                    <p style={{ fontSize: '12px', color: '#64748B', margin: '2px 0 0 0' }}>
+                      Once you click &quot;Start Assessment&quot;, the CSL Sentinel gate will automatically execute real hardware and AI checks:
+                    </p>
                   </div>
                 </div>
 
-                {/* Calibration Controls & Steps */}
-                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                  <div>
-                    <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', margin: '0 0 12px 0' }}>
-                      Guided Head Pose Steps:
-                    </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {[
-                        { step: 1, text: '1. Look straight into webcam' },
-                        { step: 2, text: '2. Turn head slightly right' },
-                        { step: 3, text: '3. Turn head slightly left' },
-                        { step: 4, text: '4. Center and hold pose' },
-                      ].map((item) => (
-                        <div
-                          key={item.step}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: '8px',
-                            backgroundColor: calibrationStep > item.step || calibrationCompleted ? '#DCFCE7' : calibrationStep === item.step ? '#EFF6FF' : '#F1F5F9',
-                            color: calibrationStep > item.step || calibrationCompleted ? '#15803D' : calibrationStep === item.step ? '#1D4ED8' : '#64748B',
-                            fontWeight: 700,
-                            fontSize: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <span>{item.text}</span>
-                          {(calibrationStep > item.step || calibrationCompleted) ? (
-                            <span>✓</span>
-                          ) : calibrationStep === item.step ? (
-                            <span>⏳</span>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {!calibrationCompleted ? (
-                    <button
-                      type="button"
-                      onClick={startCalibrationSequence}
-                      disabled={isCalibrating || !cameraGranted}
-                      style={{
-                        marginTop: '16px',
-                        backgroundColor: '#0D52D6',
-                        color: '#FFFFFF',
-                        padding: '12px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        cursor: isCalibrating ? 'wait' : 'pointer',
-                        opacity: isCalibrating ? 0.7 : 1,
-                      }}
-                    >
-                      {isCalibrating ? 'Calibrating...' : 'Start 4-Step Calibration'}
-                    </button>
-                  ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                  {[
+                    { num: '1', title: 'Camera Stream Check', desc: 'Hardware verification via browser MediaDevices API' },
+                    { num: '2', title: 'MediaPipe Face Mesh', desc: 'Initializes real-time facial feature tracking' },
+                    { num: '3', title: 'Head Pose Calibration', desc: 'Interactive head turn calibration & baseline calculation' },
+                    { num: '4', title: 'Screen Share Lock', desc: 'Validates entire desktop capture & monitors track closure' },
+                    { num: '5', title: 'Anti-Cheat Inspection', desc: 'Verifies fullscreen mode and prevents developer shortcuts' },
+                    { num: '6', title: 'Session Handshake', desc: 'Cryptographically registers proctoring session on server' },
+                    { num: '7', title: 'Continuous Stream Handoff', desc: 'Transfers active tracks to exam room with zero re-prompting' },
+                  ].map((step) => (
                     <div
+                      key={step.num}
                       style={{
-                        marginTop: '16px',
-                        padding: '12px',
-                        borderRadius: '10px',
-                        backgroundColor: '#DCFCE7',
-                        color: '#15803D',
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        textAlign: 'center',
+                        padding: '10px 14px',
+                        backgroundColor: '#FFFFFF',
+                        borderRadius: '8px',
+                        border: '1px solid #E2E8F0',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '10px',
                       }}
                     >
-                      ✓ Calibration Complete — Baseline Verified
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#0D52D6', backgroundColor: '#EFF6FF', padding: '2px 7px', borderRadius: '4px' }}>
+                        {step.num}
+                      </span>
+                      <div>
+                        <strong style={{ fontSize: '12px', color: '#0F172A', display: 'block' }}>{step.title}</strong>
+                        <span style={{ fontSize: '11px', color: '#64748B' }}>{step.desc}</span>
+                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
               </div>
             )}
@@ -1513,20 +1363,20 @@ export function AssessmentInstructionsPage() {
               <button
                 type="button"
                 onClick={handleStart}
-                disabled={(!calibrationCompleted && !bypassGranted) || loading}
+                disabled={loading}
                 style={{
-                  backgroundColor: ((calibrationCompleted || bypassGranted) && !loading) ? '#0D52D6' : '#94A3B8',
+                  backgroundColor: !loading ? '#0D52D6' : '#94A3B8',
                   color: '#FFFFFF',
                   padding: '14px 32px',
                   borderRadius: '10px',
                   border: 'none',
                   fontSize: '15px',
                   fontWeight: 800,
-                  cursor: ((calibrationCompleted || bypassGranted) && !loading) ? 'pointer' : 'not-allowed',
-                  boxShadow: (calibrationCompleted || bypassGranted) ? '0 4px 14px rgba(13,82,214,0.3)' : 'none',
+                  cursor: !loading ? 'pointer' : 'not-allowed',
+                  boxShadow: !loading ? '0 4px 14px rgba(13,82,214,0.3)' : 'none',
                 }}
               >
-                {loading ? 'Entering Fullscreen & Initializing Exam...' : 'Start Assessment'}
+                {loading ? 'Entering Fullscreen & Initializing Gate...' : 'Start Assessment →'}
               </button>
             </div>
           </div>

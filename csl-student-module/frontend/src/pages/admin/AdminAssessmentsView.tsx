@@ -35,6 +35,8 @@ import {
   unlinkAdminAssessmentPoolSource,
   startAdminTestRun,
   downloadAdminAssessmentSebConfig,
+  createAdminQuestion,
+  createAdminQuestionInPool,
   type AdminAssessment,
   type AdminAssessmentDetail,
   type AdminCollege,
@@ -44,6 +46,7 @@ import {
   fetchAdminDrives,
   type AdminDrive,
 } from '../../api/admin';
+import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 
 interface AdminAssessmentsViewProps {
   onNavigateToQuestions?: (assessmentId?: string) => void;
@@ -194,11 +197,20 @@ export function AdminAssessmentsView({
   const [createError, setCreateError] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
+  // Wizard Direct Question Authoring (Phase 2)
+  const [showWizardQuestionModal, setShowWizardQuestionModal] = useState(false);
+  const [wizardQuestionType, setWizardQuestionType] = useState<'MCQ' | 'CODING'>('MCQ');
+  const [wizardSavingQuestion, setWizardSavingQuestion] = useState(false);
+
   const handleTestRun = async (assessmentId: string) => {
     try {
       setRunningTestSimulation(assessmentId);
       const res = await startAdminTestRun(assessmentId);
-      window.open(`/assessment/exam/${res.attempt_id}?simulation=true`, '_blank');
+      if (res.token) {
+        sessionStorage.setItem('csl_assessment_token', res.token);
+        localStorage.setItem('csl_assessment_token', res.token);
+      }
+      window.open(`/assessment/exam/${res.attempt_id}?simulation=true&token=${encodeURIComponent(res.token || '')}`, '_blank');
     } catch (err: any) {
       alert(formatApiError(err, 'Failed to launch isolated test run simulation.'));
     } finally {
@@ -281,6 +293,62 @@ export function AdminAssessmentsView({
       setAvailableSections(data);
     } catch (err) {
       console.error('Failed to fetch reusable sections:', err);
+    }
+  };
+
+  const fetchQuestionPools = async () => {
+    try {
+      const data = await getAdminQuestionPools();
+      setAvailableQuestionPools(data);
+    } catch (err) {
+      console.error('Failed to fetch question pools:', err);
+    }
+  };
+
+  const handleSaveWizardQuestion = async (data: any) => {
+    try {
+      setWizardSavingQuestion(true);
+      const targetPoolId = createForm.selected_pool_ids[0];
+      let createdQ: any;
+      if (targetPoolId) {
+        const res = await createAdminQuestionInPool(targetPoolId, {
+          ...data,
+          question_type: wizardQuestionType,
+        });
+        createdQ = res.question;
+      } else {
+        createdQ = await createAdminQuestion({
+          ...data,
+          question_type: wizardQuestionType,
+        });
+      }
+
+      if (createdQ && createdQ.section) {
+        const matchSec = availableSections.find((s) => s.id === createdQ.section);
+        if (matchSec) {
+          setCreateSections((prev) => {
+            if (prev.some((s) => s.section_id === matchSec.id)) return prev;
+            return [
+              ...prev,
+              {
+                section_id: matchSec.id,
+                name: matchSec.name,
+                code: matchSec.code,
+                question_count: 5,
+                marks_per_question: createdQ.marks || 1,
+              },
+            ];
+          });
+        }
+      }
+
+      await fetchSections();
+      await fetchQuestionPools();
+      setShowWizardQuestionModal(false);
+    } catch (err: any) {
+      alert(formatApiError(err, 'Failed to create question for wizard.'));
+    } finally {
+      setWizardSavingQuestion(false);
     }
   };
 
@@ -1085,6 +1153,7 @@ export function AdminAssessmentsView({
   // Inline Section Creation Submit (without losing assessment form state)
   const handleInlineSectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inlineSectionSaving) return;
     if (!inlineSectionForm.name.trim() || !inlineSectionForm.code.trim()) {
       setInlineSectionError('Name and unique code are required.');
       return;
@@ -1103,7 +1172,7 @@ export function AdminAssessmentsView({
       // Refresh available sections
       await fetchSections();
 
-      // Automatically add new section to the active modal's draft allocations
+      // Automatically add new section to the active modal's draft allocations without duplicates
       const draftItem: AssessmentSectionDraft = {
         section_id: newSec.id,
         name: newSec.name,
@@ -1113,18 +1182,136 @@ export function AdminAssessmentsView({
       };
 
       if (inlineSectionTarget === 'create') {
-        setCreateSections((prev) => [...prev, draftItem]);
+        setCreateSections((prev) => {
+          if (prev.some((s) => s.section_id === newSec.id)) return prev;
+          return [...prev, draftItem];
+        });
       } else {
-        setEditSections((prev) => [...prev, draftItem]);
+        setEditSections((prev) => {
+          if (prev.some((s) => s.section_id === newSec.id)) return prev;
+          return [...prev, draftItem];
+        });
       }
 
       setShowInlineSectionModal(false);
       setInlineSectionForm({ name: '', code: '', description: '' });
     } catch (err: any) {
-      setInlineSectionError(formatApiError(err, 'Failed to create reusable section.'));
+      const apiMsg =
+        err?.response?.data?.code?.[0] ||
+        err?.response?.data?.name?.[0] ||
+        err?.response?.data?.detail ||
+        formatApiError(err, 'Failed to create reusable section.');
+      setInlineSectionError(apiMsg);
     } finally {
       setInlineSectionSaving(false);
     }
+  };
+
+  const renderInlineSectionModal = () => {
+    if (!showInlineSectionModal) return null;
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+        }}
+      >
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '12px',
+            padding: '24px',
+            width: '440px',
+            maxWidth: '90vw',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              Define New Reusable Section
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowInlineSectionModal(false)}
+              style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#94A3B8' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {inlineSectionError && (
+            <div style={{ padding: '8px 12px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
+              {inlineSectionError}
+            </div>
+          )}
+
+          <form onSubmit={handleInlineSectionSubmit}>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Section Name *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Verbal Ability, System Architecture"
+                value={inlineSectionForm.name}
+                onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, name: e.target.value })}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Unique Section Code * (Uppercase)
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. VERBAL, ARCHITECTURE"
+                value={inlineSectionForm.code}
+                onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, code: e.target.value.toUpperCase() })}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box', textTransform: 'uppercase' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '18px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Description (Optional)
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Topics covered..."
+                value={inlineSectionForm.description}
+                onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, description: e.target.value })}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setShowInlineSectionModal(false)}
+                style={{ backgroundColor: '#F1F5F9', color: '#475569', border: 'none', borderRadius: '6px', padding: '8px 12px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={inlineSectionSaving}
+                style={{ backgroundColor: '#0B2E6F', color: '#FFFFFF', border: 'none', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                {inlineSectionSaving ? 'Saving...' : 'Save & Allocate'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
   };
 
   // Drive hierarchy filtered assessments (Phase 2.2.2)
@@ -1736,11 +1923,53 @@ export function AdminAssessmentsView({
 
                 {/* Question Pools Selection */}
                 <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', marginBottom: '20px' }}>
-                  <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', marginBottom: '6px' }}>
-                    Link Question Pools (Optional)
-                  </strong>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <strong style={{ fontSize: '13px', color: '#0F172A', margin: 0 }}>
+                      Link Question Pools & Direct Authoring
+                    </strong>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWizardQuestionType('MCQ');
+                          setShowWizardQuestionModal(true);
+                        }}
+                        style={{
+                          padding: '4px 10px',
+                          backgroundColor: '#EFF6FF',
+                          border: '1px solid #BFDBFE',
+                          color: '#1D4ED8',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        + Create MCQ Question
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWizardQuestionType('CODING');
+                          setShowWizardQuestionModal(true);
+                        }}
+                        style={{
+                          padding: '4px 10px',
+                          backgroundColor: '#F0FDF4',
+                          border: '1px solid #BBF7D0',
+                          color: '#15803D',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        + Create Coding Question
+                      </button>
+                    </div>
+                  </div>
                   <span style={{ fontSize: '12px', color: '#64748B', display: 'block', marginBottom: '12px' }}>
-                    Select independent question pools to automatically source questions for this assessment.
+                    Select independent question pools to automatically source questions, or create new questions directly into the draft.
                   </span>
                   {availableQuestionPools.length === 0 ? (
                     <div style={{ fontSize: '12px', color: '#94A3B8' }}>No independent question pools found. Questions will be sampled from the central bank.</div>
@@ -2248,6 +2477,30 @@ export function AdminAssessmentsView({
                 📂 Manage Question Pool
               </button>
 
+              {/* Return to Drive Workspace if originating from a Drive (Phase 3) */}
+              {(searchParams.get('driveId') || (createSelectedDriveIds && createSelectedDriveIds.length > 0)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetDriveId = searchParams.get('driveId') || createSelectedDriveIds[0];
+                    setIsCreatingWizard(false);
+                    setSearchParams({ tab: 'drives', driveId: targetDriveId });
+                  }}
+                  style={{
+                    padding: '12px 20px',
+                    borderRadius: '10px',
+                    border: '1px solid #0052CC',
+                    backgroundColor: '#EFF6FF',
+                    color: '#0052CC',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  🏢 Return to Drive Workspace
+                </button>
+              )}
+
               {/* Return to Assessments */}
               <button
                 type="button"
@@ -2271,6 +2524,8 @@ export function AdminAssessmentsView({
             </div>
           </div>
         )}
+        {/* Inline Section Modal mounted inside wizard */}
+        {renderInlineSectionModal()}
       </div>
     );
   }
@@ -4547,109 +4802,7 @@ export function AdminAssessmentsView({
       )}
 
       {/* ─── INLINE CREATE SECTION MODAL ──────────────────────────────── */}
-      {showInlineSectionModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 110,
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '12px',
-              padding: '24px',
-              width: '440px',
-              maxWidth: '90vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-                Define New Reusable Section
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowInlineSectionModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#94A3B8' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {inlineSectionError && (
-              <div style={{ padding: '8px 12px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', borderRadius: '6px', fontSize: '12px', marginBottom: '12px' }}>
-                {inlineSectionError}
-              </div>
-            )}
-
-            <form onSubmit={handleInlineSectionSubmit}>
-              <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Section Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Verbal Ability, System Architecture"
-                  value={inlineSectionForm.name}
-                  onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, name: e.target.value })}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                />
-              </div>
-
-              <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Unique Section Code * (Uppercase)
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. VERBAL, ARCHITECTURE"
-                  value={inlineSectionForm.code}
-                  onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, code: e.target.value.toUpperCase() })}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box', textTransform: 'uppercase' }}
-                />
-              </div>
-
-              <div style={{ marginBottom: '18px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Description (Optional)
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="Topics covered..."
-                  value={inlineSectionForm.description}
-                  onChange={(e) => setInlineSectionForm({ ...inlineSectionForm, description: e.target.value })}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowInlineSectionModal(false)}
-                  style={{ backgroundColor: '#F1F5F9', color: '#475569', border: 'none', borderRadius: '6px', padding: '8px 12px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={inlineSectionSaving}
-                  style={{ backgroundColor: '#0B2E6F', color: '#FFFFFF', border: 'none', borderRadius: '6px', padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                >
-                  {inlineSectionSaving ? 'Saving...' : 'Save & Allocate'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {renderInlineSectionModal()}
 
       {/* ─── CLOSE ASSESSMENT CONFIRMATION MODAL ─────────────────────── */}
       {showCloseModal && selectedAssessment && (
@@ -6811,6 +6964,19 @@ export function AdminAssessmentsView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Wizard Question Authoring Modal (Phase 2) */}
+      {showWizardQuestionModal && (
+        <AdminQuestionEditorModal
+          question={null}
+          isOpen={showWizardQuestionModal}
+          onClose={() => setShowWizardQuestionModal(false)}
+          onSave={handleSaveWizardQuestion}
+          saving={wizardSavingQuestion}
+          sections={availableSections}
+          forcedType={wizardQuestionType}
+        />
       )}
     </div>
   );

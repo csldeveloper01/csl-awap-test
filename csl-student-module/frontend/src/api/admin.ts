@@ -968,6 +968,11 @@ export interface AdminQuestionPool {
     question_section: string;
     question_difficulty: string;
     question_marks: number;
+    question_category?: string;
+    question_is_archived?: boolean;
+    question_is_active?: boolean;
+    question_assessment_type?: string;
+    has_programming_details?: boolean;
   }[];
   linked_assessments?: {
     assessment_id: string;
@@ -1039,6 +1044,25 @@ export async function manageAdminQuestionPoolItems(
     question_ids: questionIds,
     action,
   });
+  return res.data;
+}
+
+export async function createAdminQuestionInPool(
+  poolId: string,
+  data: Partial<AdminQuestion> & {
+    question_type?: 'MCQ' | 'CODING';
+    coding_details?: any;
+  }
+): Promise<{ success: boolean; question: AdminQuestion; pool: AdminQuestionPool }> {
+  const res = await adminApi.post(`/question-pools/${poolId}/questions/`, data);
+  return res.data;
+}
+
+export async function removeAdminQuestionFromPool(
+  poolId: string,
+  questionId: number
+): Promise<AdminQuestionPool> {
+  const res = await adminApi.delete<AdminQuestionPool>(`/question-pools/${poolId}/questions/${questionId}/`);
   return res.data;
 }
 
@@ -1402,6 +1426,21 @@ export async function addAdminDriveAssessment(
 
 export async function removeAdminDriveAssessment(driveId: string, assessmentId: string): Promise<{ message: string }> {
   const res = await adminApi.delete(`/drives/${driveId}/assessments/`, { data: { assessment_id: assessmentId } });
+  return res.data;
+}
+
+export async function regenerateAdminDriveCode(
+  driveId: string
+): Promise<{ success: boolean; message: string; drive_code: string; drive: AdminDriveDetail }> {
+  const res = await adminApi.post(`/drives/${driveId}/regenerate-code/`);
+  return res.data;
+}
+
+export async function reconcileDriveOrphans(
+  action: 'reset_standalone' | 'attach_drive' = 'reset_standalone',
+  driveId?: string
+): Promise<{ success: boolean; message: string; reconciled_count: number }> {
+  const res = await adminApi.post('/drives/reconcile-orphans/', { action, drive_id: driveId });
   return res.data;
 }
 

@@ -9,7 +9,7 @@ from rest_framework.authentication import SessionAuthentication, BasicAuthentica
 from rest_framework.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.http import HttpResponse
 
@@ -234,9 +234,26 @@ class StudentAttemptRecoveryView(APIView):
         ).first()
 
         if not candidate:
+            cand_by_reg = Candidate.objects.filter(register_number__iexact=reg_no).first()
+            if cand_by_reg:
+                if cand_by_reg.is_simulation:
+                    return Response(
+                        {"detail": "Simulation accounts cannot be accessed via student recovery."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                return Response(
+                    {"detail": f"Verification factor does not match our records for register number '{reg_no}'. Please check your registered email or phone."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
             return Response(
-                {"detail": "Invalid candidate verification credentials. Please check your registration number and email/phone."},
-                status=status.HTTP_401_UNAUTHORIZED,
+                {"detail": f"No candidate found with register number '{reg_no}'. Please check your registration number or register first."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if candidate.is_simulation:
+            return Response(
+                {"detail": "Simulation accounts cannot be accessed via student recovery."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         with transaction.atomic():
@@ -2003,6 +2020,12 @@ class CandidateLoginView(APIView):
             return Response(
                 {"detail": f"No candidate record found matching '{identifier}'. Please register first if you are a new candidate."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if cand.is_simulation:
+            return Response(
+                {"detail": "Simulation accounts cannot be accessed via student login."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if not cand.is_active:

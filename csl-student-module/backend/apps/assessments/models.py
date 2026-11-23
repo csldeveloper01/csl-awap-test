@@ -614,6 +614,11 @@ class Candidate(models.Model):
     activation_token = models.CharField(max_length=100, blank=True, default="", db_index=True)
     activation_token_expires_at = models.DateTimeField(null=True, blank=True)
     is_email_verified = models.BooleanField(default=False)
+    is_simulation = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True if this candidate is an isolated simulation identity for admin test runs",
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1303,6 +1308,8 @@ class AssessmentAuditLog(models.Model):
         ACTION_REVERSED = "ACTION_REVERSED", "Administrative Action Reversed / Undone"
         INSTITUTION_REQUESTED = "INSTITUTION_REQUESTED", "Student Institution Requested"
         PROCTORING_SESSION_REVIEWED = "PROCTORING_SESSION_REVIEWED", "Proctoring Session Reviewed"
+        DRIVE_CODE_REGENERATED = "DRIVE_CODE_REGENERATED", "Drive Access Code Regenerated"
+        ORPHANS_RECONCILED = "ORPHANS_RECONCILED", "Orphaned Assessments Reconciled"
 
     class ReversalStatus(models.TextChoices):
         NOT_REVERSIBLE = "NOT_REVERSIBLE", "Not Reversible"

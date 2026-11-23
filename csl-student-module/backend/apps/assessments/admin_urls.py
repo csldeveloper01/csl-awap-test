@@ -57,12 +57,15 @@ from .admin_views import (
     AdminQuestionPoolListCreateView,
     AdminQuestionPoolDetailView,
     AdminQuestionPoolItemsView,
+    AdminQuestionPoolQuestionsView,
     AdminAssessmentPoolSourcesView,
     AdminAccessGrantListView,
     AdminRecoveryEventsListView,
     AdminDriveListCreateView,
     AdminDriveDetailView,
     AdminDriveAssessmentsView,
+    AdminDriveRegenerateCodeView,
+    AdminDriveReconcileOrphansView,
     AdminDriveRegistrationsView,
     AdminDriveInvitationsView,
     AdminDriveEligibilityView,
@@ -99,7 +102,9 @@ urlpatterns = [
 
     # Drives Management
     path("drives/", AdminDriveListCreateView.as_view(), name="admin-drives"),
+    path("drives/reconcile-orphans/", AdminDriveReconcileOrphansView.as_view(), name="admin-drive-reconcile-orphans"),
     path("drives/<uuid:pk>/", AdminDriveDetailView.as_view(), name="admin-drive-detail"),
+    path("drives/<uuid:pk>/regenerate-code/", AdminDriveRegenerateCodeView.as_view(), name="admin-drive-regenerate-code"),
     path("drives/<uuid:pk>/assessments/", AdminDriveAssessmentsView.as_view(), name="admin-drive-assessments"),
     path("drives/<uuid:pk>/registrations/", AdminDriveRegistrationsView.as_view(), name="admin-drive-registrations"),
     path("drives/<uuid:pk>/invitations/", AdminDriveInvitationsView.as_view(), name="admin-drive-invitations"),
@@ -170,6 +175,8 @@ urlpatterns = [
     path("question-pools/", AdminQuestionPoolListCreateView.as_view(), name="admin-question-pools"),
     path("question-pools/<uuid:pk>/", AdminQuestionPoolDetailView.as_view(), name="admin-question-pool-detail"),
     path("question-pools/<uuid:pk>/items/", AdminQuestionPoolItemsView.as_view(), name="admin-question-pool-items"),
+    path("question-pools/<uuid:pk>/questions/", AdminQuestionPoolQuestionsView.as_view(), name="admin-question-pool-questions"),
+    path("question-pools/<uuid:pk>/questions/<int:question_id>/", AdminQuestionPoolQuestionsView.as_view(), name="admin-question-pool-questions-detail"),
     path("assessments/<uuid:pk>/pool-sources/", AdminAssessmentPoolSourcesView.as_view(), name="admin-assessment-pool-sources"),
 
     # Access Grants & Structured Recovery Auditing

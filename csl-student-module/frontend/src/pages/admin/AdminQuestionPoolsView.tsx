@@ -8,10 +8,15 @@ import {
   manageAdminQuestionPoolItems,
   getAdminQuestions,
   getAdminSections,
+  archiveAdminQuestion,
+  updateAdminQuestion,
+  createAdminQuestionInPool,
+  removeAdminQuestionFromPool,
   type AdminQuestionPool,
   type AdminQuestion,
   type AdminSection,
 } from '../../api/admin';
+import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
 
@@ -58,6 +63,17 @@ export function AdminQuestionPoolsView({
   const [managingPool, setManagingPool] = useState<AdminQuestionPool | null>(null);
   const [poolDetailLoading, setPoolDetailLoading] = useState(false);
   const [showAddQuestionsModal, setShowAddQuestionsModal] = useState(false);
+
+  // Direct Question Authoring inside Pool Drawer
+  const [showPoolQuestionModal, setShowPoolQuestionModal] = useState(false);
+  const [poolQuestionType, setPoolQuestionType] = useState<'MCQ' | 'CODING'>('MCQ');
+  const [editingQuestionInPool, setEditingQuestionInPool] = useState<AdminQuestion | null>(null);
+  const [savingPoolQuestion, setSavingPoolQuestion] = useState(false);
+
+  // Drawer Filters
+  const [drawerSearch, setDrawerSearch] = useState('');
+  const [drawerSectionFilter, setDrawerSectionFilter] = useState('');
+  const [drawerDifficultyFilter, setDrawerDifficultyFilter] = useState('');
 
   // Add questions from bank state
   const [bankQuestions, setBankQuestions] = useState<AdminQuestion[]>([]);
@@ -192,11 +208,79 @@ export function AdminQuestionPoolsView({
   const handleRemoveQuestionFromPool = async (questionId: number) => {
     if (!managingPool) return;
     try {
-      const updated = await manageAdminQuestionPoolItems(managingPool.id, [questionId], 'remove');
+      const updated = await removeAdminQuestionFromPool(managingPool.id, questionId);
       setManagingPool(updated);
       loadPools();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to remove question from pool.');
+    }
+  };
+
+  const handleOpenCreateMCQInPool = () => {
+    setEditingQuestionInPool(null);
+    setPoolQuestionType('MCQ');
+    setShowPoolQuestionModal(true);
+  };
+
+  const handleOpenCreateCodingInPool = () => {
+    setEditingQuestionInPool(null);
+    setPoolQuestionType('CODING');
+    setShowPoolQuestionModal(true);
+  };
+
+  const handleEditQuestionInPool = async (questionId: number) => {
+    try {
+      setPoolDetailLoading(true);
+      const allQ = await getAdminQuestions();
+      const match = allQ.find((q) => q.id === questionId);
+      if (match) {
+        setEditingQuestionInPool(match);
+        setPoolQuestionType(match.section_type === 'CODING' || match.assessment_type === 'CODING' ? 'CODING' : 'MCQ');
+        setShowPoolQuestionModal(true);
+      } else {
+        alert('Could not find question details.');
+      }
+    } catch {
+      alert('Failed to load question details for editing.');
+    } finally {
+      setPoolDetailLoading(false);
+    }
+  };
+
+  const handleArchiveQuestionInPool = async (questionId: number) => {
+    try {
+      await archiveAdminQuestion(questionId);
+      if (managingPool) {
+        const detail = await getAdminQuestionPoolDetail(managingPool.id);
+        setManagingPool(detail);
+      }
+      loadPools();
+    } catch {
+      alert('Failed to update question archive status.');
+    }
+  };
+
+  const handleSaveQuestionInPool = async (data: any) => {
+    if (!managingPool) return;
+    try {
+      setSavingPoolQuestion(true);
+      if (editingQuestionInPool) {
+        await updateAdminQuestion(editingQuestionInPool.id, data);
+      } else {
+        await createAdminQuestionInPool(managingPool.id, {
+          ...data,
+          question_type: poolQuestionType,
+        });
+      }
+      setShowPoolQuestionModal(false);
+      setEditingQuestionInPool(null);
+      const detail = await getAdminQuestionPoolDetail(managingPool.id);
+      setManagingPool(detail);
+      loadPools();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to save question in pool.');
+    } finally {
+      setSavingPoolQuestion(false);
     }
   };
 
@@ -1128,13 +1212,13 @@ export function AdminQuestionPoolsView({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
                   type="button"
-                  onClick={handleOpenAddQuestions}
+                  onClick={handleOpenCreateMCQInPool}
                   style={{
-                    padding: '8px 14px',
-                    backgroundColor: '#1455B8',
+                    padding: '8px 12px',
+                    backgroundColor: '#0D52D6',
                     color: '#FFFFFF',
                     border: 'none',
                     borderRadius: '6px',
@@ -1143,10 +1227,48 @@ export function AdminQuestionPoolsView({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px',
+                    gap: '4px',
                   }}
                 >
-                  <span>+ Add Questions from Bank</span>
+                  <span>+ Create MCQ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenCreateCodingInPool}
+                  style={{
+                    padding: '8px 12px',
+                    backgroundColor: '#7C3AED',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <span>+ Create Coding</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenAddQuestions}
+                  style={{
+                    padding: '8px 12px',
+                    backgroundColor: '#F1F5F9',
+                    color: '#1E293B',
+                    border: '1px solid #CBD5E1',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <span>+ Add from Bank</span>
                 </button>
                 <button
                   type="button"
@@ -1247,68 +1369,216 @@ export function AdminQuestionPoolsView({
                   </button>
                 </div>
               ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '50px' }}>#</th>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Prompt</th>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '120px' }}>Section</th>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '90px' }}>Difficulty</th>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '60px' }}>Marks</th>
-                      <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '80px', textAlign: 'right' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {managingPool.items.map((item, idx) => (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                        <td style={{ padding: '10px 12px', color: '#94A3B8', fontWeight: 600 }}>{idx + 1}</td>
-                        <td style={{ padding: '10px 12px', color: '#0F172A', fontWeight: 500, maxWidth: '350px' }}>
-                          <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {item.question_prompt}
-                          </div>
-                        </td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <span style={{ backgroundColor: '#F1F5F9', color: '#334155', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
-                            {item.question_section}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              color: item.question_difficulty === 'HARD' ? '#DC2626' : item.question_difficulty === 'MEDIUM' ? '#D97706' : '#16A34A',
-                            }}
-                          >
-                            {item.question_difficulty}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0B2E6F' }}>
-                          {item.question_marks}
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveQuestionFromPool(item.question)}
-                            title="Remove question from pool (retains in Question Bank)"
-                            style={{
-                              padding: '4px 8px',
-                              backgroundColor: '#FEF2F2',
-                              border: '1px solid #FECACA',
-                              color: '#DC2626',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </td>
+                <>
+                  {/* Drawer Filters Bar */}
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      placeholder="Filter by prompt or category..."
+                      value={drawerSearch}
+                      onChange={(e) => setDrawerSearch(e.target.value)}
+                      style={{
+                        flex: '1',
+                        minWidth: '180px',
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid #CBD5E1',
+                        fontSize: '12px',
+                      }}
+                    />
+                    <select
+                      value={drawerSectionFilter}
+                      onChange={(e) => setDrawerSectionFilter(e.target.value)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid #CBD5E1',
+                        fontSize: '12px',
+                        backgroundColor: '#FFFFFF',
+                      }}
+                    >
+                      <option value="">All Sections</option>
+                      {sections.map((s) => (
+                        <option key={s.id} value={s.code}>{s.name || s.code}</option>
+                      ))}
+                      <option value="CODING">Coding</option>
+                    </select>
+                    <select
+                      value={drawerDifficultyFilter}
+                      onChange={(e) => setDrawerDifficultyFilter(e.target.value)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid #CBD5E1',
+                        fontSize: '12px',
+                        backgroundColor: '#FFFFFF',
+                      }}
+                    >
+                      <option value="">All Difficulties</option>
+                      <option value="EASY">Easy</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="HARD">Hard</option>
+                    </select>
+                    {(drawerSearch || drawerSectionFilter || drawerDifficultyFilter) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDrawerSearch('');
+                          setDrawerSectionFilter('');
+                          setDrawerDifficultyFilter('');
+                        }}
+                        style={{
+                          padding: '5px 8px',
+                          fontSize: '11px',
+                          backgroundColor: '#F1F5F9',
+                          border: '1px solid #E2E8F0',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '40px' }}>#</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Prompt</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '110px' }}>Section</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '80px' }}>Difficulty</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '50px' }}>Marks</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '70px' }}>Status</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '190px', textAlign: 'right' }}>Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {(managingPool.items || []).filter((item) => {
+                        if (drawerSearch.trim()) {
+                          const s = drawerSearch.toLowerCase();
+                          const matchPrompt = (item.question_prompt || '').toLowerCase().includes(s);
+                          const matchCat = (item.question_category || '').toLowerCase().includes(s);
+                          if (!matchPrompt && !matchCat) return false;
+                        }
+                        if (drawerSectionFilter) {
+                          const f = drawerSectionFilter.toUpperCase();
+                          if ((item.question_section || '').toUpperCase() !== f) return false;
+                        }
+                        if (drawerDifficultyFilter) {
+                          if ((item.question_difficulty || '').toUpperCase() !== drawerDifficultyFilter.toUpperCase()) return false;
+                        }
+                        return true;
+                      }).map((item, idx) => (
+                        <tr key={item.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td style={{ padding: '10px 12px', color: '#94A3B8', fontWeight: 600 }}>{idx + 1}</td>
+                          <td style={{ padding: '10px 12px', color: '#0F172A', fontWeight: 500, maxWidth: '280px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {(item.has_programming_details || item.question_section === 'CODING' || item.question_assessment_type === 'CODING') && (
+                                <span style={{ backgroundColor: '#EDE9FE', color: '#7C3AED', padding: '1px 5px', borderRadius: '4px', fontSize: '10px', fontWeight: 800 }}>
+                                  CODING
+                                </span>
+                              )}
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {item.question_prompt}
+                              </span>
+                            </div>
+                            {item.question_category && (
+                              <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>
+                                Cat: {item.question_category}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={{ backgroundColor: '#F1F5F9', color: '#334155', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                              {item.question_section}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                color: item.question_difficulty === 'HARD' ? '#DC2626' : item.question_difficulty === 'MEDIUM' ? '#D97706' : '#16A34A',
+                              }}
+                            >
+                              {item.question_difficulty}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0B2E6F' }}>
+                            {item.question_marks}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                color: item.question_is_archived ? '#94A3B8' : '#16A34A',
+                              }}
+                            >
+                              {item.question_is_archived ? 'Archived' : 'Active'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleEditQuestionInPool(item.question)}
+                                title="Edit question details"
+                                style={{
+                                  padding: '3px 8px',
+                                  backgroundColor: '#EFF6FF',
+                                  border: '1px solid #BFDBFE',
+                                  color: '#1D4ED8',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveQuestionInPool(item.question)}
+                                title={item.question_is_archived ? "Unarchive question" : "Archive question"}
+                                style={{
+                                  padding: '3px 8px',
+                                  backgroundColor: item.question_is_archived ? '#FEF3C7' : '#F1F5F9',
+                                  border: '1px solid #CBD5E1',
+                                  color: item.question_is_archived ? '#92400E' : '#475569',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {item.question_is_archived ? 'Unarchive' : 'Archive'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveQuestionFromPool(item.question)}
+                                title="Remove question from pool (retains in Question Bank)"
+                                style={{
+                                  padding: '3px 8px',
+                                  backgroundColor: '#FEF2F2',
+                                  border: '1px solid #FECACA',
+                                  color: '#DC2626',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
               )}
             </div>
 
@@ -1586,6 +1856,21 @@ export function AdminQuestionPoolsView({
             </div>
           </div>
         </div>
+      )}
+      {/* Direct Authoring Modal for Question Pools */}
+      {showPoolQuestionModal && (
+        <AdminQuestionEditorModal
+          question={editingQuestionInPool}
+          isOpen={showPoolQuestionModal}
+          onClose={() => {
+            setShowPoolQuestionModal(false);
+            setEditingQuestionInPool(null);
+          }}
+          onSave={handleSaveQuestionInPool}
+          saving={savingPoolQuestion}
+          sections={sections}
+          forcedType={poolQuestionType}
+        />
       )}
     </div>
   );

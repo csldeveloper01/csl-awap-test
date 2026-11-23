@@ -14,6 +14,7 @@ import {
   archiveAdminDrive,
   addAdminDriveAssessment,
   removeAdminDriveAssessment,
+  regenerateAdminDriveCode,
   fetchAdminDriveRegistrations,
   updateAdminDriveRegistrationStatus,
   fetchAdminDriveInvitations,
@@ -400,6 +401,30 @@ export function AdminDrivesView({
       loadDrives();
     } catch (err: any) {
       showToast('Failed to remove assessment.');
+    }
+  };
+
+  const [regeneratingCode, setRegeneratingCode] = useState(false);
+
+  const handleRegenerateAccessCode = async () => {
+    if (!driveDetail) return;
+    const confirmed = window.confirm(
+      `Are you sure you want to regenerate the 8-digit access code for "${driveDetail.name}"?\n\nThe existing code (${driveDetail.drive_code}) will immediately become invalid, and candidates must use the new code to register.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setRegeneratingCode(true);
+      const res = await regenerateAdminDriveCode(driveDetail.id);
+      setDriveDetail((prev) => (prev ? { ...prev, drive_code: res.drive_code } : prev));
+      setDrives((prev) =>
+        prev.map((d) => (d.id === driveDetail.id ? { ...d, drive_code: res.drive_code } : d))
+      );
+      showToast(`Access code regenerated successfully: ${res.drive_code}`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to regenerate access code.');
+    } finally {
+      setRegeneratingCode(false);
     }
   };
 
@@ -1550,13 +1575,32 @@ export function AdminDrivesView({
                   <span style={{ fontSize: '13px', fontWeight: 700, color: '#166534' }}>8-Digit Student Access Code:</span>
                   <span style={{ fontSize: '16px', fontWeight: 800, color: '#15803D', fontFamily: 'monospace', letterSpacing: '1px' }}>{driveDetail.drive_code}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(driveDetail.drive_code || "", '8-Digit Access Code')}
-                  style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #16A34A', backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                >
-                  Copy Code
-                </button>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(driveDetail.drive_code || "", '8-Digit Access Code')}
+                    style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #16A34A', backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Copy Code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRegenerateAccessCode}
+                    disabled={regeneratingCode}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #0D52D6',
+                      backgroundColor: '#EEF2FF',
+                      color: '#1E40AF',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: regeneratingCode ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {regeneratingCode ? 'Regenerating...' : '🔄 Regenerate Code'}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1778,6 +1822,30 @@ export function AdminDrivesView({
                     }}
                   >
                     Attach Assessment
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onNavigateToCreateAssessment) {
+                        onNavigateToCreateAssessment(driveDetail.id);
+                      } else {
+                        window.location.href = `/csl-admin/?tab=assessments&create=true&driveId=${driveDetail.id}`;
+                      }
+                    }}
+                    style={{
+                      backgroundColor: '#0D52D6',
+                      color: '#FFFFFF',
+                      padding: '10px 18px',
+                      borderRadius: '10px',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    + Create Assessment for Drive
                   </button>
                 </div>
 

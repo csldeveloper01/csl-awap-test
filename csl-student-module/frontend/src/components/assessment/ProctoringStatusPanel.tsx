@@ -40,10 +40,14 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Deviation timers to avoid false positives
+  // Deviation timers to avoid false positives & 15s anomaly cooldowns
+  const ANOMALY_COOLDOWN_MS = 15000;
   const noFaceDurationRef = useRef<number>(0);
   const multiFaceDurationRef = useRef<number>(0);
   const poseDevDurationRef = useRef<number>(0);
+  const lastFaceNotDetectedSentRef = useRef<number>(0);
+  const lastMultiFaceSentRef = useRef<number>(0);
+  const lastPoseDevSentRef = useRef<number>(0);
   const lastPeriodicSnapshotRef = useRef<number>(Date.now());
   const lastFrameProcessTime = useRef<number>(0);
 
@@ -132,18 +136,22 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
               const detection = processVideoFrame(landmarker, videoRef.current, timestamp);
               setFaceCount(detection.faceCount);
 
-              // 1. Face Absence Evaluation (>3000ms)
+              // 1. Face Absence Evaluation (>3000ms, 15s cooldown)
               if (detection.faceCount === 0) {
                 noFaceDurationRef.current += 750;
                 if (noFaceDurationRef.current >= 3000) {
                   setActiveAlert('Face not visible! Please look at the camera.');
-                  recordProctoringEvent(session.id, {
-                    event_type: 'FACE_NOT_DETECTED',
-                    severity: 'WARNING',
-                    metadata: { duration_ms: noFaceDurationRef.current },
-                  }).then((res) => {
-                    setRiskScore(res.risk_score);
-                  }).catch(console.error);
+                  const now = Date.now();
+                  if (now - lastFaceNotDetectedSentRef.current >= ANOMALY_COOLDOWN_MS) {
+                    lastFaceNotDetectedSentRef.current = now;
+                    recordProctoringEvent(session.id, {
+                      event_type: 'FACE_NOT_DETECTED',
+                      severity: 'WARNING',
+                      metadata: { duration_ms: noFaceDurationRef.current },
+                    }).then((res) => {
+                      setRiskScore(res.risk_score);
+                    }).catch(console.error);
+                  }
                 }
               } else {
                 if (noFaceDurationRef.current >= 3000) {
@@ -156,26 +164,30 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
                 noFaceDurationRef.current = 0;
               }
 
-              // 2. Multiple Faces Evaluation (>2000ms)
+              // 2. Multiple Faces Evaluation (>2000ms, 15s cooldown)
               if (detection.faceCount > 1) {
                 multiFaceDurationRef.current += 750;
                 if (multiFaceDurationRef.current >= 2000) {
                   setActiveAlert('Multiple faces detected! Only the registered candidate may be present.');
-                  recordProctoringEvent(session.id, {
-                    event_type: 'MULTIPLE_FACES_DETECTED',
-                    severity: 'CRITICAL',
-                    metadata: { count: detection.faceCount },
-                  }).then((res) => {
-                    setRiskScore(res.risk_score);
-                    // Immediate snapshot evidence capture on multiple faces
-                    captureAndUploadSnapshot('multiple_faces_detected', res.event_id);
-                  }).catch(console.error);
+                  const now = Date.now();
+                  if (now - lastMultiFaceSentRef.current >= ANOMALY_COOLDOWN_MS) {
+                    lastMultiFaceSentRef.current = now;
+                    recordProctoringEvent(session.id, {
+                      event_type: 'MULTIPLE_FACES_DETECTED',
+                      severity: 'CRITICAL',
+                      metadata: { count: detection.faceCount },
+                    }).then((res) => {
+                      setRiskScore(res.risk_score);
+                      // Immediate snapshot evidence capture on multiple faces
+                      captureAndUploadSnapshot('multiple_faces_detected', res.event_id);
+                    }).catch(console.error);
+                  }
                 }
               } else {
                 multiFaceDurationRef.current = 0;
               }
 
-              // 3. Head Pose Deviation Evaluation (>3500ms)
+              // 3. Head Pose Deviation Evaluation (>3500ms, 15s cooldown)
               const yawDev = Math.abs(detection.orientation.yaw);
               const pitchDev = Math.abs(detection.orientation.pitch);
               if (yawDev > 25 || pitchDev > 25) {
@@ -183,11 +195,15 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
                 setPoseDeviated(true);
                 if (poseDevDurationRef.current >= 3500) {
                   setActiveAlert('Sustained head turn detected. Please focus on your screen.');
-                  recordProctoringEvent(session.id, {
-                    event_type: 'HEAD_ORIENTATION_DEVIATION',
-                    severity: 'WARNING',
-                    metadata: { orientation: detection.orientation },
-                  }).then((res) => setRiskScore(res.risk_score)).catch(console.error);
+                  const now = Date.now();
+                  if (now - lastPoseDevSentRef.current >= ANOMALY_COOLDOWN_MS) {
+                    lastPoseDevSentRef.current = now;
+                    recordProctoringEvent(session.id, {
+                      event_type: 'HEAD_ORIENTATION_DEVIATION',
+                      severity: 'WARNING',
+                      metadata: { orientation: detection.orientation },
+                    }).then((res) => setRiskScore(res.risk_score)).catch(console.error);
+                  }
                 }
               } else {
                 poseDevDurationRef.current = 0;

@@ -19,6 +19,8 @@ from .models import (
     AssessmentPdfDocument,
     AttemptQuestionSnapshot,
     QuestionBank,
+    ProgrammingQuestion,
+    ProgrammingTestCase,
     AssessmentConfig,
     IntegrityEvent,
     AssessmentAuditLog,
@@ -492,7 +494,16 @@ class AdminAssessmentListView(APIView):
 
         drive_ids = serializer.validated_data.pop("drive_ids", None)
         if drive_ids is None and "drive_ids" in request.data:
-            drive_ids = request.data.get("drive_ids", [])
+            if hasattr(request.data, "getlist"):
+                raw_drives = request.data.getlist("drive_ids")
+                if len(raw_drives) == 1 and isinstance(raw_drives[0], str) and "," in raw_drives[0]:
+                    drive_ids = [x.strip() for x in raw_drives[0].split(",") if x.strip()]
+                else:
+                    drive_ids = raw_drives
+            else:
+                drive_ids = request.data.get("drive_ids", [])
+        if isinstance(drive_ids, str):
+            drive_ids = [x.strip() for x in drive_ids.split(",") if x.strip()]
 
         with transaction.atomic():
             assessment = serializer.save(
@@ -501,6 +512,7 @@ class AdminAssessmentListView(APIView):
             )
 
             if drive_ids:
+                has_drives = False
                 for d_id in drive_ids:
                     drive_obj = Drive.objects.filter(id=d_id).first()
                     if drive_obj:
@@ -509,6 +521,10 @@ class AdminAssessmentListView(APIView):
                             assessment=assessment,
                             defaults={"created_by": request.user},
                         )
+                        has_drives = True
+                if has_drives:
+                    assessment.is_standalone = False
+                    assessment.save(update_fields=["is_standalone"])
 
             log_assessment_audit(
                 action=AssessmentAuditLog.Action.ASSESSMENT_CREATED,
@@ -564,7 +580,16 @@ class AdminAssessmentDetailView(APIView):
         college_ids = serializer.validated_data.pop("eligible_college_ids", None)
         drive_ids = serializer.validated_data.pop("drive_ids", None)
         if drive_ids is None and "drive_ids" in request.data:
-            drive_ids = request.data.get("drive_ids", [])
+            if hasattr(request.data, "getlist"):
+                raw_drives = request.data.getlist("drive_ids")
+                if len(raw_drives) == 1 and isinstance(raw_drives[0], str) and "," in raw_drives[0]:
+                    drive_ids = [x.strip() for x in raw_drives[0].split(",") if x.strip()]
+                else:
+                    drive_ids = raw_drives
+            else:
+                drive_ids = request.data.get("drive_ids", [])
+        if isinstance(drive_ids, str):
+            drive_ids = [x.strip() for x in drive_ids.split(",") if x.strip()]
 
         with transaction.atomic():
             updated = serializer.save()
@@ -574,6 +599,7 @@ class AdminAssessmentDetailView(APIView):
 
             if drive_ids is not None:
                 DriveAssessment.objects.filter(assessment=updated).exclude(drive_id__in=drive_ids).delete()
+                has_drives = False
                 for d_id in drive_ids:
                     drive_obj = Drive.objects.filter(id=d_id).first()
                     if drive_obj:
@@ -582,7 +608,8 @@ class AdminAssessmentDetailView(APIView):
                             assessment=updated,
                             defaults={"created_by": request.user},
                         )
-                updated.is_standalone = len(drive_ids) == 0
+                        has_drives = True
+                updated.is_standalone = not has_drives
                 updated.save(update_fields=["is_standalone"])
                 updated.refresh_from_db()
 
@@ -998,7 +1025,8 @@ class AdminCandidateListView(APIView):
     def get(self, request):
         from django.db.models import Prefetch
         queryset = (
-            Candidate.objects.select_related("college_ref")
+            Candidate.objects.filter(is_simulation=False)
+            .select_related("college_ref")
             .prefetch_related(
                 Prefetch(
                     "attempts",
@@ -1060,7 +1088,8 @@ class AdminCandidateExportCSVView(APIView):
 
     def get(self, request):
         queryset = (
-            Candidate.objects.select_related("college_ref")
+            Candidate.objects.filter(is_simulation=False)
+            .select_related("college_ref")
             .prefetch_related("college_ref__assigned_assessments", "attempts__assessment")
             .all()
             .order_by("-created_at")
@@ -1441,6 +1470,17 @@ class AdminQuestionListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        pool_id = request.data.get("pool_id")
+        target_pool = None
+        if pool_id:
+            try:
+                target_pool = QuestionPool.objects.get(id=pool_id)
+            except (QuestionPool.DoesNotExist, ValueError):
+                return Response(
+                    {"pool_id": [f"Selected question pool '{pool_id}' does not exist or is invalid."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         serializer = AdminQuestionSerializer(data=request.data)
         if serializer.is_valid():
             with transaction.atomic():
@@ -1459,6 +1499,39 @@ class AdminQuestionListView(APIView):
                             "total_pool_count": target_assessment.questions.count(),
                         },
                     )
+                if target_pool:
+                    order_idx = target_pool.items.count() + 1
+                    QuestionPoolItem.objects.get_or_create(
+                        pool=target_pool,
+                        question=question,
+                        defaults={"order": order_idx},
+                    )
+
+                coding_details = request.data.get("coding_details")
+                if coding_details and (question.assessment_type == "CODING" or question.section_type == "CODING"):
+                    prog, _ = ProgrammingQuestion.objects.update_or_create(
+                        question=question,
+                        defaults={
+                            "problem_statement": coding_details.get("problem_statement") or question.prompt,
+                            "constraints": coding_details.get("constraints", ""),
+                            "input_format": coding_details.get("input_format", ""),
+                            "output_format": coding_details.get("output_format", ""),
+                            "allowed_languages": coding_details.get("allowed_languages") or ["python", "java"],
+                            "boilerplate_code": coding_details.get("boilerplate_code") or {},
+                            "time_limit_seconds": float(coding_details.get("time_limit_seconds") or 2.0),
+                            "memory_limit_mb": int(coding_details.get("memory_limit_mb") or 256),
+                        },
+                    )
+                    for tc in coding_details.get("test_cases") or []:
+                        if isinstance(tc, dict):
+                            ProgrammingTestCase.objects.create(
+                                programming_question=prog,
+                                input_text=tc.get("input_text", ""),
+                                expected_output=tc.get("expected_output", ""),
+                                is_public=tc.get("is_public", False),
+                                marks_weightage=float(tc.get("marks_weightage") or 1.0),
+                                explanation=tc.get("explanation", ""),
+                            )
             return Response(AdminQuestionSerializer(question).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3515,6 +3588,165 @@ class AdminQuestionPoolItemsView(APIView):
         pool.refresh_from_db()
         return Response(AdminQuestionPoolDetailSerializer(pool).data)
 
+    def delete(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        question_id = request.data.get("question_id") or request.query_params.get("question_id")
+        question_ids = request.data.get("question_ids") or request.query_params.get("question_ids")
+        to_remove = []
+        if question_id:
+            try:
+                to_remove.append(int(question_id))
+            except (ValueError, TypeError):
+                pass
+        if question_ids:
+            if isinstance(question_ids, str):
+                to_remove.extend([int(x.strip()) for x in question_ids.split(",") if x.strip().isdigit()])
+            elif isinstance(question_ids, list):
+                to_remove.extend([int(x) for x in question_ids if str(x).isdigit()])
+
+        if not to_remove:
+            return Response({"detail": "question_id or question_ids required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            pool.items.filter(question_id__in=to_remove).delete()
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                entity_type="QUESTION_POOL",
+                entity_id=str(pool.id),
+                user=request.user,
+                details={"action": "remove", "removed_question_ids": to_remove, "remaining": pool.items.count()},
+            )
+
+        pool.refresh_from_db()
+        return Response(AdminQuestionPoolDetailSerializer(pool).data)
+
+
+class AdminQuestionPoolQuestionsView(APIView):
+    """
+    Direct question authoring and pool detachment inside a QuestionPool.
+    Supports atomic creation of both MCQ and Coding questions directly inside a pool.
+    Removing a question only deletes the QuestionPoolItem association, preserving QuestionBank.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        data = request.data
+
+        question_type = (data.get("question_type") or data.get("assessment_type") or data.get("section_type") or "MCQ").upper()
+        is_coding = question_type == "CODING" or (data.get("section_type") or "").upper() == "CODING"
+
+        with transaction.atomic():
+            if is_coding:
+                prompt = (data.get("prompt") or data.get("title") or "").strip()
+                if not prompt:
+                    return Response({"prompt": ["Question prompt / problem title is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+                difficulty = (data.get("difficulty") or "MEDIUM").upper()
+                if difficulty not in ["EASY", "MEDIUM", "HARD"]:
+                    difficulty = "MEDIUM"
+                marks = int(data.get("marks") or 10)
+                sec_type = (data.get("section_type") or "CODING").strip()
+                category = (data.get("category") or "").strip()
+
+                question = QuestionBank.objects.create(
+                    prompt=prompt,
+                    difficulty=difficulty,
+                    marks=marks,
+                    section_type=sec_type,
+                    category=category,
+                    assessment_type="CODING",
+                    option_a="N/A (Coding Question)",
+                    option_b="N/A (Coding Question)",
+                    option_c="N/A (Coding Question)",
+                    option_d="N/A (Coding Question)",
+                    correct_option="A",
+                    explanation=data.get("explanation", ""),
+                    is_active=data.get("is_active", True),
+                )
+
+                coding_data = data.get("coding_details") or data
+                problem_statement = coding_data.get("problem_statement") or prompt
+                prog = ProgrammingQuestion.objects.create(
+                    question=question,
+                    problem_statement=problem_statement,
+                    constraints=coding_data.get("constraints", ""),
+                    input_format=coding_data.get("input_format", ""),
+                    output_format=coding_data.get("output_format", ""),
+                    time_limit_seconds=float(coding_data.get("time_limit_seconds") or 2.0),
+                    memory_limit_mb=int(coding_data.get("memory_limit_mb") or 256),
+                    allowed_languages=coding_data.get("allowed_languages") or ["python", "java"],
+                    boilerplate_code=coding_data.get("boilerplate_code") or {},
+                )
+
+                test_cases = coding_data.get("test_cases") or []
+                if isinstance(test_cases, list):
+                    for tc_idx, tc in enumerate(test_cases):
+                        if isinstance(tc, dict):
+                            ProgrammingTestCase.objects.create(
+                                programming_question=prog,
+                                input_text=str(tc.get("input_text", "")),
+                                expected_output=str(tc.get("expected_output", "")),
+                                is_public=bool(tc.get("is_public", False)),
+                                marks_weightage=float(tc.get("marks_weightage") or 1.0),
+                                explanation=str(tc.get("explanation", "")),
+                                order=int(tc.get("order") or (tc_idx + 1)),
+                            )
+            else:
+                serializer = AdminQuestionSerializer(data=data)
+                if not serializer.is_valid():
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                question = serializer.save()
+
+            # Attach question to pool
+            order_idx = pool.items.count() + 1
+            QuestionPoolItem.objects.get_or_create(
+                pool=pool,
+                question=question,
+                defaults={"order": order_idx},
+            )
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                entity_type="QUESTION_POOL",
+                entity_id=str(pool.id),
+                user=request.user,
+                details={
+                    "action": "CREATE_AND_ADD_QUESTION",
+                    "question_id": question.id,
+                    "prompt": question.prompt[:80],
+                    "is_coding": is_coding,
+                    "pool_count": pool.items.count(),
+                },
+            )
+
+        pool.refresh_from_db()
+        return Response({
+            "success": True,
+            "question": AdminQuestionSerializer(question).data,
+            "pool": AdminQuestionPoolDetailSerializer(pool).data,
+        }, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, pk, question_id=None):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        q_id = question_id or request.data.get("question_id") or request.query_params.get("question_id")
+        if not q_id:
+            return Response({"detail": "question_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        deleted_count, _ = pool.items.filter(question_id=q_id).delete()
+        if deleted_count == 0:
+            return Response({"detail": f"Question #{q_id} was not found in this pool."}, status=status.HTTP_404_NOT_FOUND)
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+            entity_type="QUESTION_POOL",
+            entity_id=str(pool.id),
+            user=request.user,
+            details={"action": "REMOVE_QUESTION", "question_id": q_id, "remaining_count": pool.items.count()},
+        )
+        pool.refresh_from_db()
+        return Response(AdminQuestionPoolDetailSerializer(pool).data)
+
 
 class AdminAssessmentPoolSourcesView(APIView):
     """
@@ -3752,6 +3984,10 @@ class AdminDriveAssessmentsView(APIView):
                 "registration_enabled": reg_enabled,
             },
         )
+        if assessment.is_standalone:
+            assessment.is_standalone = False
+            assessment.save(update_fields=["is_standalone"])
+
         log_assessment_audit(
             action=AssessmentAuditLog.Action.DRIVE_ASSESSMENT_ADDED,
             entity_type="DRIVE",
@@ -3768,6 +4004,10 @@ class AdminDriveAssessmentsView(APIView):
             return Response({"detail": "assessment_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         DriveAssessment.objects.filter(drive=drive, assessment_id=assessment_id).delete()
+        remaining_count = DriveAssessment.objects.filter(assessment_id=assessment_id).count()
+        if remaining_count == 0:
+            Assessment.objects.filter(id=assessment_id).update(is_standalone=True)
+
         log_assessment_audit(
             action=AssessmentAuditLog.Action.DRIVE_ASSESSMENT_REMOVED,
             entity_type="DRIVE",
@@ -3776,6 +4016,101 @@ class AdminDriveAssessmentsView(APIView):
             details={"assessment_id": str(assessment_id)},
         )
         return Response({"success": True, "message": "Assessment removed from drive."})
+
+
+class AdminDriveRegenerateCodeView(APIView):
+    """
+    Cryptographically secure 8-digit numeric access code regeneration for a Drive.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        import secrets
+        drive = get_object_or_404(Drive, pk=pk)
+        old_code = drive.drive_code
+
+        new_code = None
+        for _ in range(500):
+            cand = f"{secrets.randbelow(90000000) + 10000000}"
+            if not Drive.objects.filter(drive_code=cand).exclude(pk=drive.pk).exists():
+                new_code = cand
+                break
+
+        if not new_code:
+            return Response(
+                {"detail": "Failed to generate unique 8-digit access code after multiple attempts. Please retry."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        drive.drive_code = new_code
+        drive.save(update_fields=["drive_code", "updated_at"])
+
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.DRIVE_CODE_REGENERATED if hasattr(AssessmentAuditLog.Action, "DRIVE_CODE_REGENERATED") else AssessmentAuditLog.Action.DRIVE_UPDATED,
+            entity_type="DRIVE",
+            entity_id=str(drive.id),
+            user=request.user,
+            details={"old_code": old_code, "new_code": new_code, "drive_name": drive.name},
+        )
+
+        return Response({
+            "success": True,
+            "message": f"Drive 8-digit access code regenerated successfully to {new_code}.",
+            "drive_code": new_code,
+            "drive": AdminDriveDetailSerializer(drive).data,
+        }, status=status.HTTP_200_OK)
+
+
+class AdminDriveReconcileOrphansView(APIView):
+    """
+    Reconciles orphaned assessments that have is_standalone=False but are not attached
+    to any Drive (zero DriveAssessment records).
+    Can reattach them to a specified target Drive or reset is_standalone=True.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request):
+        target_drive_id = request.data.get("drive_id")
+        action = request.data.get("action", "reset_standalone")
+
+        orphans = Assessment.objects.filter(is_standalone=False, drives__isnull=True)
+        orphan_count = orphans.count()
+
+        if orphan_count == 0:
+            return Response({
+                "success": True,
+                "message": "No orphaned drive assessments found. All assessments are consistently linked.",
+                "reconciled_count": 0,
+            })
+
+        with transaction.atomic():
+            if action == "attach_drive" and target_drive_id:
+                target_drive = get_object_or_404(Drive, pk=target_drive_id)
+                start_order = target_drive.drive_assessments.count() + 1
+                for idx, a in enumerate(orphans):
+                    DriveAssessment.objects.get_or_create(
+                        drive=target_drive,
+                        assessment=a,
+                        defaults={"display_order": start_order + idx, "created_by": request.user},
+                    )
+                msg = f"Reconciled {orphan_count} orphaned assessments by attaching them to Drive '{target_drive.name}'."
+            else:
+                orphans.update(is_standalone=True)
+                msg = f"Reconciled {orphan_count} orphaned assessments by resetting is_standalone=True."
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.ORPHANS_RECONCILED if hasattr(AssessmentAuditLog.Action, "ORPHANS_RECONCILED") else AssessmentAuditLog.Action.ASSESSMENT_UPDATED,
+                entity_type="DRIVE",
+                entity_id=str(target_drive_id) if target_drive_id else "SYSTEM",
+                user=request.user,
+                details={"action": action, "reconciled_count": orphan_count, "target_drive_id": str(target_drive_id) if target_drive_id else None},
+            )
+
+        return Response({
+            "success": True,
+            "message": msg,
+            "reconciled_count": orphan_count,
+        })
 
 
 class AdminDriveRegistrationsView(APIView):
@@ -4012,7 +4347,7 @@ class AdminExportCandidateDataCSVView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        qs = Candidate.objects.select_related("college_ref").all()
+        qs = Candidate.objects.filter(is_simulation=False).select_related("college_ref").all()
 
         college_id = request.query_params.get("college_id")
         if college_id:
@@ -4896,8 +5231,12 @@ class AdminAssessmentTestRunView(APIView):
                 "email": test_email,
                 "college": "CSL System Administration",
                 "is_active": True,
+                "is_simulation": True,
             }
         )
+        if not test_cand.is_simulation:
+            test_cand.is_simulation = True
+            test_cand.save(update_fields=["is_simulation"])
 
         try:
             attempt = start_assessment_for_candidate(
@@ -4905,10 +5244,10 @@ class AdminAssessmentTestRunView(APIView):
                 assessment=assessment,
                 is_simulation=True,
             )
-            token = generate_candidate_token(str(test_cand.id), str(attempt.id))
+            token = generate_candidate_token(str(test_cand.id), str(attempt.id), is_simulation=True)
 
             log_assessment_audit(
-                action=AssessmentAuditLog.Action.ATTEMPT_REASSIGNED,
+                action=getattr(AssessmentAuditLog.Action, "TEST_RUN_LAUNCHED", AssessmentAuditLog.Action.CANDIDATE_REASSIGNED_NEW_ATTEMPT),
                 entity_type="ASSESSMENT",
                 entity_id=str(assessment.id),
                 user=request.user,
