@@ -23,6 +23,7 @@ from .admin_views import (
     AdminAssessmentAuditLogsView,
     AdminAssessmentUploadPdfView,
     AdminAssessmentPdfDownloadView,
+    AdminAssessmentSEBToggleView,
     AdminCandidateListView,
     AdminCandidateExportCSVView,
     AdminCandidateDetailView,
@@ -138,6 +139,7 @@ urlpatterns = [
     path("assessments/<uuid:pk>/upload-pdf/", AdminAssessmentUploadPdfView.as_view(), name="admin-assessment-upload-pdf"),
     path("assessments/<uuid:pk>/pdf/", AdminAssessmentPdfDownloadView.as_view(), name="admin-assessment-pdf-download"),
     path("assessments/<uuid:pk>/seb-config/", AdminAssessmentSebConfigView.as_view(), name="admin-assessment-seb-config"),
+    path("assessments/<uuid:pk>/toggle-seb/", AdminAssessmentSEBToggleView.as_view(), name="admin-assessment-toggle-seb"),
     path("assessments/<uuid:pk>/test-run/", AdminAssessmentTestRunView.as_view(), name="admin-assessment-test-run"),
 
     # Candidates & Quick Actions

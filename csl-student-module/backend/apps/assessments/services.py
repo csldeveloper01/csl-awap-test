@@ -877,12 +877,12 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
         locked_candidate.college_ref = default_col
         locked_candidate.save(update_fields=["college_ref"])
 
-    # 1. Candidate active check
-    if not locked_candidate.is_active:
+    # 1. Candidate active check (bypassed in simulation)
+    if not is_simulation and not locked_candidate.is_active:
         raise ValidationError({"detail": "Your candidate profile has been deactivated. Please contact your administrator."})
 
-    # 2. College active check
-    if locked_candidate.college_ref and not locked_candidate.college_ref.is_active:
+    # 2. College active check (bypassed in simulation)
+    if not is_simulation and locked_candidate.college_ref and not locked_candidate.college_ref.is_active:
         raise ValidationError({"detail": f"Institutional registration for {locked_candidate.college_ref.name} is currently suspended."})
 
     # 3. Assessment OPEN check (bypassed in simulation)
@@ -934,10 +934,14 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
         None,
     )
     if existing_in_progress:
-        if existing_in_progress.is_expired():
-            finalize_assessment_attempt(existing_in_progress, final_state=AssessmentAttempt.State.TIMED_OUT)
-            raise ValidationError({"detail": "Your previous assessment attempt has expired."})
-        return existing_in_progress
+        if is_simulation:
+            # For admin test runs, clean up stale simulation attempt so test run starts fresh
+            existing_in_progress.delete()
+        else:
+            if existing_in_progress.is_expired():
+                finalize_assessment_attempt(existing_in_progress, final_state=AssessmentAttempt.State.TIMED_OUT)
+                raise ValidationError({"detail": "Your previous assessment attempt has expired."})
+            return existing_in_progress
 
     completed_attempts = sum(
         1 for a in attempts
@@ -951,7 +955,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
     mark("attempt_checks")
 
     max_allowed = assessment.max_attempts if assessment else config.max_attempts
-    if completed_attempts >= max_allowed:
+    if not is_simulation and completed_attempts >= max_allowed:
         raise ValidationError({"detail": f"Maximum attempts ({max_allowed}) reached for this assessment."})
 
     # For PDF Coding mode, skip MCQ question sampling and snapshot generation

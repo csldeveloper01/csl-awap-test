@@ -241,6 +241,11 @@ class StudentAttemptRecoveryView(APIView):
                         {"detail": "Simulation accounts cannot be accessed via student recovery."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
+                if not cand_by_reg.is_active:
+                    return Response(
+                        {"detail": "Your candidate profile has been deactivated. Please contact your administrator."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
                 return Response(
                     {"detail": f"Verification factor does not match our records for register number '{reg_no}'. Please check your registered email or phone."},
                     status=status.HTTP_401_UNAUTHORIZED,
@@ -253,6 +258,12 @@ class StudentAttemptRecoveryView(APIView):
         if candidate.is_simulation:
             return Response(
                 {"detail": "Simulation accounts cannot be accessed via student recovery."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not candidate.is_active:
+            return Response(
+                {"detail": "Your candidate profile has been deactivated. Please contact your administrator."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -392,11 +403,24 @@ class DriveLinkCandidateView(APIView):
 
         if not candidate and reg_number and verification_factor:
             candidate = (
-                Candidate.objects.filter(register_number=reg_number, email__iexact=verification_factor, is_active=True).first()
-                or Candidate.objects.filter(register_number=reg_number, phone_number=verification_factor, is_active=True).first()
+                Candidate.objects.filter(register_number__iexact=reg_number, email__iexact=verification_factor, is_active=True).first()
+                or Candidate.objects.filter(register_number__iexact=reg_number, phone_number=verification_factor, is_active=True).first()
             )
 
         if not candidate:
+            if reg_number:
+                cand_inactive = Candidate.objects.filter(register_number__iexact=reg_number, is_active=False).first()
+                if cand_inactive:
+                    return Response(
+                        {"detail": "Your candidate profile has been deactivated. Please contact your administrator."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                cand_exists = Candidate.objects.filter(register_number__iexact=reg_number).first()
+                if cand_exists and verification_factor:
+                    return Response(
+                        {"detail": f"Verification factor does not match our records for register number '{reg_number}'."},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
             return Response(
                 {"detail": "Candidate profile not recognized. Please sign in with your Register Number and registered Email/Mobile."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -429,7 +453,8 @@ class DriveLinkCandidateView(APIView):
                 target_drive = Drive.objects.filter(Q(drive_code=access_code) | Q(code__iexact=access_code)).first()
 
         if drive_code and not target_drive:
-            target_drive = Drive.objects.filter(code__iexact=drive_code).first()
+            from django.db.models import Q
+            target_drive = Drive.objects.filter(Q(drive_code=drive_code) | Q(code__iexact=drive_code)).first()
 
         if not target_drive:
             return Response({"detail": "Recruitment drive not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -487,6 +512,7 @@ class DriveLinkCandidateView(APIView):
             "drive_id": str(target_drive.id),
             "drive_name": target_drive.name,
             "drive_code": target_drive.code,
+            "eight_digit_code": target_drive.drive_code,
             "assessment_token": token,
         })
 
@@ -891,10 +917,16 @@ class PublicDriveDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, code_or_id):
-        drive = (
-            Drive.objects.filter(code__iexact=code_or_id).first()
-            or Drive.objects.filter(id=code_or_id).first()
-        )
+        import uuid
+        from django.db.models import Q
+        drive = Drive.objects.filter(Q(drive_code=code_or_id) | Q(code__iexact=code_or_id)).first()
+        if not drive:
+            try:
+                uuid.UUID(str(code_or_id))
+                drive = Drive.objects.filter(id=code_or_id).first()
+            except (ValueError, TypeError):
+                drive = None
+
         if not drive:
             return Response({"detail": "Drive not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -928,6 +960,7 @@ class PublicDriveDetailView(APIView):
         return Response({
             "id": str(drive.id),
             "code": drive.code,
+            "eight_digit_code": drive.drive_code,
             "name": drive.name,
             "description": drive.description,
             "status": drive.status,
@@ -2030,7 +2063,7 @@ class CandidateLoginView(APIView):
 
         if not cand.is_active:
             return Response(
-                {"detail": "Your candidate account is currently inactive. Please contact your administrator."},
+                {"detail": "Your candidate profile has been deactivated. Please contact your administrator."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2321,9 +2354,35 @@ class ProctoringCalibrationView(APIView):
         if not verify_attempt_ownership(request, session.assessment_session):
             return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
 
+        if session.status not in [ProctoringSession.SessionStatus.INITIALIZING, ProctoringSession.SessionStatus.ACTIVE]:
+            return Response({"detail": f"Proctoring session is {session.status.lower()} and cannot be calibrated."}, status=status.HTTP_400_BAD_REQUEST)
+
         baseline = request.data.get("baseline_orientation", {})
         results = request.data.get("calibration_results", [])
         completed = request.data.get("calibration_completed", True)
+
+        if completed:
+            if not isinstance(baseline, dict) or "yaw" not in baseline or "pitch" not in baseline:
+                return Response(
+                    {"detail": "Invalid calibration payload: numeric baseline orientation (yaw, pitch, roll) is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                yaw_val = float(baseline.get("yaw", 0))
+                pitch_val = float(baseline.get("pitch", 0))
+                if abs(yaw_val) > 90 or abs(pitch_val) > 90:
+                    return Response(
+                        {"detail": "Invalid baseline angles: yaw and pitch must be within physiological range (-90 to +90 degrees)."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except (ValueError, TypeError):
+                return Response({"detail": "Baseline yaw and pitch must be valid floating point numbers."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not isinstance(results, list) or len(results) == 0:
+                return Response(
+                    {"detail": "Invalid calibration payload: at least one verified head-pose calibration record is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         with transaction.atomic():
             cal, _ = ProctoringCalibration.objects.update_or_create(
@@ -2355,6 +2414,7 @@ class ProctoringCalibrationView(APIView):
             "success": True,
             "face_calibration_status": session.face_calibration_status,
             "calibration_id": str(cal.id),
+            "calibration_completed": bool(completed),
         })
 
 

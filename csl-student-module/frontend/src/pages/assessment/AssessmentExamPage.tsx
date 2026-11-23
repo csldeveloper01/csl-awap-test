@@ -19,6 +19,7 @@ import {
   fetchAttemptPdfBlob,
   initProctoringSession,
   endProctoringSession,
+  updateProctoringScreenShareStatus,
   type AttemptDetailResponse,
   type QuestionSnapshot,
   type ProctoringSessionResponse,
@@ -112,35 +113,72 @@ export function AssessmentExamPage() {
   const [proctoringSession, setProctoringSession] = useState<ProctoringSessionResponse | null>(null);
   const [proctoringCamStream, setProctoringCamStream] = useState<MediaStream | null>(null);
   const [proctoringScStream, setProctoringScStream] = useState<MediaStream | null>(null);
+  const [showScreenRecovery, setShowScreenRecovery] = useState<boolean>(false);
+  const [recoveringScreen, setRecoveringScreen] = useState<boolean>(false);
+
+  const handleUserGestureRecoverScreen = async () => {
+    try {
+      setRecoveringScreen(true);
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error('Screen sharing API is not supported in this browser.');
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'monitor' } as any,
+        audio: false,
+      });
+      const tracks = stream.getVideoTracks();
+      if (!tracks || tracks.length === 0 || tracks[0].readyState !== 'live') {
+        throw new Error('No live display video track returned.');
+      }
+      tracks[0].onended = () => {
+        setProctoringScStream(null);
+        setShowScreenRecovery(true);
+        if (proctoringSession) {
+          updateProctoringScreenShareStatus(proctoringSession.id, 'INTERRUPTED').catch(console.error);
+        }
+      };
+      setProctoringScStream(stream);
+      updateCachedScreenStream(stream);
+      setShowScreenRecovery(false);
+      if (proctoringSession) {
+        updateProctoringScreenShareStatus(proctoringSession.id, 'ACTIVE').catch(console.error);
+      }
+    } catch (err: any) {
+      console.warn('Screen share recovery error:', err);
+      alert(err.name === 'NotAllowedError' ? 'Screen sharing was cancelled or denied.' : 'Failed to capture screen.');
+    } finally {
+      setRecoveringScreen(false);
+    }
+  };
 
   useEffect(() => {
     if (!attemptId) return;
     const cached = getProctoringStreams();
-    if (cached.session && cached.cameraStream && cached.screenStream) {
+    if (cached.session) {
       setProctoringSession(cached.session);
-      setProctoringCamStream(cached.cameraStream);
-      setProctoringScStream(cached.screenStream);
     } else {
       initProctoringSession(attemptId)
         .then((sess) => {
           setProctoringSession(sess);
           sessionStorage.setItem('csl_proctoring_session_id', sess.id);
-          if (!cached.cameraStream) {
-            navigator.mediaDevices?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
-              .then((cStream) => setProctoringCamStream(cStream))
-              .catch(console.warn);
-          } else {
-            setProctoringCamStream(cached.cameraStream);
-          }
-          if (!cached.screenStream) {
-            navigator.mediaDevices?.getDisplayMedia({ video: { displaySurface: 'monitor' } as any })
-              .then((sStream) => setProctoringScStream(sStream))
-              .catch(console.warn);
-          } else {
-            setProctoringScStream(cached.screenStream);
-          }
         })
         .catch(console.warn);
+    }
+
+    if (cached.cameraStream && cached.cameraStream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      setProctoringCamStream(cached.cameraStream);
+    } else {
+      navigator.mediaDevices?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
+        .then((cStream) => setProctoringCamStream(cStream))
+        .catch(console.warn);
+    }
+
+    if (cached.screenStream && cached.screenStream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      setProctoringScStream(cached.screenStream);
+      setShowScreenRecovery(false);
+    } else {
+      // Prompt student with interactive screen recovery dialog (transient gesture required by browsers)
+      setShowScreenRecovery(true);
     }
   }, [attemptId]);
 
@@ -2502,16 +2540,72 @@ export function AssessmentExamPage() {
       )}
 
       {/* CSL Sentinel Live Proctoring Status Widget */}
-      {proctoringSession && proctoringCamStream && proctoringScStream && (
+      {proctoringSession && proctoringCamStream && (
         <ProctoringStatusPanel
           session={proctoringSession}
           cameraStream={proctoringCamStream}
-          screenStream={proctoringScStream}
+          screenStream={proctoringScStream || proctoringCamStream}
           onScreenShareReconnected={(newStream) => {
             setProctoringScStream(newStream);
             updateCachedScreenStream(newStream);
+            setShowScreenRecovery(false);
           }}
         />
+      )}
+
+      {/* Screen Sharing Recovery Gesture Modal */}
+      {showScreenRecovery && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              padding: '32px',
+              maxWidth: '460px',
+              width: '90%',
+              textAlign: 'center',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            }}
+          >
+            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🖥️</div>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', margin: '0 0 8px 0' }}>
+              Screen Sharing Required
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0', lineHeight: 1.5 }}>
+              Continuous screen sharing is mandatory to maintain exam integrity. Your browser requires you to click below to select and share your entire desktop screen.
+            </p>
+            <button
+              type="button"
+              onClick={handleUserGestureRecoverScreen}
+              disabled={recoveringScreen}
+              style={{
+                backgroundColor: '#0D52D6',
+                color: '#FFFFFF',
+                padding: '14px 28px',
+                borderRadius: '10px',
+                border: 'none',
+                fontSize: '14px',
+                fontWeight: 700,
+                cursor: recoveringScreen ? 'wait' : 'pointer',
+                boxShadow: '0 4px 14px rgba(13, 82, 214, 0.3)',
+              }}
+            >
+              {recoveringScreen ? 'Initializing Screen Share...' : 'Share Entire Screen →'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

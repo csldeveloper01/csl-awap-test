@@ -5234,9 +5234,22 @@ class AdminAssessmentTestRunView(APIView):
                 "is_simulation": True,
             }
         )
+        needs_save = False
         if not test_cand.is_simulation:
             test_cand.is_simulation = True
-            test_cand.save(update_fields=["is_simulation"])
+            needs_save = True
+        if not test_cand.is_active:
+            test_cand.is_active = True
+            needs_save = True
+        if needs_save:
+            test_cand.save(update_fields=["is_simulation", "is_active"])
+
+        # Clean up prior simulation attempts on this assessment to allow repeatable test runs
+        AssessmentAttempt.objects.filter(
+            candidate=test_cand,
+            assessment=assessment,
+            is_simulation=True,
+        ).delete()
 
         try:
             attempt = start_assessment_for_candidate(
@@ -5265,6 +5278,40 @@ class AdminAssessmentTestRunView(APIView):
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({"detail": f"Failed to initialize Admin Test Run: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminAssessmentSEBToggleView(APIView):
+    """
+    Administrative correction endpoint to toggle Safe Exam Browser (SEB) requirement on or off.
+    Preserves optional SEB functionality while allowing administrators to safely correct existing assessments.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        assessment = get_object_or_404(Assessment, pk=pk)
+        desired_state = request.data.get("is_seb_required")
+        if desired_state is None:
+            assessment.is_seb_required = not assessment.is_seb_required
+        else:
+            assessment.is_seb_required = bool(desired_state)
+
+        assessment.save(update_fields=["is_seb_required", "updated_at"])
+
+        log_assessment_audit(
+            action=getattr(AssessmentAuditLog.Action, "CONFIG_UPDATED", AssessmentAuditLog.Action.ASSESSMENT_UPDATED),
+            entity_type="ASSESSMENT",
+            entity_id=str(assessment.id),
+            user=request.user,
+            details={"is_seb_required": assessment.is_seb_required},
+            is_reversible=True,
+        )
+
+        return Response({
+            "success": True,
+            "assessment_id": str(assessment.id),
+            "is_seb_required": assessment.is_seb_required,
+            "message": f"Safe Exam Browser (SEB) requirement is now {'ENABLED' if assessment.is_seb_required else 'DISABLED'}."
+        }, status=status.HTTP_200_OK)
 
 
 class AdminCameraBypassView(APIView):

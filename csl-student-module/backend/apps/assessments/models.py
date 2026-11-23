@@ -722,9 +722,9 @@ class Drive(models.Model):
         if self.code:
             self.code = self.code.strip().upper()
         if not self.drive_code:
-            import random
+            import secrets
             for _ in range(200):
-                cand = f"{random.randint(10000000, 99999999)}"
+                cand = str(secrets.randbelow(90000000) + 10000000)
                 if not Drive.objects.filter(drive_code=cand).exists():
                     self.drive_code = cand
                     break

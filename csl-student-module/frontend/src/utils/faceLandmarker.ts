@@ -181,8 +181,8 @@ export function processVideoFrame(
 
 export type CalibrationPoseStep =
   | 'LOOK_STRAIGHT'
-  | 'TURN_LEFT'
   | 'TURN_RIGHT'
+  | 'TURN_LEFT'
   | 'LOOK_UP'
   | 'LOOK_DOWN'
   | 'RETURN_CENTER';
@@ -202,16 +202,16 @@ export const CALIBRATION_SEQUENCE: PoseInstruction[] = [
     icon: '👀',
   },
   {
-    step: 'TURN_LEFT',
-    title: 'Turn Head Slightly Left',
-    instruction: 'Gently rotate your head toward your left shoulder until confirmed.',
-    icon: '👈',
-  },
-  {
     step: 'TURN_RIGHT',
     title: 'Turn Head Slightly Right',
     instruction: 'Gently rotate your head toward your right shoulder until confirmed.',
     icon: '👉',
+  },
+  {
+    step: 'TURN_LEFT',
+    title: 'Turn Head Slightly Left',
+    instruction: 'Gently rotate your head toward your left shoulder until confirmed.',
+    icon: '👈',
   },
   {
     step: 'LOOK_UP',
@@ -239,31 +239,45 @@ export const CALIBRATION_SEQUENCE: PoseInstruction[] = [
 export function checkPoseMatch(
   step: CalibrationPoseStep,
   current: HeadOrientation,
-  baseline: HeadOrientation = { yaw: 0, pitch: 0, roll: 0 }
+  baseline: HeadOrientation = { yaw: 0, pitch: 0, roll: 0 },
+  detectedSign: { yaw: number; pitch: number } = { yaw: 0, pitch: 0 }
 ): boolean {
   const diffYaw = current.yaw - baseline.yaw;
   const diffPitch = current.pitch - baseline.pitch;
 
   switch (step) {
     case 'LOOK_STRAIGHT':
-      // Straight: yaw within +/-15 deg, pitch within +/-15 deg
-      return Math.abs(current.yaw) <= 15 && Math.abs(current.pitch) <= 15;
-
-    case 'TURN_LEFT':
-      // Webcam can be mirrored; account for negative or positive yaw displacement >= 12 deg
-      return Math.abs(diffYaw) >= 12 || Math.abs(current.yaw) >= 14;
+      // Straight: yaw within +/-12 deg, pitch within +/-12 deg
+      return Math.abs(current.yaw) <= 12 && Math.abs(current.pitch) <= 12;
 
     case 'TURN_RIGHT':
-      return Math.abs(diffYaw) >= 12 || Math.abs(current.yaw) >= 14;
+      if (detectedSign.yaw === 0) {
+        return Math.abs(diffYaw) >= 10 || Math.abs(current.yaw) >= 12;
+      }
+      return (diffYaw * detectedSign.yaw) >= 10 || (current.yaw * detectedSign.yaw) >= 12;
+
+    case 'TURN_LEFT':
+      // Must be opposite direction of TURN_RIGHT
+      if (detectedSign.yaw === 0) {
+        return Math.abs(diffYaw) >= 10 || Math.abs(current.yaw) >= 12;
+      }
+      return (diffYaw * -detectedSign.yaw) >= 10 || (current.yaw * -detectedSign.yaw) >= 12;
 
     case 'LOOK_UP':
-      return diffPitch >= 10 || current.pitch >= 10;
+      if (detectedSign.pitch === 0) {
+        return diffPitch >= 8 || current.pitch >= 9;
+      }
+      return (diffPitch * detectedSign.pitch) >= 8 || (current.pitch * detectedSign.pitch) >= 9;
 
     case 'LOOK_DOWN':
-      return diffPitch <= -10 || current.pitch <= -10;
+      // Must be opposite direction of LOOK_UP
+      if (detectedSign.pitch === 0) {
+        return diffPitch <= -8 || current.pitch <= -9;
+      }
+      return (diffPitch * -detectedSign.pitch) >= 8 || (current.pitch * -detectedSign.pitch) >= 9;
 
     case 'RETURN_CENTER':
-      return Math.abs(diffYaw) <= 12 && Math.abs(diffPitch) <= 12;
+      return Math.abs(diffYaw) <= 10 && Math.abs(diffPitch) <= 10;
 
     default:
       return false;

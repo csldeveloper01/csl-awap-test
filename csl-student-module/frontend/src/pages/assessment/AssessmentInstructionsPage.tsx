@@ -137,18 +137,6 @@ export function AssessmentInstructionsPage() {
     }
   }, [cameraStream, currentSlide]);
 
-  // Cleanup media streams on unmount
-  useEffect(() => {
-    return () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach((t) => t.stop());
-      }
-      if (screenStream) {
-        screenStream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [cameraStream, screenStream]);
-
   const handleAssessmentChange = (assessmentId: string) => {
     const chosen = eligibleAssessments.find((a) => a.id === assessmentId);
     if (chosen) {

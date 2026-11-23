@@ -190,3 +190,344 @@ class RemediationEndToEndTests(TestCase):
         })
         self.assertEqual(res2.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Verification factor does not match our records", res2.data["detail"])
+
+    def test_repeat_admin_test_run(self):
+        assessment = Assessment.objects.create(
+            code="REPEAT-TEST-01",
+            title="Repeat Test Run Assessment",
+            aptitude_count=5,
+            coding_count=0,
+            max_attempts=1,
+        )
+        url = f"/api/csl-admin/assessments/{assessment.id}/test-run/"
+        
+        # First test run launch
+        res1 = self.client.post(url)
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res1.data["is_simulation"])
+        attempt_id_1 = res1.data["attempt_id"]
+
+        # Finalize the first attempt to simulate a completed test run
+        attempt1 = AssessmentAttempt.objects.get(id=attempt_id_1)
+        attempt1.state = AssessmentAttempt.State.SUBMITTED
+        attempt1.save(update_fields=["state"])
+
+        # Second test run launch on the same assessment - MUST NOT fail with max attempts or deactivation error
+        res2 = self.client.post(url)
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res2.data["is_simulation"])
+        attempt_id_2 = res2.data["attempt_id"]
+        self.assertNotEqual(attempt_id_1, attempt_id_2)
+
+    def test_deactivated_candidate_diagnostics(self):
+        deact_cand = Candidate.objects.create(
+            full_name="Deactivated Candidate",
+            register_number="DEACT001",
+            email="deact@csl.local",
+            phone_number="9123456780",
+            college="Engineering College",
+            is_active=False,
+            is_simulation=False,
+        )
+        unauthed_client = APIClient()
+
+        # Login endpoint returns 403 deactivated
+        res_login = unauthed_client.post("/api/assessment/login/", {"identifier": deact_cand.register_number})
+        self.assertEqual(res_login.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("candidate profile has been deactivated", res_login.data["detail"].lower())
+
+        # Recovery endpoint returns 403 deactivated
+        res_rec = unauthed_client.post("/api/assessment/recover/", {
+            "register_number": deact_cand.register_number,
+            "verification_factor": deact_cand.email,
+        })
+        self.assertEqual(res_rec.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("candidate profile has been deactivated", res_rec.data["detail"].lower())
+
+        # Drive link endpoint returns 403 deactivated
+        res_link = unauthed_client.post("/api/assessment/drives/link-candidate/", {
+            "register_number": deact_cand.register_number,
+            "verification_factor": deact_cand.email,
+            "drive_code": self.drive.drive_code,
+        })
+        self.assertEqual(res_link.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("candidate profile has been deactivated", res_link.data["detail"].lower())
+
+    def test_seb_toggle_and_default_optional(self):
+        assessment = Assessment.objects.create(
+            code="SEB-TEST-01",
+            title="SEB Optional Assessment",
+            aptitude_count=5,
+            coding_count=0,
+        )
+        # Default must be False (Safe Exam Browser is NOT required by default)
+        self.assertFalse(assessment.is_seb_required)
+
+        # Admin toggle endpoint
+        url = f"/api/csl-admin/assessments/{assessment.id}/toggle-seb/"
+        res = self.client.post(url, {"is_seb_required": True}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data["is_seb_required"])
+        assessment.refresh_from_db()
+        self.assertTrue(assessment.is_seb_required)
+
+        # Toggle back off
+        res2 = self.client.post(url, {"is_seb_required": False}, format="json")
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertFalse(res2.data["is_seb_required"])
+        assessment.refresh_from_db()
+        self.assertFalse(assessment.is_seb_required)
+
+    def test_eight_digit_drive_access_code(self):
+        drive = Drive.objects.create(name="Campus Drive 2026", code="CAMPUS-2026")
+        self.assertEqual(len(drive.drive_code), 8)
+        self.assertTrue(drive.drive_code.isdigit())
+
+        # PublicDriveDetailView resolves by 8-digit access code
+        res_detail = self.client.get(f"/api/assessment/drives/{drive.drive_code}/public/")
+        self.assertEqual(res_detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_detail.data["id"], str(drive.id))
+        self.assertEqual(res_detail.data["eight_digit_code"], drive.drive_code)
+
+        # ResolveAccessCodeView resolves by 8-digit access code
+        res_resolve = self.client.post("/api/assessment/resolve-code/", {"code": drive.drive_code}, format="json")
+        self.assertEqual(res_resolve.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_resolve.data["type"], "DRIVE")
+        self.assertEqual(res_resolve.data["drive_id"], str(drive.id))
+        self.assertEqual(res_resolve.data["eight_digit_code"], drive.drive_code)
+
+        # DriveLinkCandidateView links candidate using 8-digit code
+        cand = Candidate.objects.create(
+            full_name="Eligible Candidate",
+            register_number="ELIGIBLE001",
+            email="eligible@csl.local",
+            phone_number="9876543211",
+            college="Test Engineering College",
+            college_ref=self.college,
+            is_active=True,
+        )
+        res_link = self.client.post("/api/assessment/drives/link-candidate/", {
+            "register_number": cand.register_number,
+            "verification_factor": cand.email,
+            "drive_code": drive.drive_code,
+        }, format="json")
+        self.assertEqual(res_link.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_link.data["success"])
+        self.assertEqual(res_link.data["eight_digit_code"], drive.drive_code)
+
+    def test_proctoring_calibration_validation(self):
+        cand = Candidate.objects.create(
+            full_name="Proctor Student",
+            register_number="PROC001",
+            email="proc@csl.local",
+            college="Test Engineering College",
+            is_active=True,
+        )
+        assessment = Assessment.objects.create(
+            code="PROC-ASSESS",
+            title="Proctored Assessment",
+            aptitude_count=5,
+            coding_count=0,
+        )
+        attempt = AssessmentAttempt.objects.create(
+            candidate=cand,
+            assessment=assessment,
+            state=AssessmentAttempt.State.IN_PROGRESS,
+        )
+        from apps.assessments.models import ProctoringSession
+        session = ProctoringSession.objects.create(
+            assessment_session=attempt,
+            student=cand,
+            assessment=assessment,
+            status=ProctoringSession.SessionStatus.ACTIVE,
+        )
+
+        token = generate_candidate_token(str(cand.id), str(attempt.id))
+        student_client = APIClient()
+        student_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        # Reject out of bounds baseline angles
+        res_bad_angle = student_client.post(
+            f"/api/assessment/proctoring/{session.id}/calibration/",
+            {
+                "baseline_orientation": {"yaw": 120.0, "pitch": 5.0, "roll": 0.0},
+                "calibration_results": [{"step": "LOOK_STRAIGHT", "passed": True}],
+                "calibration_completed": True,
+            },
+            format="json",
+        )
+        self.assertEqual(res_bad_angle.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("physiological range", res_bad_angle.data["detail"])
+
+        # Accept valid 6-pose calibration
+        res_good = student_client.post(
+            f"/api/assessment/proctoring/{session.id}/calibration/",
+            {
+                "baseline_orientation": {"yaw": 2.1, "pitch": -1.4, "roll": 0.5},
+                "calibration_results": [
+                    {"step": "LOOK_STRAIGHT", "passed": True},
+                    {"step": "TURN_RIGHT", "passed": True},
+                    {"step": "TURN_LEFT", "passed": True},
+                    {"step": "LOOK_UP", "passed": True},
+                    {"step": "LOOK_DOWN", "passed": True},
+                    {"step": "RETURN_CENTER", "passed": True},
+                ],
+                "calibration_completed": True,
+            },
+            format="json",
+        )
+        self.assertEqual(res_good.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_good.data["calibration_completed"])
+
+    def test_coding_execution_and_grading_end_to_end(self):
+        # 1. Create a Coding Problem with public and hidden test cases
+        q = QuestionBank.objects.create(
+            prompt="Write a program to calculate the factorial of a positive integer.",
+            section_type=QuestionBank.SectionType.CODING,
+            assessment_type="CODING",
+            difficulty=QuestionBank.Difficulty.MEDIUM,
+            marks=10,
+            is_active=True,
+        )
+        prog_q = ProgrammingQuestion.objects.create(
+            question=q,
+            problem_statement="Given integer N from standard input, print N!.",
+            time_limit_seconds=3.0,
+            memory_limit_mb=256,
+            allowed_languages=["python", "java"],
+        )
+        # Public sample test case (N=5 -> 120)
+        tc_pub = prog_q.test_cases.create(
+            input_text="5\n",
+            expected_output="120",
+            is_public=True,
+            marks_weightage=4.0,
+            order=1,
+            is_active=True,
+        )
+        # Hidden test case (N=7 -> 5040)
+        tc_hid = prog_q.test_cases.create(
+            input_text="7\n",
+            expected_output="5040",
+            is_public=False,
+            marks_weightage=6.0,
+            order=2,
+            is_active=True,
+        )
+
+        assessment = Assessment.objects.create(
+            code="CODING-EVAL-01",
+            title="Coding Assessment",
+            assessment_type="CODING",
+            aptitude_count=0,
+            coding_count=1,
+            total_marks=10,
+        )
+        cand = Candidate.objects.create(
+            full_name="Coder Student",
+            register_number="CODE2026",
+            email="coder@csl.local",
+            college="Test Engineering College",
+            is_active=True,
+        )
+        attempt = AssessmentAttempt.objects.create(
+            candidate=cand,
+            assessment=assessment,
+            state=AssessmentAttempt.State.IN_PROGRESS,
+            snapshot_total_marks=10,
+        )
+        from apps.assessments.models import AttemptQuestionSnapshot
+        AttemptQuestionSnapshot.objects.create(
+            attempt=attempt,
+            question=q,
+            question_order=1,
+            section_type="CODING",
+            prompt=q.prompt,
+            option_a_text="",
+            option_b_text="",
+            option_c_text="",
+            option_d_text="",
+            correct_option_key="",
+            programming_data={
+                "problem_statement": prog_q.problem_statement,
+                "time_limit_seconds": 3.0,
+                "memory_limit_mb": 256,
+                "allowed_languages": ["python", "java"],
+                "test_cases": [
+                    {
+                        "id": str(tc_pub.id),
+                        "input_text": tc_pub.input_text,
+                        "expected_output": tc_pub.expected_output,
+                        "is_public": True,
+                        "marks_weightage": 4.0,
+                    },
+                    {
+                        "id": str(tc_hid.id),
+                        "input_text": tc_hid.input_text,
+                        "expected_output": tc_hid.expected_output,
+                        "is_public": False,
+                        "marks_weightage": 6.0,
+                    },
+                ]
+            }
+        )
+
+        token = generate_candidate_token(str(cand.id), str(attempt.id))
+        student_client = APIClient()
+        student_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        # Correct Python solution
+        python_solution = (
+            "import sys, math\n"
+            "data = sys.stdin.read().strip()\n"
+            "if data:\n"
+            "    n = int(data)\n"
+            "    print(math.factorial(n))\n"
+        )
+
+        # 2. Test Run View (Sample Cases)
+        res_run = student_client.post(
+            "/api/assessment/code/run/",
+            {
+                "attempt_id": str(attempt.id),
+                "question_id": q.id,
+                "language": "python",
+                "source_code": python_solution,
+            },
+            format="json",
+        )
+        self.assertEqual(res_run.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_run.data["mode"], "SAMPLE_CASES")
+        self.assertEqual(res_run.data["verdict"], "ACCEPTED")
+        self.assertEqual(res_run.data["passed_samples"], 1)
+
+        # 3. Test Submit View (Authoritative Evaluation)
+        res_submit = student_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(attempt.id),
+                "question_id": q.id,
+                "language": "python",
+                "source_code": python_solution,
+            },
+            format="json",
+        )
+        self.assertEqual(res_submit.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_submit.data["verdict"], "ACCEPTED")
+        self.assertEqual(res_submit.data["passed_test_cases"], 2)
+        self.assertEqual(res_submit.data["score_awarded"], 10.0)
+
+        # Verify hidden test case output is strictly protected
+        results = res_submit.data["results"]
+        self.assertEqual(len(results), 2)
+        hidden_res = next(r for r in results if not r["is_public"])
+        self.assertIsNone(hidden_res["expected_output"])
+        self.assertIsNone(hidden_res["actual_output"])
+        self.assertIsNone(hidden_res["input_text"])
+        self.assertTrue(hidden_res["passed"])
+
+        # Check attempt updated scores
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.coding_score, 10)
+        self.assertEqual(attempt.total_score, 10)
+        self.assertEqual(attempt.percentage, 100.0)

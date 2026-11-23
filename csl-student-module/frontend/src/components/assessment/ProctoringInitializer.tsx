@@ -51,15 +51,18 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   // Calibration state
   const [calibStepIndex, setCalibStepIndex] = useState<number>(0);
   const [calibProgress, setCalibProgress] = useState<number>(0);
-  const [calibResults, setCalibResults] = useState<any[]>([]);
-  const [baselinePose, setBaselinePose] = useState<HeadOrientation>({ yaw: 0, pitch: 0, roll: 0 });
   const [liveOrientation, setLiveOrientation] = useState<HeadOrientation>({ yaw: 0, pitch: 0, roll: 0 });
   const [liveFaceCount, setLiveFaceCount] = useState<number>(0);
 
-  // Refs
+  // Refs for stable stream and calibration baseline persistence across async closures
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const activeSessionRef = useRef<ProctoringSessionResponse | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const calibResultsRef = useRef<any[]>([]);
+  const baselinePoseRef = useRef<HeadOrientation>({ yaw: 0, pitch: 0, roll: 0 });
+  const detectedSignRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
 
   // Overall workflow state: 'WELCOME' | 'CAMERA' | 'CALIBRATION' | 'SCREEN_SHARE' | 'CONFIRM'
   const [activeStage, setActiveStage] = useState<'WELCOME' | 'CALIBRATION' | 'SCREEN_SHARE' | 'READY'>('WELCOME');
@@ -98,8 +101,16 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
         audio: false,
       });
 
+      cameraStreamRef.current = stream;
       setCameraStream(stream);
       setCameraStatus('SUCCESS');
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(console.warn);
+        };
+      }
 
       // Listen for camera disconnection / track ended
       const videoTrack = stream.getVideoTracks()[0];
@@ -155,9 +166,10 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
     setCalibrationError('');
     let currentStepIdx = 0;
     let holdCount = 0;
-    const requiredHoldFrames = 15; // ~500ms of sustained correct pose
-    const recordedResults: any[] = [];
-    let currentBaseline: HeadOrientation = { yaw: 0, pitch: 0, roll: 0 };
+    const requiredHoldFrames = 20; // ~600-800ms of sustained correct pose
+    calibResultsRef.current = [];
+    baselinePoseRef.current = { yaw: 0, pitch: 0, roll: 0 };
+    detectedSignRef.current = { yaw: 0, pitch: 0 };
 
     const loop = () => {
       try {
@@ -168,10 +180,24 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
           setLiveFaceCount(detection.faceCount);
           setLiveOrientation(detection.orientation);
 
-          if (detection.hasFace && detection.faceCount === 1) {
+          if (detection.faceCount === 0) {
+            holdCount = 0;
+            setCalibProgress(0);
+            setCalibrationError('No face detected in webcam view. Please face the camera directly.');
+          } else if (detection.faceCount > 1) {
+            holdCount = 0;
+            setCalibProgress(0);
+            setCalibrationError('Multiple faces detected! Only the registered candidate may be present.');
+          } else if (detection.hasFace && detection.faceCount === 1) {
+            setCalibrationError('');
             const currentTarget = CALIBRATION_SEQUENCE[currentStepIdx]?.step;
             if (currentTarget) {
-              const matches = checkPoseMatch(currentTarget, detection.orientation, currentBaseline);
+              const matches = checkPoseMatch(
+                currentTarget,
+                detection.orientation,
+                baselinePoseRef.current,
+                detectedSignRef.current
+              );
 
               if (matches) {
                 holdCount += 1;
@@ -181,19 +207,24 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
                 if (holdCount >= requiredHoldFrames) {
                   // Completed current pose step
                   if (currentTarget === 'LOOK_STRAIGHT') {
-                    currentBaseline = detection.orientation;
-                    setBaselinePose(currentBaseline);
+                    baselinePoseRef.current = detection.orientation;
+                  } else if (currentTarget === 'TURN_RIGHT') {
+                    const diffY = detection.orientation.yaw - baselinePoseRef.current.yaw;
+                    detectedSignRef.current.yaw = diffY >= 0 ? 1 : -1;
+                  } else if (currentTarget === 'LOOK_UP') {
+                    const diffP = detection.orientation.pitch - baselinePoseRef.current.pitch;
+                    detectedSignRef.current.pitch = diffP >= 0 ? 1 : -1;
                   }
 
-                  recordedResults.push({
+                  const stepRecord = {
                     pose: currentTarget,
                     passed: true,
                     yaw: detection.orientation.yaw,
                     pitch: detection.orientation.pitch,
                     confidence: detection.confidence,
                     timestamp: Date.now(),
-                  });
-                  setCalibResults([...recordedResults]);
+                  };
+                  calibResultsRef.current.push(stepRecord);
 
                   currentStepIdx += 1;
                   setCalibStepIndex(currentStepIdx);
@@ -212,9 +243,6 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
                 setCalibProgress(Math.min(100, Math.round((holdCount / requiredHoldFrames) * 100)));
               }
             }
-          } else {
-            holdCount = 0;
-            setCalibProgress(0);
           }
         }
       } catch (err: any) {
@@ -242,16 +270,19 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
         audio: false,
       });
 
+      const videoTracks = stream.getVideoTracks();
+      if (!videoTracks || videoTracks.length === 0 || videoTracks[0].readyState !== 'live') {
+        throw new Error('No active display video track returned.');
+      }
+
+      screenStreamRef.current = stream;
       setScreenStream(stream);
       setScreenShareStatus('SUCCESS');
 
-      const screenTrack = stream.getVideoTracks()[0];
-      if (screenTrack) {
-        screenTrack.onended = () => {
-          setScreenShareStatus('FAILED');
-          setScreenShareError('Screen sharing was stopped or interrupted by the candidate.');
-        };
-      }
+      videoTracks[0].onended = () => {
+        setScreenShareStatus('FAILED');
+        setScreenShareError('Screen sharing was stopped or interrupted by the candidate.');
+      };
 
       // Step 5: Browser Integrity checks (Fullscreen & visibility)
       handleCheckBrowserIntegrity(stream);
@@ -285,10 +316,10 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
       await updateProctoringScreenShareStatus(session.id, 'ACTIVE');
 
       // Submit calibration baseline
-      if (!bypassGranted && calibResults.length > 0) {
+      if (!bypassGranted && calibResultsRef.current.length > 0) {
         await submitProctoringCalibration(session.id, {
-          baseline_orientation: baselinePose,
-          calibration_results: calibResults,
+          baseline_orientation: baselinePoseRef.current,
+          calibration_results: calibResultsRef.current,
           calibration_completed: true,
         });
       }
@@ -304,7 +335,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
             ctx.drawImage(videoRef.current, 0, 0, 320, 240);
             const b64 = canvas.toDataURL('image/jpeg', 0.8);
             await uploadProctoringEvidence(session.id, b64, 'CALIBRATION_FRAME', undefined, {
-              baseline: baselinePose,
+              baseline: baselinePoseRef.current,
             });
           }
         } catch (snapErr) {
@@ -322,8 +353,10 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
 
   // Step 7: Launch Exam
   const handleAuthorizeAndEnter = () => {
-    if (activeSessionRef.current && cameraStream && screenStream) {
-      onSuccess(activeSessionRef.current, cameraStream, screenStream);
+    const cam = cameraStreamRef.current || cameraStream;
+    const sc = screenStreamRef.current || screenStream;
+    if (activeSessionRef.current && cam && sc) {
+      onSuccess(activeSessionRef.current, cam, sc);
     }
   };
 

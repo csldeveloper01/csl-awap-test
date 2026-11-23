@@ -53,6 +53,7 @@ urlpatterns = [
     path("camera-bypass-status/", CandidateCameraBypassStatusView.as_view(), name="candidate-camera-bypass-status"),
     path("<uuid:pk>/seb-config/", CandidateAssessmentSebConfigView.as_view(), name="candidate-assessment-seb-config"),
     path("drive-link/", DriveLinkCandidateView.as_view(), name="drive-link-candidate"),
+    path("drives/link-candidate/", DriveLinkCandidateView.as_view(), name="drive-link-candidate-alias"),
     path("drives/<str:code_or_id>/public/", PublicDriveDetailView.as_view(), name="public-drive-detail"),
     path("resolve-code/", ResolveAccessCodeView.as_view(), name="resolve-access-code"),
     path("code/run/", StudentCodeRunView.as_view(), name="student-code-run"),
