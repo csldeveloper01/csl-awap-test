@@ -19,7 +19,7 @@ from django.urls import path, include
 from django.http import JsonResponse
 from django.db import connection
 
-from apps.assessments.views import PublicDriveDetailView, ResolveAccessCodeView
+from apps.assessments.views import PublicDriveDetailView, ResolveAccessCodeView, StudentCollegesListView
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ urlpatterns = [
     path('api/student/activities/', include('apps.activities.urls')),
     path('api/assessment/', include('apps.assessments.urls')),
     path('api/csl-admin/', include('apps.assessments.admin_urls')),
+    path('api/colleges/', StudentCollegesListView.as_view(), name='root-colleges-list'),
+    path('api/v1/assessments/colleges/', StudentCollegesListView.as_view(), name='v1-assessments-colleges-list'),
     path('api/drives/<str:code_or_id>/public/', PublicDriveDetailView.as_view(), name='root-public-drive-detail'),
     path('api/resolve-code/', ResolveAccessCodeView.as_view(), name='root-resolve-code'),
 ]

@@ -68,12 +68,41 @@ logger = logging.getLogger(__name__)
 
 class StudentCollegesListView(APIView):
     """
-    Student-facing: returns active colleges for registration dropdown.
+    Student-facing: returns colleges for candidate registration dropdown.
+    Supports ?search=, ?drive_code=, ?code=, and ensures institutions in the database
+    are never blocked from display by unverified/inactive status.
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
-        colleges = College.objects.filter(is_active=True).order_by("name")
+        search = (request.query_params.get("search") or "").strip()
+        drive_code = (request.query_params.get("drive_code") or request.query_params.get("code") or "").strip()
+        include_inactive = request.query_params.get("include_inactive", "").lower() in ("true", "1")
+
+        qs = College.objects.all() if include_inactive else College.objects.exclude(is_active=False)
+        # Fallback: If no colleges found with is_active!=False but colleges exist in the database,
+        # return all colleges so students are never blocked.
+        if not qs.exists() and College.objects.exists():
+            qs = College.objects.all()
+
+        if drive_code:
+            from django.db.models import Q
+            drive = Drive.objects.filter(Q(drive_code=drive_code) | Q(code__iexact=drive_code)).first()
+            if drive and drive.eligible_colleges.exists():
+                drive_colleges = drive.eligible_colleges.all()
+                if drive_colleges.exists():
+                    qs = drive_colleges
+
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(name__icontains=search) |
+                Q(code__icontains=search) |
+                Q(location__icontains=search) |
+                Q(city__icontains=search)
+            )
+
+        colleges = qs.order_by("name")
         return Response(StudentCollegeOptionSerializer(colleges, many=True).data)
 
 
@@ -187,7 +216,7 @@ class CandidateEligibleAssessmentsView(APIView):
             "id": str(candidate.id),
             "full_name": candidate.full_name,
             "register_number": candidate.register_number,
-            "college": candidate.college,
+            "college": (candidate.college_ref.name if candidate.college_ref else candidate.college) or "",
             "college_id": candidate.college_ref_id,
             "department": candidate.department,
             "year_of_study": candidate.year_of_study,
@@ -508,7 +537,8 @@ class DriveLinkCandidateView(APIView):
             "candidate_id": str(candidate.id),
             "full_name": candidate.full_name,
             "register_number": candidate.register_number,
-            "college": candidate.college,
+            "college": (candidate.college_ref.name if candidate.college_ref else candidate.college) or "",
+            "college_id": candidate.college_ref_id,
             "drive_id": str(target_drive.id),
             "drive_name": target_drive.name,
             "drive_code": target_drive.code,
@@ -544,16 +574,25 @@ class CandidateRegisterView(APIView):
         # Resolve College entity
         college_obj = None
         if college_id:
-            college_obj = College.objects.filter(id=college_id, is_active=True).first()
+            college_obj = College.objects.exclude(is_active=False).filter(id=college_id).first()
+            if not college_obj:
+                college_obj = College.objects.filter(id=college_id).first()
             if not college_obj:
                 return Response(
-                    {"college_id": ["Selected institution is currently inactive or invalid."]},
+                    {"college_id": ["Selected institution is currently invalid."]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             college_name = college_obj.name
         elif college_name:
             from .services import resolve_or_create_college
             college_obj = resolve_or_create_college(college_name, is_student_entry=True)
+            if not college_obj:
+                college_obj = (
+                    College.objects.filter(name__iexact=college_name).first()
+                    or College.objects.filter(code__iexact=college_name).first()
+                )
+            if college_obj:
+                college_name = college_obj.name
 
         if not college_obj:
             return Response(
@@ -798,7 +837,7 @@ class CandidateRegisterView(APIView):
                         "candidate_id": str(existing_candidate.id),
                         "assessment_token": token,
                         "full_name": existing_candidate.full_name,
-                        "college": existing_candidate.college,
+                        "college": (existing_candidate.college_ref.name if existing_candidate.college_ref else existing_candidate.college) or "",
                         "college_id": existing_candidate.college_ref_id,
                         "registration_status": registration_status,
                         "drive_id": str(target_drive.id) if target_drive else None,
@@ -895,7 +934,7 @@ class CandidateRegisterView(APIView):
                 "candidate_id": str(candidate.id),
                 "assessment_token": token,
                 "full_name": candidate.full_name,
-                "college": candidate.college,
+                "college": (candidate.college_ref.name if candidate.college_ref else candidate.college) or "",
                 "college_id": candidate.college_ref_id,
                 "drive_id": str(target_drive.id) if target_drive else None,
                 "drive_name": target_drive.name if target_drive else None,
@@ -993,26 +1032,44 @@ class ResolveAccessCodeView(APIView):
         )
         if inv:
             if not inv.is_valid():
-                return Response({"detail": "This invitation has expired or reached its maximum usage limit."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"valid": False, "detail": "This invitation has expired or reached its maximum usage limit."}, status=status.HTTP_400_BAD_REQUEST)
             drive = inv.drive
+            eligible_colleges = list(drive.eligible_colleges.values("id", "name", "code", "location"))
             return Response({
-                "type": "DRIVE",
+                "valid": True,
+                "type": "DRIVE_INVITATION",
+                "target_id": str(drive.id),
+                "name": drive.name,
+                "title": drive.name,
+                "code": drive.code,
                 "drive_id": str(drive.id),
                 "drive_code": drive.code,
+                "eight_digit_code": drive.drive_code,
                 "drive_name": drive.name,
                 "visibility": drive.visibility,
+                "invite_token": inv.access_code or inv.token_hash,
+                "eligible_colleges": eligible_colleges,
+                "eligible_college_ids": [c["id"] for c in eligible_colleges],
                 "message": f"Invitation verified for {drive.name}.",
             })
 
         # 2. Check Assessment access code
         assessment = Assessment.objects.filter(access_code__iexact=code).first()
         if assessment:
+            eligible_colleges = list(assessment.eligible_colleges.values("id", "name", "code", "location"))
             return Response({
+                "valid": True,
                 "type": "ASSESSMENT",
+                "target_id": str(assessment.id),
+                "name": assessment.title,
+                "title": assessment.title,
+                "code": assessment.access_code or assessment.code,
                 "assessment_id": str(assessment.id),
                 "assessment_code": assessment.code,
                 "assessment_title": assessment.title,
                 "visibility": assessment.visibility,
+                "eligible_colleges": eligible_colleges,
+                "eligible_college_ids": [c["id"] for c in eligible_colleges],
                 "message": f"Access code verified for '{assessment.title}'.",
             })
 
@@ -1021,22 +1078,29 @@ class ResolveAccessCodeView(APIView):
         drive = Drive.objects.filter(Q(drive_code=code) | Q(code__iexact=code)).first()
         if drive:
             if drive.status in [Drive.Status.COMPLETED, Drive.Status.ARCHIVED]:
-                return Response({"detail": f"Drive '{drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
+                return Response({"valid": False, "detail": f"Drive '{drive.name}' is no longer active."}, status=status.HTTP_403_FORBIDDEN)
             # An 8-digit access code or drive code directly authorizes entry to an invite-only drive
             if drive.visibility == Drive.Visibility.INVITE_ONLY and not (code == drive.drive_code or code.lower() == drive.code.lower()):
-                return Response({"detail": "This drive is invite-only. A valid invitation token or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+                return Response({"valid": False, "detail": "This drive is invite-only. A valid invitation token or access code is required."}, status=status.HTTP_403_FORBIDDEN)
+            eligible_colleges = list(drive.eligible_colleges.values("id", "name", "code", "location"))
             return Response({
+                "valid": True,
                 "type": "DRIVE",
+                "target_id": str(drive.id),
+                "name": drive.name,
+                "title": drive.name,
+                "code": drive.code,
                 "drive_id": str(drive.id),
                 "drive_code": drive.code,
                 "eight_digit_code": drive.drive_code,
                 "drive_name": drive.name,
                 "visibility": drive.visibility,
-                "eligible_college_ids": list(drive.eligible_colleges.values_list("id", flat=True)),
+                "eligible_colleges": eligible_colleges,
+                "eligible_college_ids": [c["id"] for c in eligible_colleges],
                 "message": f"Drive verified: {drive.name}.",
             })
 
-        return Response({"detail": "Invalid access code or token."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"valid": False, "detail": "Invalid access code or token."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class StartAssessmentView(APIView):

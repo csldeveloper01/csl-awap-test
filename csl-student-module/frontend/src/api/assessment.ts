@@ -267,9 +267,16 @@ export interface IntegrityEventResponse {
   flag_reason: string;
 }
 
-export const getStudentColleges = async (): Promise<CollegeOption[]> => {
-  const res = await assessmentApi.get<CollegeOption[]>('/colleges/');
-  return res.data;
+export const getStudentColleges = async (params?: { search?: string; drive_code?: string; code?: string }): Promise<CollegeOption[]> => {
+  const res = await assessmentApi.get<CollegeOption[]>('/colleges/', { params });
+  const raw = res.data;
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    if (Array.isArray((raw as any).results)) return (raw as any).results;
+    if (Array.isArray((raw as any).colleges)) return (raw as any).colleges;
+    if (Array.isArray((raw as any).data)) return (raw as any).data;
+  }
+  return [];
 };
 
 
@@ -477,9 +484,20 @@ export interface ResolveAccessCodeResult {
   name?: string;
   title?: string;
   code: string;
+  drive_id?: string;
+  drive_code?: string;
+  eight_digit_code?: string;
+  drive_name?: string;
+  assessment_id?: string;
+  assessment_code?: string;
+  assessment_title?: string;
+  visibility?: string;
   invite_token?: string;
+  eligible_colleges?: CollegeOption[];
+  eligible_college_ids?: number[];
   drive?: PublicDriveInfo;
   assessment?: any;
+  message?: string;
 }
 
 export const resolveAccessCode = async (code: string): Promise<ResolveAccessCodeResult> => {

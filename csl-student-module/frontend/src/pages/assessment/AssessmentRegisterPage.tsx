@@ -108,6 +108,8 @@ export function AssessmentRegisterPage() {
   const codeParam = searchParams.get('code') || '';
   const tokenParam = searchParams.get('token') || '';
   const assessmentParam = searchParams.get('assessment') || '';
+  const collegeParam = searchParams.get('college') || searchParams.get('institution') || '';
+  const collegeIdParam = searchParams.get('college_id') ? Number(searchParams.get('college_id')) : undefined;
 
   const [driveCode, setDriveCode] = useState(driveParam);
   const [accessCode, setAccessCode] = useState(codeParam);
@@ -124,8 +126,8 @@ export function AssessmentRegisterPage() {
   const [formData, setFormData] = useState<RegistrationPayload>({
     full_name: '',
     register_number: '',
-    college: '',
-    college_id: undefined,
+    college: collegeParam || '',
+    college_id: collegeIdParam,
     email: '',
     department: '',
     year_of_study: '3rd Year',
@@ -189,14 +191,30 @@ export function AssessmentRegisterPage() {
     if (initialCode) {
       setResolvingCode(true);
       resolveAccessCode(initialCode)
-        .then((res) => {
-          if (res.valid) {
-            setResolvedInfo({ name: res.name || res.title, type: res.type, code: res.code });
+        .then((res: any) => {
+          if (res.valid || res.type) {
+            setResolvedInfo({
+              name: res.name || res.title || res.drive_name || res.assessment_title,
+              type: res.type,
+              code: res.code || res.drive_code || res.assessment_code,
+            });
             if (res.type === 'DRIVE' || res.type === 'DRIVE_INVITATION') {
-              setDriveCode(res.drive?.code || res.code);
+              setDriveCode(res.drive?.code || res.drive_code || res.code);
+              if (res.eight_digit_code) {
+                setEightDigitCode(res.eight_digit_code);
+              }
             }
             if (res.invite_token) {
               setInviteToken(res.invite_token);
+            }
+            // Auto-select college if target has exactly 1 eligible college
+            if (res.eligible_colleges && res.eligible_colleges.length === 1) {
+              const single = res.eligible_colleges[0];
+              setFormData((prev) => ({
+                ...prev,
+                college_id: single.id,
+                college: single.name,
+              }));
             }
           }
         })
@@ -213,10 +231,33 @@ export function AssessmentRegisterPage() {
   useEffect(() => {
     let isMounted = true;
     setCollegesLoading(true);
-    getStudentColleges()
+    const targetCode = driveParam || codeParam;
+    getStudentColleges(targetCode ? { drive_code: targetCode } : undefined)
       .then((data) => {
-        if (isMounted) {
-          setColleges(data);
+        if (!isMounted) return;
+        const list = Array.isArray(data) ? data : ((data as any)?.results || (data as any)?.colleges || []);
+        setColleges(list);
+
+        // Resolve prefilled college from params or current state
+        const prefillId = collegeIdParam || formData.college_id;
+        const prefillName = collegeParam || formData.college;
+
+        if (prefillId) {
+          const matched = list.find((c: CollegeOption) => c.id === prefillId);
+          if (matched) {
+            setFormData((prev) => ({ ...prev, college_id: matched.id, college: matched.name }));
+          }
+        } else if (prefillName) {
+          const matched = list.find(
+            (c: CollegeOption) =>
+              c.name.toLowerCase() === prefillName.toLowerCase() ||
+              c.code.toLowerCase() === prefillName.toLowerCase()
+          );
+          if (matched) {
+            setFormData((prev) => ({ ...prev, college_id: matched.id, college: matched.name }));
+          } else {
+            setFormData((prev) => ({ ...prev, college: prefillName }));
+          }
         }
       })
       .catch((err) => {
@@ -229,7 +270,7 @@ export function AssessmentRegisterPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [codeParam, driveParam]);
 
   const handleBlur = (field: keyof RegistrationPayload | 'college_id') => {
     let err = '';
@@ -374,14 +415,29 @@ export function AssessmentRegisterPage() {
     setCodeResolutionError(null);
     try {
       const res = await resolveAccessCode(manualCodeInput.trim());
-      if (res.valid) {
-        setResolvedInfo({ name: res.name || res.title, type: res.type, code: res.code });
-        setAccessCode(res.code);
+      if (res.valid || res.type) {
+        setResolvedInfo({
+          name: res.name || res.title || res.drive_name || res.assessment_title,
+          type: res.type,
+          code: res.code || res.drive_code || res.assessment_code,
+        });
+        setAccessCode((res.code || res.assessment_code || res.drive_code) || '');
         if (res.type === 'DRIVE' || res.type === 'DRIVE_INVITATION') {
-          setDriveCode(res.drive?.code || res.code);
+          setDriveCode((res.drive?.code || res.drive_code || res.code) || '');
+          if (res.eight_digit_code) {
+            setEightDigitCode(res.eight_digit_code);
+          }
         }
         if (res.invite_token) {
           setInviteToken(res.invite_token);
+        }
+        if (res.eligible_colleges && res.eligible_colleges.length === 1) {
+          const single = res.eligible_colleges[0];
+          setFormData((prev) => ({
+            ...prev,
+            college_id: single.id,
+            college: single.name,
+          }));
         }
       } else {
         setCodeResolutionError('The access code is not active or has reached maximum usage.');
@@ -1345,7 +1401,7 @@ export function AssessmentRegisterPage() {
                   </span>
                 </div>
                 <div style={{ fontSize: '12px', color: '#4B5563', marginTop: '2px' }}>
-                  {candidateInfo.college} · {candidateInfo.department} · {candidateInfo.year_of_study}
+                  {(candidateInfo.college || formData.college)} · {(candidateInfo.department || formData.department)} · {(candidateInfo.year_of_study || formData.year_of_study)}
                 </div>
               </div>
 
@@ -2167,7 +2223,7 @@ export function AssessmentRegisterPage() {
                 </button>
               </div>
 
-              {formData.college_id ? (
+              {(formData.college_id || formData.college) ? (
                 <div
                   style={{
                     display: 'flex',
@@ -2185,7 +2241,7 @@ export function AssessmentRegisterPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
                     <span style={{ fontSize: '14px' }}>🏛️</span>
                     <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {formData.college}
+                      {formData.college || colleges.find((c) => c.id === formData.college_id)?.name || 'Selected Institution'}
                     </span>
                   </div>
                   <button
@@ -2269,18 +2325,70 @@ export function AssessmentRegisterPage() {
                         <div style={{ padding: '12px', textAlign: 'center', color: '#64748B', fontSize: '12px' }}>
                           Loading enrolled colleges...
                         </div>
+                      ) : colleges.length === 0 ? (
+                        <div style={{ padding: '14px', textAlign: 'center', color: '#64748B', fontSize: '12px' }}>
+                          <div>No registered institutions found.</div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowRequestCollegeModal(true);
+                              setIsCollegeDropdownOpen(false);
+                            }}
+                            style={{
+                              marginTop: '6px',
+                              background: 'none',
+                              border: 'none',
+                              color: '#1455B8',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              fontSize: '12px',
+                            }}
+                          >
+                            Request to add your institution
+                          </button>
+                        </div>
                       ) : (
-                        colleges
-                          .filter((c) => {
+                        (() => {
+                          const filtered = colleges.filter((c) => {
                             if (!collegeSearch.trim()) return true;
                             const term = collegeSearch.toLowerCase();
                             return (
-                              c.name.toLowerCase().includes(term) ||
-                              c.code.toLowerCase().includes(term) ||
-                              (c.location && c.location.toLowerCase().includes(term))
+                              (c.name || '').toLowerCase().includes(term) ||
+                              (c.code || '').toLowerCase().includes(term) ||
+                              (c.location && (c.location || '').toLowerCase().includes(term))
                             );
-                          })
-                          .map((col) => (
+                          });
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div style={{ padding: '14px', textAlign: 'center', color: '#64748B', fontSize: '12px' }}>
+                                <div>No institution matching "{collegeSearch}"</div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowRequestCollegeModal(true);
+                                    setRequestCollegeForm((prev) => ({ ...prev, institution_name: collegeSearch.trim() }));
+                                    setIsCollegeDropdownOpen(false);
+                                  }}
+                                  style={{
+                                    marginTop: '6px',
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#1455B8',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline',
+                                    fontSize: '12px',
+                                  }}
+                                >
+                                  Request to add "{collegeSearch}"
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((col) => (
                             <div
                               key={col.id}
                               onClick={() => handleSelectCollege(col)}
@@ -2308,7 +2416,8 @@ export function AssessmentRegisterPage() {
                                 Select
                               </span>
                             </div>
-                          ))
+                          ));
+                        })()
                       )}
                     </div>
                   )}
