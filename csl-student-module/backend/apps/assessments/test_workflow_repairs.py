@@ -2,10 +2,11 @@ import io
 import json
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 import openpyxl
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -18,6 +19,8 @@ from apps.assessments.models import (
     AssessmentSectionAllocation,
     AttemptQuestionSnapshot,
     Candidate,
+    CodeSubmission,
+    CodeTestResult,
     College,
     Drive,
     DriveAssessment,
@@ -372,7 +375,7 @@ class QuestionPoolCsvImportTests(BaseWorkflowRepairTestCase):
                         "difficulty": "MEDIUM",
                         "section_type": self.coding_section.code,
                         "marks": 10,
-                        "allowed_languages": ["python", "cpp"],
+                        "allowed_languages": ["python", "java"],
                         "test_cases": [
                             {"input_text": "2 3", "expected_output": "5", "is_public": True},
                             {"input_text": "10 20", "expected_output": "30", "is_public": False},
@@ -976,3 +979,447 @@ class PoolTypeEnforcementAndImportTests(BaseWorkflowRepairTestCase):
         self.assertEqual(rec_res.data["pool"]["question_type"], "CODING")
         self.assertEqual(rec_res.data["pool"]["questions_count"], 1)
         self.assertTrue(QuestionBank.objects.filter(id=self.mcq_q.id).exists())
+
+
+class SectionInheritanceAndDirectoryResolutionTests(BaseWorkflowRepairTestCase):
+    """
+    Tests:
+    - Multi-section QuestionPool inheritance into AssessmentSectionAllocation
+    - Preserving manual allocations & preventing generic CODING flattening
+    - Shared Section Directory Resolution across CSV and Coding JSON imports
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sec_python, _ = AssessmentSection.objects.get_or_create(
+            code="PYTHON_TRACK",
+            defaults={"name": "Python Track", "is_active": True, "order": 1},
+        )
+        self.sec_dsa, _ = AssessmentSection.objects.get_or_create(
+            code="DSA_TRACK",
+            defaults={"name": "Data Structures and Algorithms", "is_active": True, "order": 2},
+        )
+        self.sec_java, _ = AssessmentSection.objects.get_or_create(
+            code="JAVA_TRACK",
+            defaults={"name": "Java Track", "is_active": True, "order": 3},
+        )
+        self.sec_apt, _ = AssessmentSection.objects.get_or_create(
+            code="APTITUDE",
+            defaults={"name": "Aptitude", "is_active": True, "order": 4},
+        )
+
+    def _create_coding_q(self, title: str, section_obj: AssessmentSection, marks: int = 10):
+        q = QuestionBank.objects.create(
+            prompt=title,
+            section=section_obj,
+            section_type=section_obj.code,
+            assessment_type="CODING",
+            marks=marks,
+            is_global=True,
+        )
+        prog = ProgrammingQuestion.objects.create(
+            question=q,
+            problem_statement=f"Solve {title}",
+            allowed_languages=["python", "java"],
+        )
+        ProgrammingTestCase.objects.create(
+            programming_question=prog,
+            input_text="1",
+            expected_output="1",
+            is_public=True,
+        )
+        return q
+
+    def test_multi_section_pool_inheritance_and_manual_allocation_preservation(self):
+        coding_pool = QuestionPool.objects.create(
+            name="Technical Coding Pool",
+            code=f"TECH_COD_{uuid.uuid4().hex[:5].upper()}",
+            question_type=QuestionPool.QuestionType.CODING,
+        )
+        for i in range(3):
+            QuestionPoolItem.objects.create(
+                pool=coding_pool,
+                question=self._create_coding_q(f"Py Q {i}", self.sec_python, marks=10),
+            )
+        for i in range(2):
+            QuestionPoolItem.objects.create(
+                pool=coding_pool,
+                question=self._create_coding_q(f"DSA Q {i}", self.sec_dsa, marks=15),
+            )
+        QuestionPoolItem.objects.create(
+            pool=coding_pool,
+            question=self._create_coding_q("Java Q 0", self.sec_java, marks=20),
+        )
+
+        assessment = Assessment.objects.create(
+            code=f"INH_{uuid.uuid4().hex[:5].upper()}",
+            title="Section Inheritance Assessment",
+            duration_minutes=60,
+            total_marks=30,
+            status=Assessment.Status.DRAFT,
+        )
+        # Pre-existing manual configuration on PYTHON_TRACK should NOT be overwritten
+        AssessmentSectionAllocation.objects.create(
+            assessment=assessment,
+            section=self.sec_python,
+            question_count=2,
+            marks_per_question=15,
+            order=1,
+        )
+
+        link_res = self.admin_client.post(
+            f"/api/csl-admin/assessments/{assessment.id}/pool-sources/",
+            {"pool_id": str(coding_pool.id), "question_count": 2, "randomize": True},
+            format="json",
+        )
+        self.assertIn(link_res.status_code, (200, 201), link_res.data)
+        inherited_codes = {item["section_code"]: item for item in link_res.data["inherited_sections"]}
+        self.assertEqual(set(inherited_codes.keys()), {"PYTHON_TRACK", "DSA_TRACK", "JAVA_TRACK"})
+        self.assertEqual(inherited_codes["PYTHON_TRACK"]["inherited_action"], "RECONCILED_EXISTING")
+        self.assertEqual(inherited_codes["DSA_TRACK"]["inherited_action"], "CREATED")
+        self.assertEqual(inherited_codes["JAVA_TRACK"]["inherited_action"], "CREATED")
+
+        # Verify manual PYTHON_TRACK quota (2 x 15) stayed untouched while DSA & JAVA were added
+        py_alloc = AssessmentSectionAllocation.objects.get(assessment=assessment, section=self.sec_python)
+        self.assertEqual(py_alloc.question_count, 2)
+        self.assertEqual(py_alloc.marks_per_question, 15)
+
+        detail_res = self.admin_client.get(f"/api/csl-admin/assessments/{assessment.id}/")
+        self.assertEqual(detail_res.status_code, 200)
+        counts_by_code = {s["section_code"]: s["available_questions_count"] for s in detail_res.data["sections"]}
+        self.assertEqual(counts_by_code["PYTHON_TRACK"], 3)
+        self.assertEqual(counts_by_code["DSA_TRACK"], 2)
+        self.assertEqual(counts_by_code["JAVA_TRACK"], 1)
+
+    def test_coding_json_import_requires_section_resolution_and_python_java_only(self):
+        coding_pool = QuestionPool.objects.create(
+            name="JSON Section Pool",
+            code=f"JSN_COD_{uuid.uuid4().hex[:5].upper()}",
+            question_type=QuestionPool.QuestionType.CODING,
+        )
+
+        # Reject legacy unsupported languages (cpp) in new Coding JSON import
+        bad_lang_res = self.admin_client.post(
+            f"/api/csl-admin/questions/import-coding-json/?pool_id={coding_pool.id}",
+            {
+                "pool_id": str(coding_pool.id),
+                "questions": [{
+                    "title": "CPP Blocked Problem",
+                    "section_type": "PYTHON_TRACK",
+                    "allowed_languages": ["cpp"],
+                    "test_cases": [{"input_text": "", "expected_output": "1", "is_public": True}],
+                }],
+            },
+            format="json",
+        )
+        self.assertEqual(bad_lang_res.status_code, 400)
+
+        payload = {
+            "pool_id": str(coding_pool.id),
+            "add_to_global_bank": False,
+            "questions": [
+                {
+                    "title": "Dynamic Programming Grid",
+                    "section_type": "Dynamic Programming",
+                    "allowed_languages": ["python3"],
+                    "test_cases": [{"input_text": "2", "expected_output": "2", "is_public": True}],
+                },
+                {
+                    "title": "Binary Tree Level Order",
+                    "section_type": "Trees Track",
+                    "allowed_languages": ["python", "java"],
+                    "test_cases": [{"input_text": "1", "expected_output": "1", "is_public": True}],
+                },
+                {
+                    "title": "Skipped Legacy Topic",
+                    "section_type": "Obsolete Track",
+                    "allowed_languages": ["python"],
+                    "test_cases": [{"input_text": "1", "expected_output": "1", "is_public": True}],
+                },
+            ],
+        }
+
+        # Preview identifies unmatched sections cleanly
+        prev_res = self.admin_client.post(
+            "/api/csl-admin/questions/import-coding-json/?preview=true",
+            payload,
+            format="json",
+        )
+        self.assertEqual(prev_res.status_code, 200, prev_res.data)
+        self.assertEqual(prev_res.data["unmatched_sections_count"], 3)
+        self.assertTrue(prev_res.data["requires_section_resolution"])
+
+        # Commit WITHOUT approving unmatched sections must fail cleanly with 400 (no silent auto-create!)
+        blocked_commit = self.admin_client.post(
+            "/api/csl-admin/questions/import-coding-json/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(blocked_commit.status_code, 400)
+        self.assertFalse(AssessmentSection.objects.filter(code="DYNAMIC_PROGRAMMING").exists())
+
+        # Commit WITH create + map + skip rules
+        resolved_payload = {
+            **payload,
+            "section_mapping": {
+                "DYNAMIC PROGRAMMING": {
+                    "action": "create",
+                    "target_section_name": "Dynamic Programming",
+                    "target_section_code": "DP_CUSTOM",
+                    "description": "DP coding problems",
+                    "display_order": 9,
+                },
+                "TREES TRACK": {
+                    "action": "map",
+                    "target_section_id": self.sec_dsa.id,
+                },
+                "OBSOLETE TRACK": {
+                    "action": "skip",
+                },
+            },
+        }
+        ok_res = self.admin_client.post(
+            "/api/csl-admin/questions/import-coding-json/",
+            resolved_payload,
+            format="json",
+        )
+        self.assertEqual(ok_res.status_code, 201, ok_res.data)
+        self.assertEqual(ok_res.data["imported_count"], 2)
+        self.assertEqual(ok_res.data["skipped_count"], 1)
+        dp_sec = AssessmentSection.objects.get(code="DP_CUSTOM")
+        self.assertEqual(dp_sec.description, "DP coding problems")
+        self.assertEqual(dp_sec.order, 9)
+
+        dp_q = QuestionBank.objects.get(prompt="Dynamic Programming Grid")
+        self.assertEqual(dp_q.section_id, dp_sec.id)
+        self.assertEqual(dp_q.programming_details.allowed_languages, ["python"])
+
+        tree_q = QuestionBank.objects.get(prompt="Binary Tree Level Order")
+        self.assertEqual(tree_q.section_id, self.sec_dsa.id)
+        self.assertEqual(tree_q.section_type, self.sec_dsa.code)
+        self.assertFalse(QuestionBank.objects.filter(prompt="Skipped Legacy Topic").exists())
+
+    def test_csv_import_section_resolution_rejects_unapproved_when_required(self):
+        mcq_pool = QuestionPool.objects.create(
+            name="MCQ Sec Pool",
+            code=f"MCQ_SEC_{uuid.uuid4().hex[:5].upper()}",
+            question_type=QuestionPool.QuestionType.MCQ,
+        )
+        csv_text = (
+            "prompt,section_type,option_a,option_b,option_c,option_d,correct_option\n"
+            "Graph Theory Q1,Graph Theory,1,2,3,4,A\n"
+        )
+        blocked_res = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{mcq_pool.id}/import-csv/",
+            {
+                "csv_content": csv_text,
+                "require_section_resolution": True,
+            },
+            format="json",
+        )
+        self.assertEqual(blocked_res.status_code, 400)
+        self.assertFalse(AssessmentSection.objects.filter(code="GRAPH_THEORY").exists())
+
+        ok_res = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{mcq_pool.id}/import-csv/",
+            {
+                "csv_content": csv_text,
+                "require_section_resolution": True,
+                "section_mapping": json.dumps({
+                    "GRAPH THEORY": {
+                        "action": "create",
+                        "target_section_name": "Graph Theory",
+                        "target_section_code": "GRAPH_CUSTOM",
+                        "description": "Graph problems",
+                        "display_order": 5,
+                    }
+                }),
+            },
+            format="json",
+        )
+        self.assertEqual(ok_res.status_code, 200, ok_res.data)
+        self.assertEqual(ok_res.data["success_count"], 1)
+        self.assertTrue(AssessmentSection.objects.filter(code="GRAPH_CUSTOM").exists())
+
+
+class SnapshotGradingAndAuthBoundaryTests(BaseWorkflowRepairTestCase):
+    """
+    Tests:
+    - Authoritative question_id validation (never question_order substitution)
+    - Candidate ownership and expiry checks on run & submit
+    - Snapshot-based grading immunity after live question/test-case mutations
+    - Hidden test case confidentiality and sandbox outage 503 safety
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sec_cod, _ = AssessmentSection.objects.get_or_create(
+            code="CODING",
+            defaults={"name": "Coding", "is_active": True},
+        )
+        self.college = College.objects.create(name="Test College", code=f"CLG_{uuid.uuid4().hex[:4].upper()}")
+        self.cand1 = Candidate.objects.create(
+            full_name="Cand One",
+            register_number=f"REG_{uuid.uuid4().hex[:6]}",
+            college_ref=self.college,
+            college=self.college.name,
+            email=f"c1_{uuid.uuid4().hex[:5]}@csl.test",
+            department="CSE",
+            year_of_study="4th Year",
+            phone_number="9999999991",
+        )
+        self.cand2 = Candidate.objects.create(
+            full_name="Cand Two",
+            register_number=f"REG_{uuid.uuid4().hex[:6]}",
+            college_ref=self.college,
+            college=self.college.name,
+            email=f"c2_{uuid.uuid4().hex[:5]}@csl.test",
+            department="CSE",
+            year_of_study="4th Year",
+            phone_number="9999999992",
+        )
+        self.q = QuestionBank.objects.create(
+            prompt="Double Input Snapshot",
+            section=self.sec_cod,
+            section_type="CODING",
+            assessment_type="CODING",
+            marks=20,
+            is_global=True,
+        )
+        self.prog = ProgrammingQuestion.objects.create(
+            question=self.q,
+            problem_statement="Print 2*n",
+            allowed_languages=["python", "java"],
+            time_limit_seconds=2.0,
+            memory_limit_mb=256,
+        )
+        self.pub_tc = ProgrammingTestCase.objects.create(
+            programming_question=self.prog,
+            input_text="3",
+            expected_output="6",
+            is_public=True,
+            marks_weightage=1.0,
+            order=1,
+        )
+        self.hid_tc = ProgrammingTestCase.objects.create(
+            programming_question=self.prog,
+            input_text="7",
+            expected_output="14",
+            is_public=False,
+            marks_weightage=1.0,
+            order=2,
+        )
+        self.assessment = Assessment.objects.create(
+            code=f"SNAP_{uuid.uuid4().hex[:5].upper()}",
+            title="Snapshot Grading Assessment",
+            duration_minutes=45,
+            total_marks=20,
+            status=Assessment.Status.OPEN,
+            is_seb_required=False,
+        )
+        AssessmentSectionAllocation.objects.create(
+            assessment=self.assessment,
+            section=self.sec_cod,
+            question_count=1,
+            marks_per_question=20,
+            order=1,
+        )
+        self.assessment.questions.add(self.q)
+
+        AssessmentConfig.objects.get_or_create(
+            is_active=True,
+            defaults={
+                "title": "Snapshot Test Config",
+                "duration_minutes": 45,
+                "total_marks": 20,
+            },
+        )
+        self.attempt = start_assessment_for_candidate(self.cand1, assessment=self.assessment)
+        self.token1 = generate_candidate_token(str(self.cand1.id), str(self.attempt.id))
+        self.token2 = generate_candidate_token(str(self.cand2.id))
+
+        self.c1_client = APIClient()
+        self.c1_client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.token1}")
+        self.c2_client = APIClient()
+        self.c2_client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.token2}")
+
+    def test_snapshot_grading_immutable_even_after_live_question_mutation_and_deletion(self):
+        # 1. Wrong question_id (e.g. question_order=1 when DB id != 1) MUST fail with 400
+        wrong_id_res = self.c1_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(self.attempt.id),
+                "question_id": 99999999,
+                "language": "python",
+                "source_code": "print(int(input()) * 2)",
+            },
+            format="json",
+        )
+        self.assertEqual(wrong_id_res.status_code, 400)
+
+        # 2. Candidate 2 does NOT own Candidate 1's attempt -> 403
+        unauth_res = self.c2_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(self.attempt.id),
+                "question_id": self.q.id,
+                "language": "python",
+                "source_code": "print(int(input()) * 2)",
+            },
+            format="json",
+        )
+        self.assertEqual(unauth_res.status_code, 403)
+
+        # 3. Mutate live ProgrammingQuestion & delete live hidden test case AFTER attempt started
+        self.hid_tc.delete()
+        self.pub_tc.expected_output = "99999"
+        self.pub_tc.save()
+        self.prog.allowed_languages = ["java"]
+        self.prog.save()
+
+        # Candidate submits Python solution matching FROZEN snapshot (3->6, 7->14)
+        sub_res = self.c1_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(self.attempt.id),
+                "question_id": self.q.id,
+                "language": "python",
+                "source_code": "import sys\nn = int(sys.stdin.read().strip())\nprint(n * 2)\n",
+            },
+            format="json",
+        )
+        self.assertEqual(sub_res.status_code, 200, sub_res.data)
+        self.assertEqual(sub_res.data["verdict"], "ACCEPTED")
+        self.assertTrue(sub_res.data["graded_from_snapshot"])
+        self.assertEqual(sub_res.data["passed_test_cases"], 2)
+        self.assertEqual(sub_res.data["total_test_cases"], 2)
+        self.assertEqual(sub_res.data["score_awarded"], 20.0)
+
+        # Hidden test case confidential in candidate response even when live row deleted
+        hidden_items = [r for r in sub_res.data["results"] if not r["is_public"]]
+        self.assertEqual(len(hidden_items), 1)
+        self.assertIsNone(hidden_items[0]["expected_output"])
+        self.assertIsNone(hidden_items[0]["actual_output"])
+        self.assertIsNone(hidden_items[0]["input_text"])
+
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.coding_score, 20)
+        self.assertEqual(CodeTestResult.objects.filter(submission__attempt=self.attempt).count(), 2)
+
+    @override_settings(DEBUG=False, TESTING=False, JUDGE0_API_URL="")
+    def test_sandbox_failure_returns_503_and_never_marks_accepted(self):
+        with patch("apps.assessments.coding_service.is_safe_local_execution_permitted", return_value=False):
+            fail_res = self.c1_client.post(
+                "/api/assessment/code/submit/",
+                {
+                    "attempt_id": str(self.attempt.id),
+                    "question_id": self.q.id,
+                    "language": "python",
+                    "source_code": "print(int(input()) * 2)",
+                },
+                format="json",
+            )
+        self.assertEqual(fail_res.status_code, 503, fail_res.data)
+        self.assertEqual(fail_res.data["verdict"], "INTERNAL_ERROR")
+        self.assertEqual(fail_res.data["score_awarded"], 0.0)
+

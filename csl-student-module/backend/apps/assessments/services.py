@@ -1118,6 +1118,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
         prog_data = {}
         if prog:
             prog_data = {
+                "marks": q.marks or 10,
                 "problem_statement": prog.problem_statement or q.prompt,
                 "constraints": prog.constraints or "",
                 "input_format": prog.input_format or "",

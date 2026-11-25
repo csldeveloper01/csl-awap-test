@@ -1676,8 +1676,16 @@ class CodeTestResult(models.Model):
     )
     test_case = models.ForeignKey(
         ProgrammingTestCase,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="results",
+    )
+    snapshot_test_case_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Frozen snapshot test case ID when graded from AttemptQuestionSnapshot",
     )
     status = models.CharField(max_length=30, choices=CodeSubmission.Verdict.choices)
     actual_output = models.TextField(blank=True, default="")
@@ -1691,7 +1699,8 @@ class CodeTestResult(models.Model):
         ordering = ["created_at"]
 
     def __str__(self):
-        return f"Result for {self.test_case.id}: {'PASS' if self.passed else 'FAIL'}"
+        tc_ref = self.snapshot_test_case_id or (str(self.test_case_id) if self.test_case_id else "unknown")
+        return f"Result for {tc_ref}: {'PASS' if self.passed else 'FAIL'}"
 
 
 # =============================================================================

@@ -95,6 +95,14 @@ from .question_type_utils import (
     ensure_pool_accepts_type,
     ensure_pool_accepts_questions,
 )
+from .section_resolution_service import (
+    SectionDirectoryLookup,
+    inspect_sections_against_directory,
+    parse_section_mapping,
+    resolve_section_for_import_item,
+    validate_section_resolution_decisions,
+)
+from .section_inheritance_service import inherit_sections_from_pool_source
 from django.http import HttpResponse
 from .services import (
     prepare_assessment,
@@ -1867,32 +1875,23 @@ def _build_csv_preview_response(decoded_text: str, detected_enc: str, target_poo
             "question_type": target_pool.question_type,
         }
 
-    existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
-    existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
+    section_inspection = result.pop("section_inspection", None)
+    raw_sections_list = result.pop("raw_sections_list", None)
+    if section_inspection is None:
+        if raw_sections_list is None:
+            raw_sections_list = []
+            section_counts = result.get("section_counts") or {}
+            for sec_name, cnt in section_counts.items():
+                raw_sections_list.extend([sec_name] * int(cnt or 1))
+        section_inspection = inspect_sections_against_directory(
+            raw_sections_list,
+            default_code="CODING" if result.get("detected_type") == "CODING" else "APTITUDE",
+        )
 
-    section_counts = result.get("section_counts") or {}
-    if not section_counts:
-        for sample in result.get("preview_samples", []):
-            sec_name = sample.get("section_type") or ("CODING" if sample.get("type") == "CODING" else "APTITUDE")
-            sec_upper = sec_name.upper()
-            section_counts[sec_upper] = section_counts.get(sec_upper, 0) + 1
-
-    detected_sections = []
-    for sec_name, row_count in section_counts.items():
-        sec_upper = sec_name.upper()
-        matched_sec = existing_sections.get(sec_upper) or existing_names.get(sec_name.lower())
-        detected_sections.append({
-            "raw_section": sec_name,
-            "detected_name": matched_sec.name if matched_sec else sec_name.replace("_", " ").title(),
-            "code": sec_upper,
-            "matched": bool(matched_sec),
-            "matched_section_id": matched_sec.id if matched_sec else None,
-            "matched_section_name": matched_sec.name if matched_sec else None,
-            "count": row_count,
-            "row_count": row_count,
-        })
-
-    result["detected_sections"] = detected_sections
+    result["detected_sections"] = section_inspection["detected_sections"]
+    result["unmatched_sections_count"] = section_inspection["unmatched_sections_count"]
+    result["duplicate_section_variants"] = section_inspection["duplicate_section_variants"]
+    result["requires_section_resolution"] = section_inspection["unmatched_sections_count"] > 0
     result["sample_rows"] = [
         {
             "row_idx": s.get("row_number", 0),
@@ -1903,10 +1902,7 @@ def _build_csv_preview_response(decoded_text: str, detected_enc: str, target_poo
         }
         for s in result.get("preview_samples", [])
     ]
-    result["available_sections"] = [
-        {"id": s.id, "name": s.name, "code": s.code}
-        for s in AssessmentSection.objects.filter(is_active=True).order_by("order", "name")
-    ]
+    result["available_sections"] = section_inspection["available_sections"]
     result["valid_rows"] = result.get("valid_count", 0)
 
     return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
@@ -1928,6 +1924,11 @@ def _execute_csv_import_commit(
         except Exception:
             section_mapping = {}
 
+    require_section_resolution = _parse_bool_flag(
+        request.data.get("require_section_resolution"),
+        default=False,
+    )
+
     target_pools = list(target_pools or [])
     result = parse_and_validate_csv(
         decoded_text,
@@ -1936,6 +1937,7 @@ def _execute_csv_import_commit(
         section_mapping=section_mapping,
         commit=True,
         is_global=is_global,
+        require_section_resolution=require_section_resolution,
     )
     result["detected_encoding"] = detected_enc
     result["destination_mode"] = destination_mode
@@ -3995,14 +3997,21 @@ class AdminAssessmentPoolSourcesView(APIView):
         pool = get_object_or_404(QuestionPool, pk=pool_id)
         section = get_object_or_404(AssessmentSection, pk=section_id) if section_id else None
 
-        source, created = AssessmentPoolSource.objects.update_or_create(
-            assessment=assessment,
-            pool=pool,
-            section=section,
-            defaults={"question_count": question_count, "randomize": randomize},
-        )
+        with transaction.atomic():
+            source, created = AssessmentPoolSource.objects.update_or_create(
+                assessment=assessment,
+                pool=pool,
+                section=section,
+                defaults={"question_count": question_count, "randomize": randomize},
+            )
+            inheritance = inherit_sections_from_pool_source(assessment, source)
 
-        return Response(AdminAssessmentPoolSourceSerializer(source).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        resp_data = dict(AdminAssessmentPoolSourceSerializer(source).data)
+        allocations = assessment.section_allocations.select_related("section").order_by("order", "id")
+        resp_data["inherited_sections"] = inheritance["inherited_sections"]
+        resp_data["inheritance_summary"] = inheritance
+        resp_data["assessment_sections"] = AdminAssessmentSectionAllocationSerializer(allocations, many=True).data
+        return Response(resp_data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     def delete(self, request, pk):
         assessment = get_object_or_404(Assessment, pk=pk)
@@ -4994,7 +5003,7 @@ class AdminQuestionImportCodingJsonView(APIView):
                     "marks": 10,
                     "time_limit_seconds": 2.0,
                     "memory_limit_mb": 256,
-                    "allowed_languages": ["python", "java", "javascript", "cpp"],
+                    "allowed_languages": ["python", "java"],
                     "boilerplate_code": {
                         "python": "import sys\n\ndef solve():\n    input_data = sys.stdin.read().split()\n    if not input_data:\n        return\n    n = int(input_data[0])\n    nums = [int(x) for x in input_data[1:n+1]]\n    target = int(input_data[n+1])\n    # Write logic here\n\nif __name__ == '__main__':\n    solve()\n",
                         "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        if (!sc.hasNextInt()) return;\n        int n = sc.nextInt();\n        int[] nums = new int[n];\n        for (int i = 0; i < n; i++) nums[i] = sc.nextInt();\n        int target = sc.nextInt();\n        // Write logic here\n    }\n}\n"
@@ -5036,6 +5045,7 @@ class AdminQuestionImportCodingJsonView(APIView):
             pool_id = request.query_params.get("pool_id")
             duplicate_policy = request.query_params.get("duplicate_policy", "CREATE_NEW").upper()
             is_preview = request.query_params.get("preview", "false").lower() in ["true", "1", "yes"]
+            raw_section_mapping = request.query_params.get("section_mapping")
         elif isinstance(data, dict):
             questions_data = data.get("questions", [])
             pool_id = data.get("pool_id") or request.query_params.get("pool_id")
@@ -5044,11 +5054,14 @@ class AdminQuestionImportCodingJsonView(APIView):
                 data.get("preview") is True
                 or request.query_params.get("preview", "false").lower() in ["true", "1", "yes"]
             )
+            raw_section_mapping = data.get("section_mapping")
         else:
             return Response({"detail": "Invalid payload format. Expected JSON object with 'questions' list or array of questions."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not questions_data or not isinstance(questions_data, list):
             return Response({"detail": "'questions' must be a non-empty list of question objects."}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_section_mapping = parse_section_mapping(raw_section_mapping)
 
         target_pool = None
         if pool_id:
@@ -5065,7 +5078,8 @@ class AdminQuestionImportCodingJsonView(APIView):
             default=(target_pool is None),
         )
 
-        # Validation pass
+        # Validation & Section Directory Inspection pass
+        raw_sections_list: List[str] = []
         validated_items = []
         preview_items = []
         valid_count = 0
@@ -5073,6 +5087,22 @@ class AdminQuestionImportCodingJsonView(APIView):
         duplicate_count = 0
 
         for idx, q_raw in enumerate(questions_data):
+            if not isinstance(q_raw, dict):
+                invalid_count += 1
+                preview_items.append({
+                    "index": idx + 1,
+                    "title": "",
+                    "section_type": "CODING",
+                    "difficulty": "MEDIUM",
+                    "marks": 10,
+                    "test_case_count": 0,
+                    "public_test_case_count": 0,
+                    "hidden_test_case_count": 0,
+                    "status": "ERROR",
+                    "errors": ["Each question item must be a JSON object."],
+                })
+                continue
+
             errors = []
             title = (q_raw.get("title") or q_raw.get("prompt") or "").strip()
             if not title:
@@ -5120,7 +5150,8 @@ class AdminQuestionImportCodingJsonView(APIView):
             if difficulty not in ["EASY", "MEDIUM", "HARD"]:
                 difficulty = "MEDIUM"
 
-            section_type = (q_raw.get("section_type") or "CODING").strip()
+            section_type = str(q_raw.get("section") or q_raw.get("section_type") or "CODING").strip() or "CODING"
+            raw_sections_list.append(section_type)
 
             try:
                 marks = int(q_raw.get("marks") if q_raw.get("marks") is not None else 10)
@@ -5146,18 +5177,27 @@ class AdminQuestionImportCodingJsonView(APIView):
                 errors.append("memory_limit_mb must be a valid integer.")
                 memory_limit = 256
 
-            SUPPORTED_LANGUAGES = {"python", "python3", "java", "javascript", "js", "node", "cpp", "c++", "c", "sql"}
-            allowed_langs = q_raw.get("allowed_languages") or ["python", "java"]
-            if not isinstance(allowed_langs, list) or len(allowed_langs) == 0:
-                errors.append("allowed_languages must be a non-empty list of languages.")
+            SUPPORTED_LANGUAGES = {"python", "python3", "java"}
+            raw_allowed_langs = q_raw.get("allowed_languages") or ["python", "java"]
+            normalized_langs = []
+            if not isinstance(raw_allowed_langs, list) or len(raw_allowed_langs) == 0:
+                errors.append("allowed_languages must be a non-empty list containing 'python' and/or 'java'.")
             else:
-                for lang in allowed_langs:
-                    if str(lang).lower().strip() not in SUPPORTED_LANGUAGES:
-                        errors.append(f"Unsupported language '{lang}'. Supported: {', '.join(sorted(SUPPORTED_LANGUAGES))}.")
+                for lang in raw_allowed_langs:
+                    clean_lang = str(lang).lower().strip()
+                    if clean_lang not in SUPPORTED_LANGUAGES:
+                        errors.append(
+                            f"Unsupported language '{lang}'. Only Python 3 ('python') and Java ('java') are supported for new coding imports."
+                        )
+                    else:
+                        canonical_lang = "python" if clean_lang == "python3" else clean_lang
+                        if canonical_lang not in normalized_langs:
+                            normalized_langs.append(canonical_lang)
+            allowed_langs = normalized_langs or ["python", "java"]
 
             boilerplate = q_raw.get("boilerplate_code") or {
                 "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
-                "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n"
+                "java": "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n    }\n}\n"
             }
             # Check existing duplicate
             existing_q = QuestionBank.objects.filter(prompt__iexact=title).first()
@@ -5193,6 +5233,7 @@ class AdminQuestionImportCodingJsonView(APIView):
             preview_items.append({
                 "index": idx + 1,
                 "title": title,
+                "section_type": section_type,
                 "difficulty": difficulty,
                 "marks": marks,
                 "test_case_count": len(valid_tcs),
@@ -5201,6 +5242,8 @@ class AdminQuestionImportCodingJsonView(APIView):
                 "status": status_label,
                 "errors": errors,
             })
+
+        section_inspection = inspect_sections_against_directory(raw_sections_list, default_code="CODING")
 
         if is_preview:
             return Response({
@@ -5212,6 +5255,11 @@ class AdminQuestionImportCodingJsonView(APIView):
                 "target_pool": target_pool.name if target_pool else None,
                 "duplicate_policy": duplicate_policy,
                 "items": preview_items,
+                "detected_sections": section_inspection["detected_sections"],
+                "unmatched_sections_count": section_inspection["unmatched_sections_count"],
+                "duplicate_section_variants": section_inspection["duplicate_section_variants"],
+                "requires_section_resolution": section_inspection["unmatched_sections_count"] > 0,
+                "available_sections": section_inspection["available_sections"],
             })
 
         if invalid_count > 0:
@@ -5220,18 +5268,40 @@ class AdminQuestionImportCodingJsonView(APIView):
                 "items": preview_items,
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Commit pass
+        section_errors = validate_section_resolution_decisions(
+            section_inspection["detected_sections"],
+            parsed_section_mapping,
+            require_explicit_for_unmatched=True,
+        )
+        if section_errors:
+            return Response({
+                "detail": "Unmatched or invalid sections must be resolved before importing coding questions.",
+                "section_errors": section_errors,
+                "detected_sections": section_inspection["detected_sections"],
+                "unmatched_sections_count": section_inspection["unmatched_sections_count"],
+                "available_sections": section_inspection["available_sections"],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Commit pass inside atomic transaction
         imported_count = 0
         updated_count = 0
         skipped_count = 0
+        lookup = SectionDirectoryLookup(include_inactive=False)
+        fallback_coding_sec = lookup.by_code.get("CODING")
 
         with transaction.atomic():
             for item in validated_items:
-                sec_obj = (
-                    AssessmentSection.objects.filter(code__iexact=item["section_type"]).first()
-                    or AssessmentSection.objects.filter(name__iexact=item["section_type"]).first()
-                    or AssessmentSection.objects.filter(code__iexact="CODING").first()
+                sec_obj, should_skip_section = resolve_section_for_import_item(
+                    sec_raw=item["section_type"],
+                    normalized_mapping=parsed_section_mapping,
+                    lookup=lookup,
+                    fallback_section=fallback_coding_sec,
+                    commit=True,
+                    require_explicit_for_unmatched=True,
                 )
+                if should_skip_section:
+                    skipped_count += 1
+                    continue
                 resolved_sec_code = sec_obj.code if sec_obj else item["section_type"]
 
                 existing_q = item["existing_q"]

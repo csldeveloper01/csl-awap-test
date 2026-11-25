@@ -1898,26 +1898,47 @@ class StudentCodeRunView(APIView):
             return Response({"detail": "Valid candidate authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
 
         attempt_id = request.data.get("attempt_id")
-        question_id = request.data.get("question_id")
+        raw_question_id = request.data.get("question_id")
         language = (request.data.get("language") or "python").lower().strip()
+        if language == "python3":
+            language = "python"
         source_code = request.data.get("source_code", "")
         custom_input = request.data.get("custom_input")
         if custom_input is None:
             custom_input = request.data.get("stdin", None)
 
-        if not source_code:
+        if not attempt_id:
+            return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if raw_question_id is None or str(raw_question_id).strip() == "":
+            return Response({"detail": "Authoritative database question_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            question_id = int(raw_question_id)
+        except (TypeError, ValueError):
+            return Response({"detail": f"Invalid question_id '{raw_question_id}'. Expected database integer question ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(source_code, str) or not source_code.strip():
             return Response({"detail": "Source code cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
+        if attempt.candidate_id != candidate.id:
+            return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
         if attempt.state in AssessmentAttempt.TERMINAL_STATES:
             return Response({"detail": f"Attempt is {attempt.state}; code execution is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
         if attempt.is_expired():
             return Response({"detail": "Assessment time has expired. Code execution is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Validate question belongs to this attempt
+        # Validate question belongs to this attempt via snapshot (or legacy M2M fallback)
         snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
-        if not snapshot and not attempt.questions.filter(id=question_id).exists():
-            return Response({"detail": "This question does not belong to the specified assessment attempt."}, status=status.HTTP_400_BAD_REQUEST)
+        has_legacy_question = bool(
+            not attempt.question_snapshots.exists()
+            and attempt.assessment_id
+            and attempt.assessment.questions.filter(id=question_id).exists()
+        )
+        if not snapshot and not has_legacy_question:
+            return Response(
+                {"detail": f"Question ID {question_id} does not belong to attempt {attempt.id}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         from .coding_service import execute_single_run, normalize_code_output
         from .models import ProgrammingQuestion
@@ -2032,14 +2053,27 @@ class StudentCodeSubmitView(APIView):
             return Response({"detail": "Valid candidate authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
 
         attempt_id = request.data.get("attempt_id")
-        question_id = request.data.get("question_id")
+        raw_question_id = request.data.get("question_id")
         language = (request.data.get("language") or "python").lower().strip()
+        if language == "python3":
+            language = "python"
         source_code = request.data.get("source_code", "")
 
-        if not source_code:
+        if not attempt_id:
+            return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if raw_question_id is None or str(raw_question_id).strip() == "":
+            return Response({"detail": "Authoritative database question_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            question_id = int(raw_question_id)
+        except (TypeError, ValueError):
+            return Response({"detail": f"Invalid question_id '{raw_question_id}'. Expected database integer question ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(source_code, str) or not source_code.strip():
             return Response({"detail": "Source code cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id, candidate=candidate)
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
+        if attempt.candidate_id != candidate.id:
+            return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
         if attempt.state in AssessmentAttempt.TERMINAL_STATES:
             return Response({"detail": f"Attempt is {attempt.state}; code submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
         if attempt.is_expired():
@@ -2047,8 +2081,16 @@ class StudentCodeSubmitView(APIView):
 
         # Validate question belongs to this attempt
         snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
-        if not snapshot and not attempt.questions.filter(id=question_id).exists():
-            return Response({"detail": "This question does not belong to the specified assessment attempt."}, status=status.HTTP_400_BAD_REQUEST)
+        has_legacy_question = bool(
+            not attempt.question_snapshots.exists()
+            and attempt.assessment_id
+            and attempt.assessment.questions.filter(id=question_id).exists()
+        )
+        if not snapshot and not has_legacy_question:
+            return Response(
+                {"detail": f"Question ID {question_id} does not belong to attempt {attempt.id}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         from .models import ProgrammingQuestion
         from .coding_service import evaluate_submission
@@ -2060,7 +2102,8 @@ class StudentCodeSubmitView(APIView):
             if (snapshot and snapshot.programming_data)
             else (prog_q.allowed_languages if prog_q else ["python", "java"])
         )
-        if allowed_languages and language not in [l.lower() for l in allowed_languages]:
+        normalized_allowed = [("python" if l.lower() == "python3" else l.lower()) for l in (allowed_languages or [])]
+        if normalized_allowed and language not in normalized_allowed:
             return Response(
                 {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -2090,6 +2133,8 @@ class StudentCodeSubmitView(APIView):
         eval_result["status"] = eval_result.get("verdict")
         eval_result["score"] = eval_result.get("score_awarded")
         eval_result["passed_count"] = eval_result.get("passed_test_cases")
+        if eval_result.get("verdict") == "INTERNAL_ERROR":
+            return Response(eval_result, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(eval_result, status=status.HTTP_200_OK)
 
 

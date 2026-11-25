@@ -300,6 +300,7 @@ class Phase224WorkflowTests(TestCase):
         self.assertTrue(r_ass_detail.data["pool_sufficient"])
 
         # Test lifecycle lock: Close assessment and attempt to link a pool
+        assessment.refresh_from_db()
         assessment.status = Assessment.Status.CLOSED
         assessment.save(update_fields=["status"])
 

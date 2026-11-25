@@ -383,19 +383,58 @@ def evaluate_submission(
 ) -> Dict[str, Any]:
     """
     Evaluates a candidate submission against all test cases for a programming question.
-    Creates CodeSubmission and CodeTestResult records.
-    Updates the candidate score on the attempt and question snapshot atomically.
+    Authoritatively grades using AttemptQuestionSnapshot.programming_data whenever an
+    attempt snapshot exists (falling back to live ProgrammingQuestion only if missing).
+    Creates CodeSubmission and CodeTestResult records and updates attempt scores atomically.
     """
-    from .models import CodeSubmission, CodeTestResult
+    from .models import CodeSubmission, CodeTestResult, ProgrammingTestCase
     from django.db.models import Max
 
-    # Check attempt question snapshot for immutable frozen test cases
-    snapshot = attempt.question_snapshots.filter(question_id=programming_question.question_id).first() if attempt else None
-    snapshot_tc_data = snapshot.programming_data.get("test_cases") if (snapshot and snapshot.programming_data) else None
+    snapshot = (
+        attempt.question_snapshots.filter(question_id=programming_question.question_id).first()
+        if attempt
+        else None
+    )
+    snap_prog = snapshot.programming_data if (snapshot and isinstance(snapshot.programming_data, dict)) else {}
+    snap_cases_raw = snap_prog.get("test_cases") if isinstance(snap_prog.get("test_cases"), list) else None
 
-    test_cases = list(programming_question.test_cases.filter(is_active=True).order_by("order", "created_at"))
-    time_limit = programming_question.time_limit_seconds or 2.0
-    memory_limit = programming_question.memory_limit_mb or 256
+    eval_cases: List[Dict[str, Any]] = []
+    if snap_cases_raw is not None and len(snap_cases_raw) > 0:
+        live_case_ids = [str(tc.get("id")) for tc in snap_cases_raw if tc.get("id")]
+        live_case_map = {
+            str(tc.id): tc
+            for tc in ProgrammingTestCase.objects.filter(id__in=live_case_ids)
+        } if live_case_ids else {}
+        for idx, tc in enumerate(snap_cases_raw, start=1):
+            tc_id = str(tc.get("id") or f"snapshot_{idx}")
+            eval_cases.append({
+                "id": tc_id,
+                "live_obj": live_case_map.get(tc_id),
+                "is_public": bool(tc.get("is_public", False)),
+                "input_text": tc.get("input_text") or "",
+                "expected_output": tc.get("expected_output") or "",
+                "marks_weightage": float(tc.get("marks_weightage") or 1.0),
+                "explanation": tc.get("explanation") or "",
+                "order": int(tc.get("order") or idx),
+            })
+        eval_cases.sort(key=lambda item: item["order"])
+        time_limit = float(snap_prog.get("time_limit_seconds") or programming_question.time_limit_seconds or 2.0)
+        memory_limit = int(snap_prog.get("memory_limit_mb") or programming_question.memory_limit_mb or 256)
+    else:
+        live_cases = list(programming_question.test_cases.filter(is_active=True).order_by("order", "created_at"))
+        for idx, tc in enumerate(live_cases, start=1):
+            eval_cases.append({
+                "id": str(tc.id),
+                "live_obj": tc,
+                "is_public": bool(tc.is_public),
+                "input_text": tc.input_text or "",
+                "expected_output": tc.expected_output or "",
+                "marks_weightage": float(tc.marks_weightage or 1.0),
+                "explanation": tc.explanation or "",
+                "order": int(tc.order or idx),
+            })
+        time_limit = float(programming_question.time_limit_seconds or 2.0)
+        memory_limit = int(programming_question.memory_limit_mb or 256)
 
     submission = CodeSubmission.objects.create(
         attempt=attempt,
@@ -404,10 +443,10 @@ def evaluate_submission(
         language=language,
         source_code=source_code,
         verdict=CodeSubmission.Verdict.PENDING,
-        total_test_cases=len(test_cases),
+        total_test_cases=len(eval_cases),
     )
 
-    if not test_cases:
+    if not eval_cases:
         submission.verdict = CodeSubmission.Verdict.INTERNAL_ERROR
         submission.save(update_fields=["verdict"])
         return {
@@ -419,24 +458,26 @@ def evaluate_submission(
             "execution_time_ms": 0.0,
             "memory_used_kb": 0,
             "compile_output": "Programming question has no configured test cases.",
+            "detail": "Programming question has no configured test cases.",
             "results": [],
         }
 
     passed_count = 0
     total_score = 0.0
-    max_possible_score = sum(tc.marks_weightage for tc in test_cases) or 1.0
+    max_possible_score = sum(tc["marks_weightage"] for tc in eval_cases) or 1.0
     max_exec_time = 0.0
     max_mem_used = 0
     first_failing_verdict = None
     compile_err_output = ""
+    sandbox_failure_msg = ""
 
     results_data = []
 
-    for tc in test_cases:
+    for tc in eval_cases:
         res = execute_single_run(
             language=language,
             source_code=source_code,
-            stdin=tc.input_text or "",
+            stdin=tc["input_text"],
             time_limit=time_limit,
             memory_limit_mb=memory_limit,
         )
@@ -452,38 +493,40 @@ def evaluate_submission(
 
         if exec_verdict == "COMPILATION_ERROR":
             compile_err_output = res.get("compile_output") or stderr
-            status = CodeSubmission.Verdict.COMPILATION_ERROR
+            tc_status = CodeSubmission.Verdict.COMPILATION_ERROR
             passed = False
         elif exec_verdict == "TIME_LIMIT_EXCEEDED":
-            status = CodeSubmission.Verdict.TIME_LIMIT_EXCEEDED
+            tc_status = CodeSubmission.Verdict.TIME_LIMIT_EXCEEDED
             passed = False
         elif exec_verdict == "RUNTIME_ERROR":
-            status = CodeSubmission.Verdict.RUNTIME_ERROR
+            tc_status = CodeSubmission.Verdict.RUNTIME_ERROR
             passed = False
         elif exec_verdict == "INTERNAL_ERROR":
-            status = CodeSubmission.Verdict.INTERNAL_ERROR
+            tc_status = CodeSubmission.Verdict.INTERNAL_ERROR
             passed = False
+            if not sandbox_failure_msg:
+                sandbox_failure_msg = stderr or "Code execution sandbox failure."
         else:
-            # Check normalized output equality
             actual_clean = normalize_code_output(stdout, mode="trimmed")
-            expected_clean = normalize_code_output(tc.expected_output, mode="trimmed")
+            expected_clean = normalize_code_output(tc["expected_output"], mode="trimmed")
             if actual_clean == expected_clean:
-                status = CodeSubmission.Verdict.ACCEPTED
+                tc_status = CodeSubmission.Verdict.ACCEPTED
                 passed = True
                 passed_count += 1
-                total_score += tc.marks_weightage
+                total_score += tc["marks_weightage"]
             else:
-                status = CodeSubmission.Verdict.WRONG_ANSWER
+                tc_status = CodeSubmission.Verdict.WRONG_ANSWER
                 passed = False
 
         if not passed and not first_failing_verdict:
-            first_failing_verdict = status
+            first_failing_verdict = tc_status
 
-        # Save result to DB: include actual_output and stderr for administrator review
+        # Persist result referencing live ProgrammingTestCase when present + frozen snapshot ID
         CodeTestResult.objects.create(
             submission=submission,
-            test_case=tc,
-            status=status,
+            test_case=tc["live_obj"],
+            snapshot_test_case_id=tc["id"],
+            status=tc_status,
             actual_output=stdout,
             error_message=stderr,
             execution_time_ms=exec_time,
@@ -492,35 +535,40 @@ def evaluate_submission(
         )
 
         # Build candidate-facing result: STRICT SECURITY for hidden test cases
+        is_pub = tc["is_public"]
         results_data.append({
-            "test_case_id": str(tc.id),
-            "is_public": tc.is_public,
-            "status": status,
+            "test_case_id": tc["id"],
+            "is_public": is_pub,
+            "status": tc_status,
             "passed": passed,
             "execution_time_ms": exec_time,
-            "actual_output": stdout if tc.is_public else None,
-            "expected_output": tc.expected_output if tc.is_public else None,
-            "input_text": tc.input_text if tc.is_public else None,
-            "explanation": tc.explanation if tc.is_public else None,
+            "actual_output": stdout if is_pub else None,
+            "expected_output": tc["expected_output"] if is_pub else None,
+            "input_text": tc["input_text"] if is_pub else None,
+            "explanation": tc["explanation"] if is_pub else None,
         })
 
-    # Final verdict calculation
-    if passed_count == len(test_cases):
+    # Final verdict calculation (never mark ACCEPTED if sandbox execution errored)
+    if sandbox_failure_msg or first_failing_verdict == CodeSubmission.Verdict.INTERNAL_ERROR:
+        final_verdict = CodeSubmission.Verdict.INTERNAL_ERROR
+    elif passed_count == len(eval_cases):
         final_verdict = CodeSubmission.Verdict.ACCEPTED
     else:
         final_verdict = first_failing_verdict or CodeSubmission.Verdict.WRONG_ANSWER
 
-    # Calculate question marks proportion
-    q_marks = programming_question.question.marks if (programming_question and programming_question.question) else 10
+    # Calculate question marks proportion using frozen snapshot marks first
+    q_marks = snap_prog.get("marks") or (
+        programming_question.question.marks if (programming_question and programming_question.question) else 10
+    )
     score_ratio = (total_score / max_possible_score) if max_possible_score > 0 else 0.0
-    awarded_marks = min(float(q_marks), round(score_ratio * q_marks, 2))
+    awarded_marks = 0.0 if final_verdict == CodeSubmission.Verdict.INTERNAL_ERROR else min(float(q_marks), round(score_ratio * q_marks, 2))
 
     submission.verdict = final_verdict
     submission.score_awarded = awarded_marks
     submission.passed_test_cases = passed_count
     submission.execution_time_ms = max_exec_time
     submission.memory_used_kb = max_mem_used
-    submission.compile_output = compile_err_output
+    submission.compile_output = compile_err_output or sandbox_failure_msg
     submission.save()
 
     # Authoritatively recalculate attempt coding score
@@ -537,8 +585,6 @@ def evaluate_submission(
             attempt.percentage = round((attempt.total_score / total_marks) * 100.0, 2)
         attempt.save(update_fields=["coding_score", "total_score", "percentage", "updated_at"])
 
-        # Mark question snapshot as answered if available
-        snapshot = attempt.question_snapshots.filter(question_id=programming_question.question_id).first()
         if snapshot:
             snapshot.is_correct = (final_verdict == CodeSubmission.Verdict.ACCEPTED)
             snapshot.selected_option = "SUBMITTED"
@@ -551,10 +597,12 @@ def evaluate_submission(
         "submission_id": str(submission.id),
         "verdict": final_verdict,
         "score_awarded": awarded_marks,
-        "total_test_cases": len(test_cases),
+        "total_test_cases": len(eval_cases),
         "passed_test_cases": passed_count,
         "execution_time_ms": max_exec_time,
         "memory_used_kb": max_mem_used,
         "compile_output": compile_err_output,
+        "detail": sandbox_failure_msg or None,
+        "graded_from_snapshot": bool(snap_cases_raw),
         "results": results_data,
     }

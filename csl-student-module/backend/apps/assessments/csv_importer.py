@@ -9,11 +9,17 @@ from .models import (
     QuestionPool,
     QuestionPoolItem,
     Assessment,
-    AssessmentSection,
     ProgrammingQuestion,
     ProgrammingTestCase,
 )
 from .question_type_utils import ensure_pool_accepts_type
+from .section_resolution_service import (
+    SectionDirectoryLookup,
+    inspect_sections_against_directory,
+    parse_section_mapping,
+    resolve_section_for_import_item,
+    validate_section_resolution_decisions,
+)
 
 SUPPORTED_ENCODINGS = [
     "utf-8-sig",
@@ -188,61 +194,23 @@ def map_headers(fieldnames: List[str]) -> Tuple[Dict[str, str], List[str], str]:
 def _resolve_section_for_row(
     sec_raw: str,
     section_mapping: Optional[Dict[str, Any]],
-    existing_sections: Dict[str, AssessmentSection],
-    existing_names: Dict[str, AssessmentSection],
-    fallback_section: Optional[AssessmentSection],
+    lookup: SectionDirectoryLookup,
+    fallback_section,
     commit: bool,
-) -> Tuple[Optional[AssessmentSection], bool]:
+    require_explicit_for_unmatched: bool = False,
+) -> Tuple[Any, bool]:
     """
-    Resolve an AssessmentSection for a CSV row, honoring explicit admin section_mapping rules.
-    Returns (section_obj, should_skip_row).
+    Delegates CSV row section resolution to the shared Section Directory Resolution service.
     """
-    sec_clean = (sec_raw or "").strip().upper()
-    sec_code = re.sub(r"[^A-Z0-9_]", "_", sec_clean).strip("_")[:50]
-    sec_name = sec_clean.replace("_", " ").title() if sec_clean else "General"
-
-    sec_obj = None
-    normalized_mapping = {
-        str(k).strip().upper(): v for k, v in (section_mapping or {}).items()
-    }
-    sec_mapping_rule = (
-        normalized_mapping.get(sec_clean)
-        or normalized_mapping.get(sec_code)
+    normalized_mapping = parse_section_mapping(section_mapping)
+    return resolve_section_for_import_item(
+        sec_raw=sec_raw,
+        normalized_mapping=normalized_mapping,
+        lookup=lookup,
+        fallback_section=fallback_section,
+        commit=commit,
+        require_explicit_for_unmatched=require_explicit_for_unmatched,
     )
-    if isinstance(sec_mapping_rule, str):
-        sec_obj = (
-            existing_sections.get(sec_mapping_rule.strip().upper())
-            or AssessmentSection.objects.filter(code__iexact=sec_mapping_rule.strip()).first()
-        )
-    elif isinstance(sec_mapping_rule, dict):
-        action = sec_mapping_rule.get("action")
-        if action == "skip":
-            return None, True
-        elif action == "map":
-            target_id = sec_mapping_rule.get("target_section_id") or sec_mapping_rule.get("section_id")
-            if target_id:
-                sec_obj = AssessmentSection.objects.filter(id=target_id).first()
-        elif action == "create":
-            created_name = sec_mapping_rule.get("target_section_name") or sec_mapping_rule.get("name") or sec_name
-            if commit and sec_code:
-                sec_obj, _ = AssessmentSection.objects.get_or_create(
-                    code=sec_code,
-                    defaults={"name": created_name, "is_active": True},
-                )
-                existing_sections[sec_code] = sec_obj
-
-    if not sec_obj:
-        sec_obj = existing_sections.get(sec_code) or existing_names.get(sec_clean.lower())
-        if not sec_obj and commit and sec_code:
-            sec_obj, _ = AssessmentSection.objects.get_or_create(
-                code=sec_code,
-                defaults={"name": sec_name, "is_active": True},
-            )
-            existing_sections[sec_code] = sec_obj
-        elif not sec_obj:
-            sec_obj = fallback_section
-
-    return sec_obj, False
 
 
 def _parse_allowed_languages(raw_val: str) -> List[str]:
@@ -262,6 +230,7 @@ def parse_and_validate_csv(
     section_mapping: Optional[Dict[str, Any]] = None,
     commit: bool = False,
     is_global: bool = True,
+    require_section_resolution: bool = False,
 ) -> Dict[str, Any]:
     """
     Robust CSV parser and validator:
@@ -316,14 +285,52 @@ def parse_and_validate_csv(
 
     error_rows = []
     valid_rows = []
+    raw_sections_list: List[str] = []
 
-    # Map existing sections
-    existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
-    existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
-    default_coding_sec = existing_sections.get("CODING")
-    default_mcq_sec = existing_sections.get("APTITUDE")
+    lookup = SectionDirectoryLookup(include_inactive=False)
+    default_coding_sec = lookup.by_code.get("CODING")
+    default_mcq_sec = lookup.by_code.get("APTITUDE")
+    parsed_mapping = parse_section_mapping(section_mapping)
 
-    for row_idx, row in enumerate(reader, start=2):
+    # First inspect sections cleanly when mapping rules or strict resolution is active
+    raw_rows_list = list(reader)
+    for r in raw_rows_list:
+        rc = {k.strip(): (v.strip() if v else "") for k, v in r.items() if k}
+        prompt_peek = rc.get(header_mapping.get("prompt", ""), "")
+        if prompt_peek:
+            fallback_sec = "CODING" if detected_type == "CODING" else "APTITUDE"
+            sec_peek = (rc.get(header_mapping.get("section_type", ""), "") or fallback_sec).strip()
+            raw_sections_list.append(sec_peek)
+
+    section_inspection = inspect_sections_against_directory(
+        raw_sections_list,
+        default_code="CODING" if detected_type == "CODING" else "APTITUDE",
+    )
+    if commit and (require_section_resolution or parsed_mapping):
+        sec_errors = validate_section_resolution_decisions(
+            section_inspection["detected_sections"],
+            parsed_mapping,
+            require_explicit_for_unmatched=require_section_resolution,
+        )
+        if sec_errors:
+            return {
+                "success": False,
+                "detail": "Section resolution requires attention before import.",
+                "section_errors": sec_errors,
+                "detected_sections": section_inspection["detected_sections"],
+                "unmatched_sections_count": section_inspection["unmatched_sections_count"],
+                "available_sections": section_inspection["available_sections"],
+                "total_rows": len(raw_rows_list),
+                "imported_count": 0,
+                "success_count": 0,
+                "valid_count": 0,
+                "error_count": len(sec_errors),
+                "errors": list(sec_errors.values()),
+                "detected_type": detected_type,
+                "unmapped_headers": unmapped_headers,
+            }
+
+    for row_idx, row in enumerate(raw_rows_list, start=2):
         row_clean = {k.strip(): (v.strip() if v else "") for k, v in row.items() if k}
         prompt_val = row_clean.get(header_mapping.get("prompt", ""), "")
         if not prompt_val:
@@ -359,14 +366,14 @@ def parse_and_validate_csv(
             if diff_raw not in ["EASY", "MEDIUM", "HARD"]:
                 diff_raw = "MEDIUM"
 
-            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "CODING").strip().upper()
+            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "CODING").strip()
             sec_obj, should_skip = _resolve_section_for_row(
                 sec_raw=sec_raw,
-                section_mapping=section_mapping,
-                existing_sections=existing_sections,
-                existing_names=existing_names,
+                section_mapping=parsed_mapping,
+                lookup=lookup,
                 fallback_section=default_coding_sec,
                 commit=commit,
+                require_explicit_for_unmatched=require_section_resolution,
             )
             if should_skip:
                 continue
@@ -455,14 +462,14 @@ def parse_and_validate_csv(
             if diff_raw not in ["EASY", "MEDIUM", "HARD"]:
                 diff_raw = "MEDIUM"
 
-            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "APTITUDE").strip().upper()
+            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "APTITUDE").strip()
             sec_obj, should_skip = _resolve_section_for_row(
                 sec_raw=sec_raw,
-                section_mapping=section_mapping,
-                existing_sections=existing_sections,
-                existing_names=existing_names,
+                section_mapping=parsed_mapping,
+                lookup=lookup,
                 fallback_section=default_mcq_sec,
                 commit=commit,
+                require_explicit_for_unmatched=require_section_resolution,
             )
             if should_skip:
                 continue
@@ -481,7 +488,7 @@ def parse_and_validate_csv(
                 "explanation": row_clean.get(header_mapping.get("explanation", ""), ""),
                 "section_obj": sec_obj,
                 "section": sec_obj.name if sec_obj else (sec_raw or "Aptitude"),
-                "section_type": sec_raw,
+                "section_type": sec_obj.code if sec_obj else sec_raw.upper(),
             })
 
     total_rows = len(valid_rows) + len(error_rows)
@@ -504,6 +511,8 @@ def parse_and_validate_csv(
             "unmapped_headers": unmapped_headers,
             "preview_samples": preview,
             "section_counts": section_counts,
+            "raw_sections_list": raw_sections_list,
+            "section_inspection": section_inspection,
         }
 
     if total_rows > 0 and len(valid_rows) == 0:

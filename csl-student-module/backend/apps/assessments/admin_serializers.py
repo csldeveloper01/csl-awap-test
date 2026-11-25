@@ -106,10 +106,8 @@ class AdminAssessmentSectionAllocationSerializer(serializers.ModelSerializer):
         ]
 
     def get_available_questions_count(self, obj):
-        assessment = obj.assessment
-        if assessment and assessment.questions.exists():
-            return assessment.questions.filter(section_type=obj.section.code, is_active=True).count()
-        return QuestionBank.objects.filter(section_type=obj.section.code, is_active=True).count()
+        from .section_inheritance_service import get_section_question_count_for_assessment
+        return get_section_question_count_for_assessment(obj.assessment, obj.section)
 
 
 
