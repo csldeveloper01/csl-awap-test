@@ -219,6 +219,7 @@ class Phase3WorkflowsTestCase(TestCase):
         pool = QuestionPool.objects.create(
             name="Algorithms Level 1",
             code="POOL_ALGO_L1",
+            question_type="CODING",
             description="Fundamental coding problems",
         )
 

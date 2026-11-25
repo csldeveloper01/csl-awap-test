@@ -3,6 +3,7 @@ import {
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
+  type AdminQuestionPool,
   type AdminProgrammingDetails,
   type AdminProgrammingTestCase,
   getAdminSections,
@@ -10,6 +11,7 @@ import {
   deleteAdminProgrammingTestCase,
 } from '../../api/admin';
 import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 export interface AdminCodingQuestionModalProps {
   question: AdminQuestion | null;
@@ -28,17 +30,18 @@ export interface AdminCodingQuestionModalProps {
   defaultAssessmentId?: string;
   sections?: AdminSection[];
   isPoolScoped?: boolean;
+  targetPool?: AdminQuestionPool | null;
 }
 
 const EMPTY_ASSESSMENTS: AdminAssessment[] = [];
 const EMPTY_SECTIONS: AdminSection[] = [];
 
-const SUPPORTED_CODING_LANGUAGES: { key: string; label: string; ext: string }[] = [
-  { key: 'python', label: 'Python 3', ext: 'py' },
-  { key: 'java', label: 'Java', ext: 'java' },
-  { key: 'c', label: 'C', ext: 'c' },
-  { key: 'cpp', label: 'C++', ext: 'cpp' },
-  { key: 'javascript', label: 'JavaScript', ext: 'js' },
+const SUPPORTED_CODING_LANGUAGES: { key: string; label: string }[] = [
+  { key: 'python', label: 'Python 3' },
+  { key: 'java', label: 'Java' },
+  { key: 'c', label: 'C' },
+  { key: 'cpp', label: 'C++' },
+  { key: 'javascript', label: 'JavaScript' },
 ];
 
 const DEFAULT_BOILERPLATES: Record<string, string> = {
@@ -67,13 +70,14 @@ export function AdminCodingQuestionModal({
   defaultAssessmentId = '',
   sections = EMPTY_SECTIONS,
   isPoolScoped = false,
+  targetPool = null,
 }: AdminCodingQuestionModalProps) {
+  const { isDark, tokens } = useAdminTheme();
   const isEditMode = Boolean(question && question.id);
 
-  // Core metadata state
+  // Section 1: Basic Information
   const [assessmentId, setAssessmentId] = useState<string>('');
-  const [prompt, setPrompt] = useState(''); // Problem Title
-  const [problemStatement, setProblemStatement] = useState(''); // Full Markdown/Text Problem Statement
+  const [prompt, setPrompt] = useState('');
   const [sectionType, setSectionType] = useState<string>('CODING');
   const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
   const [marks, setMarks] = useState<number>(10);
@@ -81,31 +85,32 @@ export function AdminCodingQuestionModal({
   const [explanation, setExplanation] = useState<string>('');
   const [isActive, setIsActive] = useState<boolean>(true);
   const [isArchived, setIsArchived] = useState<boolean>(false);
-
   const [loadedSections, setLoadedSections] = useState<AdminSection[]>(sections);
 
-  // Coding execution & specification fields
+  // Section 2: Problem Statement & Format
+  const [problemStatement, setProblemStatement] = useState('');
+  const [inputFormat, setInputFormat] = useState<string>('');
+  const [outputFormat, setOutputFormat] = useState<string>('');
+  const [constraints, setConstraints] = useState<string>('');
+  const statementRef = useRef<HTMLTextAreaElement>(null);
+
+  // Section 3 & 5: Language & Execution Configuration
   const [timeLimit, setTimeLimit] = useState<number>(2.0);
   const [memoryLimit, setMemoryLimit] = useState<number>(256);
   const [allowedLanguages, setAllowedLanguages] = useState<string[]>(['python', 'java']);
   const [activeBoilerplateLang, setActiveBoilerplateLang] = useState<string>('python');
   const [boilerplateCode, setBoilerplateCode] = useState<Record<string, string>>({ ...DEFAULT_BOILERPLATES });
-  const [inputFormat, setInputFormat] = useState<string>('');
-  const [outputFormat, setOutputFormat] = useState<string>('');
-  const [constraints, setConstraints] = useState<string>('');
 
-  // Sample (is_public = true) & Hidden (is_public = false) Test Cases
+  // Section 4: Test Case Management
   const [testCases, setTestCases] = useState<AdminProgrammingTestCase[]>([]);
   const [loadingCodingDetails, setLoadingCodingDetails] = useState<boolean>(false);
   const [previewLang, setPreviewLang] = useState<string>('python');
 
-  // New Sample Test Case draft state
   const [newSampleInput, setNewSampleInput] = useState('');
   const [newSampleOutput, setNewSampleOutput] = useState('');
   const [newSampleExplanation, setNewSampleExplanation] = useState('');
   const [newSampleWeight, setNewSampleWeight] = useState<number>(1.0);
 
-  // New Hidden Test Case draft state
   const [newHiddenInput, setNewHiddenInput] = useState('');
   const [newHiddenOutput, setNewHiddenOutput] = useState('');
   const [newHiddenWeight, setNewHiddenWeight] = useState<number>(1.0);
@@ -334,6 +339,24 @@ export function AdminCodingQuestionModal({
     onClose();
   };
 
+  const insertStatementSnippet = (snippet: string) => {
+    if (!statementRef.current) {
+      setProblemStatement((prev) => `${prev}${snippet}`);
+      return;
+    }
+    const start = statementRef.current.selectionStart ?? problemStatement.length;
+    const end = statementRef.current.selectionEnd ?? problemStatement.length;
+    const updated = problemStatement.slice(0, start) + snippet + problemStatement.slice(end);
+    setProblemStatement(updated);
+    setTimeout(() => {
+      if (statementRef.current) {
+        statementRef.current.focus();
+        statementRef.current.selectionStart = start + snippet.length;
+        statementRef.current.selectionEnd = start + snippet.length;
+      }
+    }, 20);
+  };
+
   const toggleLanguage = (langKey: string, checked: boolean) => {
     if (checked) {
       const updated = allowedLanguages.includes(langKey)
@@ -410,6 +433,26 @@ export function AdminCodingQuestionModal({
     );
   };
 
+  const handleMoveTestCase = (targetIndex: number, direction: -1 | 1) => {
+    const isPublicGroup = testCases[targetIndex]?.is_public;
+    const groupIndices = testCases
+      .map((tc, idx) => ({ tc, idx }))
+      .filter((entry) => entry.tc.is_public === isPublicGroup)
+      .map((entry) => entry.idx);
+    const posInGroup = groupIndices.indexOf(targetIndex);
+    const swapPos = posInGroup + direction;
+    if (posInGroup < 0 || swapPos < 0 || swapPos >= groupIndices.length) return;
+    const swapIdx = groupIndices[swapPos];
+
+    setTestCases((prev) => {
+      const next = [...prev];
+      const temp = next[targetIndex];
+      next[targetIndex] = next[swapIdx];
+      next[swapIdx] = temp;
+      return next.map((tc, idx) => ({ ...tc, order: idx + 1 }));
+    });
+  };
+
   const handleRemoveTestCase = async (targetIndex: number) => {
     const target = testCases[targetIndex];
     if (target?.id && question?.id) {
@@ -427,23 +470,36 @@ export function AdminCodingQuestionModal({
     setErrorMsg('');
 
     if (!prompt.trim()) {
-      setErrorMsg('Coding Question Title is required.');
+      setErrorMsg('Question title is required.');
       return;
     }
     if (!problemStatement.trim()) {
-      setErrorMsg('Problem Statement / Description is required.');
+      setErrorMsg('Problem statement / description is required.');
       return;
     }
     if (allowedLanguages.length === 0) {
-      setErrorMsg('Select at least one allowed programming language.');
+      setErrorMsg('Select at least one permitted programming language.');
       return;
     }
     if (Number(marks) <= 0) {
       setErrorMsg('Marks must be greater than 0.');
       return;
     }
+    if (timeLimit < 0.5 || timeLimit > 30) {
+      setErrorMsg('Time limit must be between 0.5 and 30 seconds.');
+      return;
+    }
+    if (memoryLimit < 32 || memoryLimit > 1024) {
+      setErrorMsg('Memory limit must be between 32 MB and 1024 MB.');
+      return;
+    }
     if (testCases.length === 0) {
       setErrorMsg('Add at least one evaluation test case (sample or hidden) for this coding question.');
+      return;
+    }
+    const blankOutput = testCases.find((tc) => !String(tc.expected_output || '').trim());
+    if (blankOutput) {
+      setErrorMsg('Every test case must specify a non-empty expected output.');
       return;
     }
 
@@ -457,17 +513,19 @@ export function AdminCodingQuestionModal({
       is_public: Boolean(tc.is_public),
       input_text: tc.input_text ?? '',
       expected_output: tc.expected_output ?? '',
-      marks_weightage: Number(tc.marks_weightage) || 1.0,
+      marks_weightage: Math.max(0.1, Number(tc.marks_weightage) || 1.0),
       explanation: tc.explanation || '',
       order: idx + 1,
     }));
 
     const payload: Partial<AdminQuestion> & {
       assessment_id?: string;
+      pool_id?: string;
       question_type: 'CODING';
       coding_details: Record<string, unknown>;
     } = {
-      ...(assessmentId.trim() ? { assessment_id: assessmentId.trim() } : {}),
+      ...(!isPoolScoped && assessmentId.trim() ? { assessment_id: assessmentId.trim() } : {}),
+      ...(targetPool?.id ? { pool_id: targetPool.id } : {}),
       prompt: prompt.trim(),
       section_type: sectionType || 'CODING',
       question_type: 'CODING',
@@ -488,8 +546,8 @@ export function AdminCodingQuestionModal({
         constraints: constraints.trim(),
         input_format: inputFormat.trim(),
         output_format: outputFormat.trim(),
-        time_limit_seconds: Math.max(0.5, Number(timeLimit) || 2.0),
-        memory_limit_mb: Math.max(32, Number(memoryLimit) || 256),
+        time_limit_seconds: Number(timeLimit),
+        memory_limit_mb: Number(memoryLimit),
         allowed_languages: allowedLanguages,
         boilerplate_code: filteredBoilerplates,
         test_cases: normalizedCases,
@@ -512,6 +570,39 @@ export function AdminCodingQuestionModal({
 
   const selectedAssessmentObj = assessments.find((a) => String(a.id) === String(assessmentId));
 
+  const cardStyle: React.CSSProperties = {
+    backgroundColor: tokens.surfaceCard,
+    borderRadius: '12px',
+    border: `1px solid ${tokens.border}`,
+    boxShadow: tokens.cardShadow,
+    padding: '18px 20px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '14px',
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 11px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.borderStrong}`,
+    backgroundColor: tokens.inputBg,
+    color: tokens.textPrimary,
+    fontSize: '13px',
+    fontWeight: 500,
+    boxSizing: 'border-box',
+    fontFamily: tokens.fontFamily,
+  };
+
+  const sectionHeadingStyle: React.CSSProperties = {
+    fontSize: '12px',
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    color: tokens.cslBlueSoftText,
+    margin: 0,
+  };
+
   return (
     <div
       data-testid="coding-question-editor-modal"
@@ -519,14 +610,14 @@ export function AdminCodingQuestionModal({
         position: 'fixed',
         inset: 0,
         backgroundColor: 'rgba(15, 23, 42, 0.72)',
-        backdropFilter: 'blur(5px)',
+        backdropFilter: 'blur(4px)',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 1100,
-        padding: '20px',
+        padding: '18px',
         boxSizing: 'border-box',
-        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        fontFamily: tokens.fontFamily,
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) handleAttemptClose();
@@ -534,77 +625,90 @@ export function AdminCodingQuestionModal({
     >
       <div
         style={{
-          width: '96vw',
-          maxWidth: '1440px',
-          height: '92vh',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '18px',
-          boxShadow: '0 25px 60px -15px rgba(15, 23, 42, 0.45)',
-          border: '1.5px solid #334155',
+          width: '100%',
+          maxWidth: '1240px',
+          maxHeight: '90vh',
+          backgroundColor: tokens.surfaceCard,
+          color: tokens.textPrimary,
+          borderRadius: '14px',
+          boxShadow: tokens.modalShadow,
+          border: `1px solid ${tokens.borderStrong}`,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
         }}
       >
-        {/* ─── HEADER BAR (DISTINCT CODING STUDIO THEME) ───────────────────────── */}
+        {/* Header Bar */}
         <div
           style={{
-            padding: '16px 26px',
-            backgroundColor: '#0F172A',
-            borderBottom: '2px solid #0EA5E9',
+            padding: '16px 24px',
+            backgroundColor: tokens.cslCharcoal,
+            borderBottom: `2px solid ${tokens.cslYellow}`,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            flexShrink: 0,
+            gap: '12px',
+            flexWrap: 'wrap',
             color: '#FFFFFF',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div
               style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '10px',
-                backgroundColor: '#0EA5E9',
-                color: '#0F172A',
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                backgroundColor: tokens.cslBlue,
+                color: '#FFFFFF',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '15px',
-                fontWeight: 900,
-                fontFamily: 'monospace',
+                fontSize: '14px',
+                fontWeight: 800,
+                fontFamily: tokens.monoFamily,
               }}
             >
               &lt;/&gt;
             </div>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <h2 style={{ fontSize: '19px', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#FFFFFF', margin: 0 }}>
                   {isEditMode ? `Edit Coding Problem #${question!.id}` : 'Create Coding Problem'}
                 </h2>
                 <span
                   style={{
                     fontSize: '10.5px',
-                    fontWeight: 800,
+                    fontWeight: 700,
                     textTransform: 'uppercase',
-                    letterSpacing: '0.06em',
-                    padding: '3px 9px',
-                    borderRadius: '9999px',
-                    backgroundColor: 'rgba(14, 165, 233, 0.2)',
-                    color: '#38BDF8',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    letterSpacing: '0.05em',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(245, 184, 61, 0.16)',
+                    color: '#F5B83D',
+                    border: '1px solid rgba(245, 184, 61, 0.4)',
                   }}
                 >
-                  Dedicated Coding Studio
+                  Coding Problem Authoring
                 </span>
+                {targetPool && (
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: 'rgba(59, 130, 246, 0.25)',
+                      color: '#93C5FD',
+                    }}
+                  >
+                    Target Pool: {targetPool.name} ({targetPool.code})
+                  </span>
+                )}
               </div>
-              <p style={{ fontSize: '12px', color: '#94A3B8', margin: '2px 0 0 0' }}>
-                Configure problem title, full statement, language templates, constraints, public samples, and hidden grading test cases.
-              </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               type="button"
               onClick={() => setIsActive((prev) => !prev)}
@@ -612,8 +716,8 @@ export function AdminCodingQuestionModal({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '6px 13px',
-                borderRadius: '9999px',
+                padding: '6px 12px',
+                borderRadius: '8px',
                 border: `1px solid ${isActive ? '#22C55E' : '#64748B'}`,
                 backgroundColor: isActive ? 'rgba(34, 197, 94, 0.16)' : 'rgba(100, 116, 139, 0.2)',
                 color: isActive ? '#86EFAC' : '#CBD5E1',
@@ -622,65 +726,57 @@ export function AdminCodingQuestionModal({
                 cursor: 'pointer',
               }}
             >
-              <span
-                style={{
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '50%',
-                  backgroundColor: isActive ? '#4ADE80' : '#94A3B8',
-                }}
-              />
-              {isActive ? 'Active' : 'Inactive'}
+              {isActive ? '● Active' : '○ Inactive'}
             </button>
 
             <button
               type="button"
               onClick={() => setIsArchived((prev) => !prev)}
               style={{
-                padding: '6px 12px',
-                borderRadius: '9999px',
+                padding: '6px 11px',
+                borderRadius: '8px',
                 border: `1px solid ${isArchived ? '#F59E0B' : '#475569'}`,
                 backgroundColor: isArchived ? 'rgba(245, 158, 11, 0.18)' : 'transparent',
-                color: isArchived ? '#FCD34D' : '#94A3B8',
+                color: isArchived ? '#FCD34D' : '#CBD5E1',
                 fontSize: '11.5px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: 'pointer',
               }}
             >
-              {isArchived ? 'Archived' : 'Not Archived'}
+              {isArchived ? 'Archived' : 'Archive Status: Live'}
             </button>
 
             <button
               type="button"
               onClick={handleAttemptClose}
+              aria-label="Close coding editor"
               style={{
-                width: '34px',
-                height: '34px',
+                width: '32px',
+                height: '32px',
                 borderRadius: '8px',
                 border: '1px solid #475569',
-                backgroundColor: '#1E293B',
+                backgroundColor: 'rgba(255,255,255,0.06)',
                 color: '#CBD5E1',
-                fontSize: '16px',
+                fontSize: '15px',
                 cursor: 'pointer',
               }}
-              aria-label="Close coding editor"
             >
               ✕
             </button>
           </div>
         </div>
 
-        {/* ─── ERROR BANNER ───────────────────────────────────────── */}
+        {/* Validation Error Banner */}
         {errorMsg && (
           <div
             style={{
-              margin: '12px 26px 0 26px',
-              backgroundColor: '#FEF2F2',
-              border: '1.5px solid #FCA5A5',
+              margin: '12px 24px 0 24px',
+              backgroundColor: tokens.dangerBg,
+              border: `1px solid ${tokens.dangerBorder}`,
               borderRadius: '8px',
               padding: '10px 14px',
-              fontSize: '13px',
-              color: '#991B1B',
+              fontSize: '12.5px',
+              color: tokens.dangerText,
               fontWeight: 600,
               display: 'flex',
               justifyContent: 'space-between',
@@ -688,18 +784,18 @@ export function AdminCodingQuestionModal({
               flexShrink: 0,
             }}
           >
-            <span>⚠️ {errorMsg}</span>
+            <span>{errorMsg}</span>
             <button
               type="button"
               onClick={() => setErrorMsg('')}
-              style={{ background: 'none', border: 'none', color: '#991B1B', fontWeight: 800, cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', color: tokens.dangerText, fontWeight: 700, cursor: 'pointer' }}
             >
               ✕
             </button>
           </div>
         )}
 
-        {/* ─── MAIN WORKSPACE BODY ────────────────────────────────── */}
+        {/* Workspace Form */}
         <form
           onSubmit={handleSubmit}
           style={{
@@ -707,54 +803,46 @@ export function AdminCodingQuestionModal({
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            backgroundColor: '#F8FAFC',
+            backgroundColor: tokens.pageBg,
           }}
         >
           <div
             style={{
               flex: 1,
               overflowY: 'auto',
-              padding: '22px 26px',
+              padding: '20px 24px',
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1.55fr) minmax(350px, 1fr)',
-              gap: '22px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
+              gap: '20px',
               alignItems: 'start',
             }}
           >
-            {/* ─── LEFT COLUMN: DEDICATED CODING AUTHORING FORM ────── */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            {/* LEFT COLUMN: 5 AUTHORING SECTIONS */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {loadingCodingDetails && (
                 <div
                   style={{
                     padding: '10px 14px',
                     borderRadius: '8px',
-                    backgroundColor: '#EFF6FF',
-                    border: '1px solid #BFDBFE',
-                    color: '#1D4ED8',
+                    backgroundColor: tokens.cslBlueSoftBg,
+                    border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                    color: tokens.cslBlueSoftText,
                     fontSize: '12.5px',
-                    fontWeight: 700,
+                    fontWeight: 600,
                   }}
                 >
-                  Loading persisted programming specifications and test cases...
+                  Loading persisted specifications and test cases...
                 </div>
               )}
 
-              {/* 1. Problem Title & Core Metadata */}
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #CBD5E1',
-                  padding: '18px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '14px',
-                }}
-              >
+              {/* Section 1 — Basic Information */}
+              <div style={cardStyle}>
+                <h3 style={sectionHeadingStyle}>1. Basic Information</h3>
+
                 <div>
                   <label
                     htmlFor="coding-question-title"
-                    style={{ display: 'block', fontSize: '12.5px', fontWeight: 800, color: '#0F172A', marginBottom: '6px' }}
+                    style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '5px' }}
                   >
                     Question Title *
                   </label>
@@ -765,24 +853,60 @@ export function AdminCodingQuestionModal({
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder="e.g., Two Sum in Linear Time"
-                    style={{
-                      width: '100%',
-                      padding: '10px 13px',
-                      borderRadius: '8px',
-                      border: '1.5px solid #CBD5E1',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      color: '#0F172A',
-                      boxSizing: 'border-box',
-                    }}
+                    style={{ ...inputStyle, fontWeight: 700, fontSize: '14px' }}
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '12px' }}>
+                {isPoolScoped && targetPool ? (
+                  <div
+                    style={{
+                      padding: '9px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: tokens.cslBlueSoftBg,
+                      border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                      color: tokens.cslBlueSoftText,
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span>Target Coding Pool: <strong>{targetPool.name}</strong> ({targetPool.code})</span>
+                    <span>CODING Pool</span>
+                  </div>
+                ) : (
+                  !isPoolScoped &&
+                  assessments.length > 0 && (
+                    <div>
+                      <label
+                        htmlFor="coding-target-assessment"
+                        style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '5px' }}
+                      >
+                        Direct Assessment Link (Optional — leave unassigned for independent bank)
+                      </label>
+                      <select
+                        id="coding-target-assessment"
+                        value={assessmentId}
+                        onChange={(e) => setAssessmentId(e.target.value)}
+                        style={inputStyle}
+                      >
+                        <option value="">Independent Bank Only</option>
+                        {assessments.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            [{a.code}] {a.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px' }}>
                   <div>
                     <label
                       htmlFor="coding-section-select"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
                       Section *
                     </label>
@@ -790,15 +914,7 @@ export function AdminCodingQuestionModal({
                       id="coding-section-select"
                       value={sectionType}
                       onChange={(e) => setSectionType(e.target.value)}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        backgroundColor: '#FFFFFF',
-                      }}
+                      style={inputStyle}
                     >
                       {loadedSections.length > 0 ? (
                         <>
@@ -823,7 +939,7 @@ export function AdminCodingQuestionModal({
                   <div>
                     <label
                       htmlFor="coding-difficulty-select"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
                       Difficulty *
                     </label>
@@ -831,15 +947,7 @@ export function AdminCodingQuestionModal({
                       id="coding-difficulty-select"
                       value={difficulty}
                       onChange={(e) => setDifficulty(e.target.value as 'EASY' | 'MEDIUM' | 'HARD')}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        backgroundColor: '#FFFFFF',
-                      }}
+                      style={inputStyle}
                     >
                       <option value="EASY">Easy</option>
                       <option value="MEDIUM">Medium</option>
@@ -850,7 +958,7 @@ export function AdminCodingQuestionModal({
                   <div>
                     <label
                       htmlFor="coding-marks-input"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
                       Marks *
                     </label>
@@ -862,122 +970,93 @@ export function AdminCodingQuestionModal({
                       max={100}
                       value={marks}
                       onChange={(e) => setMarks(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        boxSizing: 'border-box',
-                      }}
+                      style={inputStyle}
                     />
                   </div>
 
                   <div>
                     <label
                       htmlFor="coding-category-input"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
-                      Topic / Category
+                      Category / Tag
                     </label>
                     <input
                       id="coding-category-input"
                       type="text"
                       value={category}
                       onChange={(e) => setCategory(e.target.value)}
-                      placeholder="e.g., Arrays, DP"
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        boxSizing: 'border-box',
-                      }}
+                      placeholder="Arrays, DP"
+                      style={inputStyle}
                     />
                   </div>
                 </div>
-
-                {!isPoolScoped && assessments.length > 0 && (
-                  <div>
-                    <label
-                      htmlFor="coding-target-assessment"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
-                    >
-                      Assign to Assessment Directly (Optional — Independent Bank if left empty)
-                    </label>
-                    <select
-                      id="coding-target-assessment"
-                      value={assessmentId}
-                      onChange={(e) => setAssessmentId(e.target.value)}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        backgroundColor: '#FFFFFF',
-                      }}
-                    >
-                      <option value="">Independent Bank Only (Assign via Question Pools)</option>
-                      {assessments.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          [{a.code}] {a.title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
               </div>
 
-              {/* 2. Problem Statement + I/O Formats + Constraints */}
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #CBD5E1',
-                  padding: '18px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '14px',
-                }}
-              >
+              {/* Section 2 — Problem Statement */}
+              <div style={cardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <h3 style={sectionHeadingStyle}>2. Problem Statement & Specifications</h3>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => insertStatementSnippet('**key term**')}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        border: `1px solid ${tokens.borderStrong}`,
+                        backgroundColor: tokens.surfaceElevated,
+                        color: tokens.textSecondary,
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Bold
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => insertStatementSnippet('`O(n)`')}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        border: `1px solid ${tokens.borderStrong}`,
+                        backgroundColor: tokens.surfaceElevated,
+                        color: tokens.textSecondary,
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Code
+                    </button>
+                  </div>
+                </div>
+
                 <div>
                   <label
                     htmlFor="coding-problem-statement"
-                    style={{ display: 'block', fontSize: '12.5px', fontWeight: 800, color: '#0F172A', marginBottom: '6px' }}
+                    style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '5px' }}
                   >
-                    Problem Statement / Description *
+                    Problem Statement (Markdown Supported) *
                   </label>
                   <textarea
+                    ref={statementRef}
                     id="coding-problem-statement"
                     data-testid="coding-statement-textarea"
                     rows={5}
                     value={problemStatement}
                     onChange={(e) => setProblemStatement(e.target.value)}
-                    placeholder="Describe the problem requirements, expected behavior, edge cases, and examples..."
-                    style={{
-                      width: '100%',
-                      padding: '10px 13px',
-                      borderRadius: '8px',
-                      border: '1.5px solid #CBD5E1',
-                      fontSize: '13px',
-                      lineHeight: 1.55,
-                      color: '#0F172A',
-                      boxSizing: 'border-box',
-                      resize: 'vertical',
-                    }}
+                    placeholder="Describe requirements, edge cases, and expected behavior..."
+                    style={{ ...inputStyle, lineHeight: 1.55, resize: 'vertical' }}
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
                     <label
                       htmlFor="coding-input-format"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
                       Input Format
                     </label>
@@ -986,21 +1065,14 @@ export function AdminCodingQuestionModal({
                       rows={2}
                       value={inputFormat}
                       onChange={(e) => setInputFormat(e.target.value)}
-                      placeholder="First line contains integer N, followed by N integers..."
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        boxSizing: 'border-box',
-                      }}
+                      placeholder="First line contains N..."
+                      style={inputStyle}
                     />
                   </div>
                   <div>
                     <label
                       htmlFor="coding-output-format"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
                       Output Format
                     </label>
@@ -1009,15 +1081,8 @@ export function AdminCodingQuestionModal({
                       rows={2}
                       value={outputFormat}
                       onChange={(e) => setOutputFormat(e.target.value)}
-                      placeholder="Print a single integer representing..."
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        boxSizing: 'border-box',
-                      }}
+                      placeholder="Print a single integer..."
+                      style={inputStyle}
                     />
                   </div>
                 </div>
@@ -1025,7 +1090,7 @@ export function AdminCodingQuestionModal({
                 <div>
                   <label
                     htmlFor="coding-constraints"
-                    style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                    style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                   >
                     Constraints
                   </label>
@@ -1035,38 +1100,22 @@ export function AdminCodingQuestionModal({
                     value={constraints}
                     onChange={(e) => setConstraints(e.target.value)}
                     placeholder="1 <= N <= 10^5&#10;-10^9 <= A[i] <= 10^9"
-                    style={{
-                      width: '100%',
-                      padding: '8px 10px',
-                      borderRadius: '8px',
-                      border: '1px solid #CBD5E1',
-                      fontSize: '12.5px',
-                      fontFamily: 'monospace',
-                      boxSizing: 'border-box',
-                    }}
+                    style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                   />
                 </div>
               </div>
 
-              {/* 3. Execution Limits, Allowed Languages & Starter Boilerplate */}
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #CBD5E1',
-                  padding: '18px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '14px',
-                }}
-              >
+              {/* Section 3 & 5 — Language & Execution Configuration */}
+              <div style={cardStyle}>
+                <h3 style={sectionHeadingStyle}>3. Languages & Execution Limits</h3>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
                     <label
                       htmlFor="coding-time-limit"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
-                      Time Limit (Seconds) *
+                      Time Limit (0.5s – 30s) *
                     </label>
                     <input
                       id="coding-time-limit"
@@ -1075,24 +1124,16 @@ export function AdminCodingQuestionModal({
                       min="0.5"
                       max="30"
                       value={timeLimit}
-                      onChange={(e) => setTimeLimit(Number(e.target.value) || 2.0)}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        boxSizing: 'border-box',
-                      }}
+                      onChange={(e) => setTimeLimit(Number(e.target.value))}
+                      style={inputStyle}
                     />
                   </div>
                   <div>
                     <label
                       htmlFor="coding-memory-limit"
-                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '5px' }}
+                      style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
                     >
-                      Memory Limit (MB) *
+                      Memory Limit (32MB – 1024MB) *
                     </label>
                     <input
                       id="coding-memory-limit"
@@ -1101,23 +1142,15 @@ export function AdminCodingQuestionModal({
                       min="32"
                       max="1024"
                       value={memoryLimit}
-                      onChange={(e) => setMemoryLimit(Number(e.target.value) || 256)}
-                      style={{
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12.5px',
-                        fontWeight: 600,
-                        boxSizing: 'border-box',
-                      }}
+                      onChange={(e) => setMemoryLimit(Number(e.target.value))}
+                      style={inputStyle}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                    Allowed Programming Languages *
+                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                    Permitted Judge0 Languages *
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                     {SUPPORTED_CODING_LANGUAGES.map((lang) => {
@@ -1131,9 +1164,9 @@ export function AdminCodingQuestionModal({
                             gap: '6px',
                             padding: '6px 11px',
                             borderRadius: '8px',
-                            border: `1.5px solid ${checked ? '#0EA5E9' : '#CBD5E1'}`,
-                            backgroundColor: checked ? '#F0F9FF' : '#FFFFFF',
-                            color: checked ? '#0369A1' : '#475569',
+                            border: `1px solid ${checked ? tokens.cslBlue : tokens.borderStrong}`,
+                            backgroundColor: checked ? tokens.cslBlueSoftBg : tokens.surfaceElevated,
+                            color: checked ? tokens.cslBlueSoftText : tokens.textSecondary,
                             fontSize: '12px',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -1163,8 +1196,8 @@ export function AdminCodingQuestionModal({
                         gap: '8px',
                       }}
                     >
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
-                        Starter Code Template ({activeBoilerplateLang.toUpperCase()})
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary }}>
+                        Starter Boilerplate ({activeBoilerplateLang.toUpperCase()})
                       </span>
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         {allowedLanguages.map((langKey) => (
@@ -1173,11 +1206,11 @@ export function AdminCodingQuestionModal({
                             type="button"
                             onClick={() => setActiveBoilerplateLang(langKey)}
                             style={{
-                              padding: '4px 10px',
+                              padding: '4px 9px',
                               borderRadius: '6px',
-                              border: `1px solid ${activeBoilerplateLang === langKey ? '#0EA5E9' : '#CBD5E1'}`,
-                              backgroundColor: activeBoilerplateLang === langKey ? '#0F172A' : '#FFFFFF',
-                              color: activeBoilerplateLang === langKey ? '#38BDF8' : '#475569',
+                              border: `1px solid ${activeBoilerplateLang === langKey ? tokens.cslBlue : tokens.borderStrong}`,
+                              backgroundColor: activeBoilerplateLang === langKey ? tokens.cslBlue : tokens.surfaceElevated,
+                              color: activeBoilerplateLang === langKey ? '#FFFFFF' : tokens.textSecondary,
                               fontSize: '11px',
                               fontWeight: 700,
                               cursor: 'pointer',
@@ -1197,9 +1230,9 @@ export function AdminCodingQuestionModal({
                           style={{
                             padding: '4px 8px',
                             borderRadius: '6px',
-                            border: '1px solid #CBD5E1',
-                            backgroundColor: '#F8FAFC',
-                            color: '#475569',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceElevated,
+                            color: tokens.textSecondary,
                             fontSize: '11px',
                             fontWeight: 600,
                             cursor: 'pointer',
@@ -1226,7 +1259,7 @@ export function AdminCodingQuestionModal({
                         border: '1px solid #334155',
                         backgroundColor: '#0F172A',
                         color: '#E2E8F0',
-                        fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace",
+                        fontFamily: tokens.monoFamily,
                         fontSize: '12px',
                         lineHeight: 1.5,
                         boxSizing: 'border-box',
@@ -1236,25 +1269,20 @@ export function AdminCodingQuestionModal({
                 )}
               </div>
 
-              {/* 4A. Sample Test Cases (is_public = true) */}
+              {/* Section 4A — Public Sample Test Cases */}
               <div
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1.5px solid #BBF7D0',
-                  padding: '18px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
+                  ...cardStyle,
+                  border: `1px solid ${tokens.successBorder}`,
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#166534' }}>
-                      Sample Test Cases — Visible to Students ({sampleCasesWithIndex.length})
-                    </div>
-                    <div style={{ fontSize: '11.5px', color: '#475569' }}>
-                      Candidates see inputs, outputs, and explanations in the playground to validate logic.
+                    <h3 style={{ ...sectionHeadingStyle, color: tokens.successText }}>
+                      4A. Public Sample Test Cases ({sampleCasesWithIndex.length})
+                    </h3>
+                    <div style={{ fontSize: '11.5px', color: tokens.textSecondary, marginTop: '2px' }}>
+                      Shown to candidates in the playground.
                     </div>
                   </div>
                 </div>
@@ -1264,20 +1292,52 @@ export function AdminCodingQuestionModal({
                     key={tc.id || `sample-${idx}`}
                     style={{
                       padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid #DCFCE7',
-                      backgroundColor: '#F0FDF4',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.successBorder}`,
+                      backgroundColor: tokens.successBg,
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#166534' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: tokens.successText }}>
                         Sample Case #{visibleIdx + 1}
                       </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveTestCase(idx, -1)}
+                          disabled={visibleIdx === 0}
+                          style={{
+                            padding: '2px 7px',
+                            borderRadius: '5px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceCard,
+                            color: tokens.textSecondary,
+                            fontSize: '11px',
+                            cursor: visibleIdx === 0 ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveTestCase(idx, 1)}
+                          disabled={visibleIdx === sampleCasesWithIndex.length - 1}
+                          style={{
+                            padding: '2px 7px',
+                            borderRadius: '5px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceCard,
+                            color: tokens.textSecondary,
+                            fontSize: '11px',
+                            cursor: visibleIdx === sampleCasesWithIndex.length - 1 ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          ↓
+                        </button>
+                        <label style={{ fontSize: '11px', fontWeight: 700, color: tokens.textSecondary }}>
                           Weight:
                           <input
                             type="number"
@@ -1288,11 +1348,13 @@ export function AdminCodingQuestionModal({
                               handleUpdateTestCaseField(idx, 'marks_weightage', Number(e.target.value) || 1.0)
                             }
                             style={{
-                              width: '56px',
-                              marginLeft: '5px',
+                              width: '52px',
+                              marginLeft: '4px',
                               padding: '2px 5px',
                               borderRadius: '4px',
-                              border: '1px solid #CBD5E1',
+                              border: `1px solid ${tokens.borderStrong}`,
+                              backgroundColor: tokens.inputBg,
+                              color: tokens.textPrimary,
                             }}
                           />
                         </label>
@@ -1302,9 +1364,9 @@ export function AdminCodingQuestionModal({
                           style={{
                             padding: '3px 8px',
                             borderRadius: '6px',
-                            border: '1px solid #FECACA',
-                            backgroundColor: '#FEF2F2',
-                            color: '#DC2626',
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
                             fontSize: '11px',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -1315,54 +1377,27 @@ export function AdminCodingQuestionModal({
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                      <div>
-                        <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569' }}>Input (stdin)</span>
-                        <textarea
-                          rows={2}
-                          value={tc.input_text}
-                          onChange={(e) => handleUpdateTestCaseField(idx, 'input_text', e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                            border: '1px solid #CBD5E1',
-                            fontFamily: 'monospace',
-                            fontSize: '11.5px',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569' }}>Expected Output (stdout)</span>
-                        <textarea
-                          rows={2}
-                          value={tc.expected_output}
-                          onChange={(e) => handleUpdateTestCaseField(idx, 'expected_output', e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                            border: '1px solid #CBD5E1',
-                            fontFamily: 'monospace',
-                            fontSize: '11.5px',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                      </div>
+                      <textarea
+                        rows={2}
+                        value={tc.input_text}
+                        onChange={(e) => handleUpdateTestCaseField(idx, 'input_text', e.target.value)}
+                        placeholder="stdin"
+                        style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '11.5px' }}
+                      />
+                      <textarea
+                        rows={2}
+                        value={tc.expected_output}
+                        onChange={(e) => handleUpdateTestCaseField(idx, 'expected_output', e.target.value)}
+                        placeholder="stdout *"
+                        style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '11.5px' }}
+                      />
                     </div>
                     <input
                       type="text"
                       value={tc.explanation || ''}
                       onChange={(e) => handleUpdateTestCaseField(idx, 'explanation', e.target.value)}
-                      placeholder="Optional sample walkthrough shown to student..."
-                      style={{
-                        width: '100%',
-                        padding: '6px 8px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '11.5px',
-                        boxSizing: 'border-box',
-                      }}
+                      placeholder="Optional sample explanation..."
+                      style={{ ...inputStyle, fontSize: '11.5px' }}
                     />
                   </div>
                 ))}
@@ -1371,9 +1406,9 @@ export function AdminCodingQuestionModal({
                 <div
                   style={{
                     padding: '12px',
-                    borderRadius: '10px',
-                    border: '1px dashed #86EFAC',
-                    backgroundColor: '#F8FAFC',
+                    borderRadius: '8px',
+                    border: `1px dashed ${tokens.successBorder}`,
+                    backgroundColor: tokens.surfaceElevated,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '8px',
@@ -1386,15 +1421,7 @@ export function AdminCodingQuestionModal({
                       value={newSampleInput}
                       onChange={(e) => setNewSampleInput(e.target.value)}
                       placeholder="Sample Input (stdin)..."
-                      style={{
-                        width: '100%',
-                        padding: '7px 9px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontFamily: 'monospace',
-                        fontSize: '12px',
-                        boxSizing: 'border-box',
-                      }}
+                      style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                     <textarea
                       data-testid="sample-tc-output"
@@ -1402,15 +1429,7 @@ export function AdminCodingQuestionModal({
                       value={newSampleOutput}
                       onChange={(e) => setNewSampleOutput(e.target.value)}
                       placeholder="Sample Expected Output (stdout) *..."
-                      style={{
-                        width: '100%',
-                        padding: '7px 9px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontFamily: 'monospace',
-                        fontSize: '12px',
-                        boxSizing: 'border-box',
-                      }}
+                      style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1419,14 +1438,7 @@ export function AdminCodingQuestionModal({
                       value={newSampleExplanation}
                       onChange={(e) => setNewSampleExplanation(e.target.value)}
                       placeholder="Sample explanation (optional)"
-                      style={{
-                        flex: 1,
-                        minWidth: '180px',
-                        padding: '7px 9px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12px',
-                      }}
+                      style={{ ...inputStyle, flex: 1, minWidth: '160px', fontSize: '12px' }}
                     />
                     <input
                       type="number"
@@ -1435,13 +1447,7 @@ export function AdminCodingQuestionModal({
                       value={newSampleWeight}
                       onChange={(e) => setNewSampleWeight(Number(e.target.value) || 1.0)}
                       title="Marks Weight"
-                      style={{
-                        width: '72px',
-                        padding: '7px 8px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12px',
-                      }}
+                      style={{ ...inputStyle, width: '68px', fontSize: '12px' }}
                     />
                     <button
                       type="button"
@@ -1458,30 +1464,25 @@ export function AdminCodingQuestionModal({
                         cursor: 'pointer',
                       }}
                     >
-                      + Add Sample Test Case
+                      + Add Sample Case
                     </button>
                   </div>
                 </div>
               </div>
 
-              {/* 4B. Hidden Evaluation Test Cases (is_public = false) */}
+              {/* Section 4B — Hidden Evaluation Test Cases */}
               <div
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1.5px solid #FDE68A',
-                  padding: '18px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
+                  ...cardStyle,
+                  border: `1px solid ${tokens.cslYellow}`,
                 }}
               >
                 <div>
-                  <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#92400E' }}>
-                    Hidden Evaluation Test Cases — Automated Grading Only ({hiddenCasesWithIndex.length})
-                  </div>
-                  <div style={{ fontSize: '11.5px', color: '#475569' }}>
-                    Hidden cases are strictly withheld from candidate attempt endpoints and evaluated only on server-side execution.
+                  <h3 style={{ ...sectionHeadingStyle, color: tokens.cslYellowSoftText }}>
+                    4B. Hidden Grading Test Cases ({hiddenCasesWithIndex.length})
+                  </h3>
+                  <div style={{ fontSize: '11.5px', color: tokens.textSecondary, marginTop: '2px' }}>
+                    Withheld from candidate endpoints; used strictly for automated evaluation.
                   </div>
                 </div>
 
@@ -1490,20 +1491,52 @@ export function AdminCodingQuestionModal({
                     key={tc.id || `hidden-${idx}`}
                     style={{
                       padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid #FDE68A',
-                      backgroundColor: '#FFFBEB',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.borderStrong}`,
+                      backgroundColor: tokens.cslYellowSoftBg,
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#92400E' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: tokens.cslYellowSoftText }}>
                         🔒 Hidden Case #{hIdx + 1}
                       </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveTestCase(idx, -1)}
+                          disabled={hIdx === 0}
+                          style={{
+                            padding: '2px 7px',
+                            borderRadius: '5px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceCard,
+                            color: tokens.textSecondary,
+                            fontSize: '11px',
+                            cursor: hIdx === 0 ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveTestCase(idx, 1)}
+                          disabled={hIdx === hiddenCasesWithIndex.length - 1}
+                          style={{
+                            padding: '2px 7px',
+                            borderRadius: '5px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceCard,
+                            color: tokens.textSecondary,
+                            fontSize: '11px',
+                            cursor: hIdx === hiddenCasesWithIndex.length - 1 ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          ↓
+                        </button>
+                        <label style={{ fontSize: '11px', fontWeight: 700, color: tokens.textSecondary }}>
                           Weight:
                           <input
                             type="number"
@@ -1514,11 +1547,13 @@ export function AdminCodingQuestionModal({
                               handleUpdateTestCaseField(idx, 'marks_weightage', Number(e.target.value) || 1.0)
                             }
                             style={{
-                              width: '56px',
-                              marginLeft: '5px',
+                              width: '52px',
+                              marginLeft: '4px',
                               padding: '2px 5px',
                               borderRadius: '4px',
-                              border: '1px solid #CBD5E1',
+                              border: `1px solid ${tokens.borderStrong}`,
+                              backgroundColor: tokens.inputBg,
+                              color: tokens.textPrimary,
                             }}
                           />
                         </label>
@@ -1528,9 +1563,9 @@ export function AdminCodingQuestionModal({
                           style={{
                             padding: '3px 8px',
                             borderRadius: '6px',
-                            border: '1px solid #FECACA',
-                            backgroundColor: '#FEF2F2',
-                            color: '#DC2626',
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
                             fontSize: '11px',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -1541,40 +1576,18 @@ export function AdminCodingQuestionModal({
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                      <div>
-                        <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569' }}>Hidden Input (stdin)</span>
-                        <textarea
-                          rows={2}
-                          value={tc.input_text}
-                          onChange={(e) => handleUpdateTestCaseField(idx, 'input_text', e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                            border: '1px solid #CBD5E1',
-                            fontFamily: 'monospace',
-                            fontSize: '11.5px',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#475569' }}>Hidden Expected Output (stdout)</span>
-                        <textarea
-                          rows={2}
-                          value={tc.expected_output}
-                          onChange={(e) => handleUpdateTestCaseField(idx, 'expected_output', e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                            border: '1px solid #CBD5E1',
-                            fontFamily: 'monospace',
-                            fontSize: '11.5px',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                      </div>
+                      <textarea
+                        rows={2}
+                        value={tc.input_text}
+                        onChange={(e) => handleUpdateTestCaseField(idx, 'input_text', e.target.value)}
+                        style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '11.5px' }}
+                      />
+                      <textarea
+                        rows={2}
+                        value={tc.expected_output}
+                        onChange={(e) => handleUpdateTestCaseField(idx, 'expected_output', e.target.value)}
+                        style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '11.5px' }}
+                      />
                     </div>
                   </div>
                 ))}
@@ -1583,9 +1596,9 @@ export function AdminCodingQuestionModal({
                 <div
                   style={{
                     padding: '12px',
-                    borderRadius: '10px',
-                    border: '1px dashed #FBBF24',
-                    backgroundColor: '#F8FAFC',
+                    borderRadius: '8px',
+                    border: `1px dashed ${tokens.cslYellow}`,
+                    backgroundColor: tokens.surfaceElevated,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '8px',
@@ -1598,15 +1611,7 @@ export function AdminCodingQuestionModal({
                       value={newHiddenInput}
                       onChange={(e) => setNewHiddenInput(e.target.value)}
                       placeholder="Hidden Input (stdin)..."
-                      style={{
-                        width: '100%',
-                        padding: '7px 9px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontFamily: 'monospace',
-                        fontSize: '12px',
-                        boxSizing: 'border-box',
-                      }}
+                      style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                     <textarea
                       data-testid="hidden-tc-output"
@@ -1614,19 +1619,11 @@ export function AdminCodingQuestionModal({
                       value={newHiddenOutput}
                       onChange={(e) => setNewHiddenOutput(e.target.value)}
                       placeholder="Hidden Expected Output (stdout) *..."
-                      style={{
-                        width: '100%',
-                        padding: '7px 9px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontFamily: 'monospace',
-                        fontSize: '12px',
-                        boxSizing: 'border-box',
-                      }}
+                      style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
-                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569' }}>
+                    <label style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary }}>
                       Weight:
                       <input
                         type="number"
@@ -1634,14 +1631,7 @@ export function AdminCodingQuestionModal({
                         min="0.5"
                         value={newHiddenWeight}
                         onChange={(e) => setNewHiddenWeight(Number(e.target.value) || 1.0)}
-                        style={{
-                          width: '68px',
-                          marginLeft: '6px',
-                          padding: '6px 8px',
-                          borderRadius: '6px',
-                          border: '1px solid #CBD5E1',
-                          fontSize: '12px',
-                        }}
+                        style={{ ...inputStyle, width: '64px', marginLeft: '6px', fontSize: '12px' }}
                       />
                     </label>
                     <button
@@ -1659,173 +1649,146 @@ export function AdminCodingQuestionModal({
                         cursor: 'pointer',
                       }}
                     >
-                      + Add Hidden Test Case
+                      + Add Hidden Case
                     </button>
                   </div>
                 </div>
               </div>
 
-              {/* 5. Optional Editorial / Grading Notes */}
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #CBD5E1',
-                  padding: '16px 20px',
-                }}
-              >
+              {/* Admin Editorial */}
+              <div style={cardStyle}>
                 <label
                   htmlFor="coding-editorial-notes"
-                  style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}
+                  style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary }}
                 >
-                  Admin Editorial / Solution Approach Notes (Optional)
+                  Admin Editorial / Approach Notes (Optional, Internal)
                 </label>
                 <textarea
                   id="coding-editorial-notes"
                   rows={2}
                   value={explanation}
                   onChange={(e) => setExplanation(e.target.value)}
-                  placeholder="Optional reference complexity & algorithm notes for reviewers..."
-                  style={{
-                    width: '100%',
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
-                    fontSize: '12.5px',
-                    boxSizing: 'border-box',
-                  }}
+                  placeholder="Optional complexity / grading notes for reviewers..."
+                  style={inputStyle}
                 />
               </div>
             </div>
 
-            {/* ─── RIGHT COLUMN: LIVE STUDENT PLAYGROUND PREVIEW ───── */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'sticky', top: 0 }}>
-              <div
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '14px',
-                  border: '1px solid #CBD5E1',
-                  padding: '18px 20px',
-                  boxShadow: '0 4px 12px rgba(15, 23, 42, 0.05)',
-                }}
-              >
+            {/* RIGHT COLUMN: CANDIDATE-FACING PREVIEW */}
+            <div style={{ position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={cardStyle}>
                 <div
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    borderBottom: '1px solid #E2E8F0',
+                    borderBottom: `1px solid ${tokens.border}`,
                     paddingBottom: '10px',
-                    marginBottom: '12px',
                   }}
                 >
-                  <span style={{ fontSize: '11px', fontWeight: 800, color: '#0369A1', textTransform: 'uppercase' }}>
-                    Student Coding Playground Preview
-                  </span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748B' }}>
+                  <span style={sectionHeadingStyle}>6. Candidate-Facing Problem Preview</span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary }}>
                     {marks} pts • {difficulty}
                   </span>
                 </div>
 
-                <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', margin: '0 0 8px 0' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                   {prompt.trim() || 'Untitled Coding Problem'}
                 </h3>
 
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '9999px', backgroundColor: '#F1F5F9', color: '#334155' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', backgroundColor: tokens.surfaceElevated, color: tokens.textSecondary }}>
                     Time: {timeLimit}s
                   </span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '9999px', backgroundColor: '#F1F5F9', color: '#334155' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', backgroundColor: tokens.surfaceElevated, color: tokens.textSecondary }}>
                     Memory: {memoryLimit} MB
                   </span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '9999px', backgroundColor: '#E0F2FE', color: '#0369A1' }}>
-                    {allowedLanguages.join(', ').toUpperCase() || 'No languages selected'}
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', backgroundColor: tokens.cslBlueSoftBg, color: tokens.cslBlueSoftText }}>
+                    {allowedLanguages.join(', ').toUpperCase() || 'None'}
                   </span>
-                  {selectedAssessmentObj && (
-                    <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '9999px', backgroundColor: '#EEF2FF', color: '#4338CA' }}>
+                  {selectedAssessmentObj && !isPoolScoped && (
+                    <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', backgroundColor: tokens.codingBg, color: tokens.codingText }}>
                       {selectedAssessmentObj.code}
                     </span>
                   )}
                 </div>
 
-                <div style={{ fontSize: '12.5px', color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap', marginBottom: '12px' }}>
-                  {problemStatement.trim() || 'Enter the problem statement to see how candidates read this prompt.'}
+                <div style={{ fontSize: '13px', color: tokens.textPrimary, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                  {problemStatement.trim() || 'Enter the problem statement to inspect the candidate view.'}
                 </div>
 
                 {(inputFormat.trim() || outputFormat.trim() || constraints.trim()) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px', fontSize: '11.5px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
                     {inputFormat.trim() && (
-                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                        <strong style={{ color: '#0F172A' }}>Input Format:</strong>
-                        <div style={{ color: '#475569', whiteSpace: 'pre-wrap', marginTop: '2px' }}>{inputFormat}</div>
+                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}` }}>
+                        <strong>Input Format:</strong>
+                        <div style={{ color: tokens.textSecondary, whiteSpace: 'pre-wrap', marginTop: '2px' }}>{inputFormat}</div>
                       </div>
                     )}
                     {outputFormat.trim() && (
-                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                        <strong style={{ color: '#0F172A' }}>Output Format:</strong>
-                        <div style={{ color: '#475569', whiteSpace: 'pre-wrap', marginTop: '2px' }}>{outputFormat}</div>
+                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}` }}>
+                        <strong>Output Format:</strong>
+                        <div style={{ color: tokens.textSecondary, whiteSpace: 'pre-wrap', marginTop: '2px' }}>{outputFormat}</div>
                       </div>
                     )}
                     {constraints.trim() && (
-                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                        <strong style={{ color: '#0F172A' }}>Constraints:</strong>
-                        <div style={{ color: '#475569', fontFamily: 'monospace', whiteSpace: 'pre-wrap', marginTop: '2px' }}>{constraints}</div>
+                      <div style={{ padding: '8px 10px', borderRadius: '8px', backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}` }}>
+                        <strong>Constraints:</strong>
+                        <div style={{ color: tokens.textSecondary, fontFamily: tokens.monoFamily, whiteSpace: 'pre-wrap', marginTop: '2px' }}>
+                          {constraints}
+                        </div>
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* Sample Cases visible in student preview (Hidden cases intentionally omitted) */}
-                <div style={{ fontSize: '11.5px', fontWeight: 800, color: '#166534', marginBottom: '6px' }}>
-                  Visible Sample Cases ({sampleCasesWithIndex.length})
+                <div>
+                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.successText, marginBottom: '6px' }}>
+                    Visible Sample Cases ({sampleCasesWithIndex.length})
+                  </div>
+                  {sampleCasesWithIndex.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: tokens.textMuted, fontStyle: 'italic' }}>
+                      No public sample cases added yet.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {sampleCasesWithIndex.slice(0, 3).map(({ tc, idx }, i) => (
+                        <div
+                          key={tc.id || `prev-sample-${idx}`}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            backgroundColor: tokens.successBg,
+                            border: `1px solid ${tokens.successBorder}`,
+                            fontFamily: tokens.monoFamily,
+                            fontSize: '11.5px',
+                            color: tokens.textPrimary,
+                          }}
+                        >
+                          <div><strong>Sample {i + 1} In:</strong> {tc.input_text || '(empty)'}</div>
+                          <div><strong>Out:</strong> {tc.expected_output}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {sampleCasesWithIndex.length === 0 ? (
-                  <div style={{ fontSize: '11.5px', color: '#94A3B8', fontStyle: 'italic', marginBottom: '10px' }}>
-                    No public sample cases added yet.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
-                    {sampleCasesWithIndex.slice(0, 2).map(({ tc, idx }, i) => (
-                      <div
-                        key={tc.id || `prev-sample-${idx}`}
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: '8px',
-                          backgroundColor: '#F0FDF4',
-                          border: '1px solid #DCFCE7',
-                          fontFamily: 'monospace',
-                          fontSize: '11px',
-                        }}
-                      >
-                        <div>
-                          <strong>Sample {i + 1} In:</strong> {tc.input_text || '(empty)'}
-                        </div>
-                        <div>
-                          <strong>Out:</strong> {tc.expected_output}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
                 <div
                   style={{
                     padding: '8px 10px',
                     borderRadius: '8px',
-                    backgroundColor: '#FFFBEB',
-                    border: '1px solid #FDE68A',
-                    color: '#92400E',
+                    backgroundColor: tokens.cslYellowSoftBg,
+                    color: tokens.cslYellowSoftText,
                     fontSize: '11.5px',
                     fontWeight: 700,
-                    marginBottom: '12px',
                   }}
                 >
-                  🔒 {hiddenCasesWithIndex.length} Hidden Grading Test Case(s) — Never shown to students
+                  🔒 {hiddenCasesWithIndex.length} Hidden Grading Case(s) — Excluded from student view
                 </div>
 
                 {allowedLanguages.length > 0 && (
                   <div>
-                    <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
                       {allowedLanguages.map((langKey) => (
                         <button
                           key={langKey}
@@ -1834,10 +1797,10 @@ export function AdminCodingQuestionModal({
                           style={{
                             padding: '3px 8px',
                             borderRadius: '5px',
-                            border: '1px solid #CBD5E1',
-                            backgroundColor: previewLang === langKey ? '#0F172A' : '#F8FAFC',
-                            color: previewLang === langKey ? '#FFFFFF' : '#475569',
-                            fontSize: '10.5px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: previewLang === langKey ? tokens.cslBlue : tokens.surfaceElevated,
+                            color: previewLang === langKey ? '#FFFFFF' : tokens.textSecondary,
+                            fontSize: '11px',
                             fontWeight: 700,
                             cursor: 'pointer',
                           }}
@@ -1851,9 +1814,10 @@ export function AdminCodingQuestionModal({
                         margin: 0,
                         padding: '10px',
                         borderRadius: '8px',
-                        backgroundColor: '#0F172A',
+                        backgroundColor: isDark ? '#020617' : '#0F172A',
                         color: '#E2E8F0',
-                        fontSize: '11px',
+                        fontFamily: tokens.monoFamily,
+                        fontSize: '11.5px',
                         maxHeight: '140px',
                         overflow: 'auto',
                       }}
@@ -1866,32 +1830,36 @@ export function AdminCodingQuestionModal({
             </div>
           </div>
 
-          {/* ─── FOOTER ACTIONS ────────────────────────────────────── */}
+          {/* Footer */}
           <div
             style={{
-              padding: '14px 26px',
-              backgroundColor: '#FFFFFF',
-              borderTop: '1px solid #E2E8F0',
+              padding: '14px 24px',
+              backgroundColor: tokens.surfaceCard,
+              borderTop: `1px solid ${tokens.border}`,
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px',
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>
-              {sampleCasesWithIndex.length} Public Sample • {hiddenCasesWithIndex.length} Hidden Grading Cases
-            </span>
-            <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ fontSize: '12px', color: testCases.length === 0 ? tokens.dangerText : tokens.textSecondary, fontWeight: 600 }}>
+              {testCases.length === 0
+                ? 'Validation: At least 1 evaluation test case required'
+                : `${sampleCasesWithIndex.length} Public Sample • ${hiddenCasesWithIndex.length} Hidden Grading Cases`}
+            </div>
+            <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 type="button"
                 onClick={handleAttemptClose}
                 disabled={saving}
                 style={{
-                  padding: '9px 20px',
-                  borderRadius: '9px',
-                  border: '1.5px solid #CBD5E1',
-                  backgroundColor: '#FFFFFF',
-                  color: '#475569',
+                  padding: '8px 18px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.surfaceElevated,
+                  color: tokens.textPrimary,
                   fontSize: '13px',
                   fontWeight: 700,
                   cursor: 'pointer',
@@ -1904,19 +1872,18 @@ export function AdminCodingQuestionModal({
                 data-testid="coding-save-btn"
                 disabled={saving}
                 style={{
-                  padding: '9px 24px',
-                  borderRadius: '9px',
+                  padding: '8px 22px',
+                  borderRadius: '8px',
                   border: 'none',
-                  backgroundColor: '#0284C7',
+                  backgroundColor: tokens.cslBlue,
                   color: '#FFFFFF',
                   fontSize: '13px',
-                  fontWeight: 800,
+                  fontWeight: 700,
                   cursor: saving ? 'wait' : 'pointer',
-                  boxShadow: '0 4px 12px rgba(2, 132, 199, 0.3)',
                 }}
               >
                 {saving
-                  ? 'Saving Coding Problem...'
+                  ? 'Saving...'
                   : isEditMode
                   ? 'Save Coding Problem'
                   : 'Create Coding Problem'}

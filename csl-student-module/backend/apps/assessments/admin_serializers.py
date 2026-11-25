@@ -30,6 +30,12 @@ from .models import (
     normalize_hex_color,
     default_export_score_thresholds,
 )
+from .question_type_utils import (
+    POOL_QUESTION_TYPES,
+    get_question_canonical_type,
+    get_pool_type_breakdown,
+    compute_pool_health,
+)
 
 
 class AdminAssessmentSectionSerializer(serializers.ModelSerializer):
@@ -1183,11 +1189,7 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         }
 
     def _resolve_canonical_question_type(self, obj):
-        if self.get_has_programming_details(obj):
-            return "CODING"
-        if (obj.assessment_type or "").upper() == "CODING" or (obj.section_type or "").upper() == "CODING":
-            return "CODING"
-        return "MCQ"
+        return get_question_canonical_type(obj)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -1211,14 +1213,32 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         return val
 
     def validate(self, attrs):
+        explicit_qtype = attrs.get("question_type")
+        existing_type = self._resolve_canonical_question_type(self.instance) if self.instance else None
+        if self.instance and explicit_qtype:
+            req_upper = str(explicit_qtype).strip().upper()
+            if req_upper in POOL_QUESTION_TYPES and req_upper != existing_type:
+                raise serializers.ValidationError({
+                    "question_type": [
+                        f"Cannot change an existing {existing_type} question to {req_upper}."
+                    ]
+                })
+
         raw_qtype = (
-            attrs.get("question_type")
+            explicit_qtype
             or attrs.get("assessment_type")
-            or (self.instance and self._resolve_canonical_question_type(self.instance))
+            or existing_type
             or ""
         )
         sec_type = attrs.get("section_type", getattr(self.instance, "section_type", ""))
         is_coding = str(raw_qtype).strip().upper() == "CODING" or str(sec_type).strip().upper() == "CODING"
+
+        if self.instance and is_coding != (existing_type == "CODING"):
+            raise serializers.ValidationError({
+                "section_type": [
+                    f"Cannot change an existing {existing_type} question into a {'CODING' if is_coding else 'MCQ'} question."
+                ]
+            })
 
         if is_coding:
             attrs["assessment_type"] = "CODING"
@@ -1779,6 +1799,10 @@ class AdminResultSerializer(serializers.ModelSerializer):
 class AdminQuestionPoolSerializer(serializers.ModelSerializer):
     questions_count = serializers.SerializerMethodField()
     assessments_count = serializers.SerializerMethodField()
+    mcq_count = serializers.SerializerMethodField()
+    coding_count = serializers.SerializerMethodField()
+    is_mixed = serializers.SerializerMethodField()
+    pool_health = serializers.SerializerMethodField()
 
     class Meta:
         model = QuestionPool
@@ -1786,20 +1810,44 @@ class AdminQuestionPoolSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "code",
+            "question_type",
             "description",
             "category",
             "is_active",
             "questions_count",
             "assessments_count",
+            "mcq_count",
+            "coding_count",
+            "is_mixed",
+            "pool_health",
             "created_at",
             "updated_at",
         ]
 
+    def _get_breakdown(self, obj):
+        cached = getattr(obj, "_cached_type_breakdown", None)
+        if cached is None:
+            cached = get_pool_type_breakdown(obj)
+            setattr(obj, "_cached_type_breakdown", cached)
+        return cached
+
     def get_questions_count(self, obj):
-        return obj.items.count()
+        return self._get_breakdown(obj)["total"]
 
     def get_assessments_count(self, obj):
         return obj.assessment_sources.count()
+
+    def get_mcq_count(self, obj):
+        return self._get_breakdown(obj)["mcq_count"]
+
+    def get_coding_count(self, obj):
+        return self._get_breakdown(obj)["coding_count"]
+
+    def get_is_mixed(self, obj):
+        return self._get_breakdown(obj)["is_mixed"]
+
+    def get_pool_health(self, obj):
+        return compute_pool_health(obj, self._get_breakdown(obj))
 
 
 class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
@@ -1843,11 +1891,7 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
             return False
 
     def get_question_type(self, obj):
-        if self.get_has_programming_details(obj):
-            return "CODING"
-        if (obj.question.assessment_type or "").upper() == "CODING" or (obj.question.section_type or "").upper() == "CODING":
-            return "CODING"
-        return "MCQ"
+        return get_question_canonical_type(obj.question)
 
 
 class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):
@@ -1874,6 +1918,7 @@ class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):
 class AdminAssessmentPoolSourceSerializer(serializers.ModelSerializer):
     pool_name = serializers.CharField(source="pool.name", read_only=True)
     pool_code = serializers.CharField(source="pool.code", read_only=True)
+    pool_question_type = serializers.CharField(source="pool.question_type", read_only=True, default=None)
     section_name = serializers.CharField(source="section.name", read_only=True, default="")
     section_code = serializers.CharField(source="section.code", read_only=True, default="")
 
@@ -1885,6 +1930,7 @@ class AdminAssessmentPoolSourceSerializer(serializers.ModelSerializer):
             "pool",
             "pool_name",
             "pool_code",
+            "pool_question_type",
             "section",
             "section_name",
             "section_code",

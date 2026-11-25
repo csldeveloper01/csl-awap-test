@@ -28,6 +28,7 @@ import { AdminQuestionEditorModal, isCodingQuestion } from './AdminQuestionEdito
 import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
 import { AdminQuestionPoolsView } from './AdminQuestionPoolsView';
 import { ImportCodingJsonModal } from './ImportCodingJsonModal';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 interface AdminQuestionsViewProps {
   initialAssessmentId?: string;
@@ -120,6 +121,7 @@ function getSectionBadgeStyle(sectionDisplay: string, sectionType?: string): {
 }
 
 export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewProps) {
+  const { tokens } = useAdminTheme();
   const [questions, setQuestions] = useState<AdminQuestion[]>([]);
   const [assessments, setAssessments] = useState<AdminAssessment[]>([]);
   const [sections, setSections] = useState<AdminSection[]>([]);
@@ -693,28 +695,30 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   };
 
   return (
-    <div>
+    <div style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
       {/* ─── PHASE 2.1 SUB-NAVIGATION: BANK VS REUSABLE POOLS ───────────── */}
       <div
         style={{
           display: 'flex',
           gap: '8px',
           marginBottom: '20px',
-          borderBottom: '1px solid #E2E8F0',
+          borderBottom: `1px solid ${tokens.border}`,
           paddingBottom: '12px',
+          flexWrap: 'wrap',
         }}
       >
         <button
           type="button"
+          data-testid="questions-subtab-bank"
           onClick={() => setActiveSubTab('BANK')}
           style={{
             padding: '8px 18px',
             borderRadius: '8px',
             fontSize: '13px',
             fontWeight: 700,
-            backgroundColor: activeSubTab === 'BANK' ? '#1455B8' : '#F8FAFC',
-            color: activeSubTab === 'BANK' ? '#FFFFFF' : '#475569',
-            border: activeSubTab === 'BANK' ? 'none' : '1px solid #CBD5E1',
+            backgroundColor: activeSubTab === 'BANK' ? tokens.cslBlue : tokens.surfaceElevated,
+            color: activeSubTab === 'BANK' ? '#FFFFFF' : tokens.textSecondary,
+            border: activeSubTab === 'BANK' ? 'none' : `1px solid ${tokens.borderStrong}`,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
@@ -726,15 +730,16 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         </button>
         <button
           type="button"
+          data-testid="questions-subtab-pools"
           onClick={() => setActiveSubTab('POOLS')}
           style={{
             padding: '8px 18px',
             borderRadius: '8px',
             fontSize: '13px',
             fontWeight: 700,
-            backgroundColor: activeSubTab === 'POOLS' ? '#1455B8' : '#F8FAFC',
-            color: activeSubTab === 'POOLS' ? '#FFFFFF' : '#475569',
-            border: activeSubTab === 'POOLS' ? 'none' : '1px solid #CBD5E1',
+            backgroundColor: activeSubTab === 'POOLS' ? tokens.cslBlue : tokens.surfaceElevated,
+            color: activeSubTab === 'POOLS' ? '#FFFFFF' : tokens.textSecondary,
+            border: activeSubTab === 'POOLS' ? 'none' : `1px solid ${tokens.borderStrong}`,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
@@ -746,8 +751,8 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           {questionPools.length > 0 && (
             <span
               style={{
-                backgroundColor: activeSubTab === 'POOLS' ? 'rgba(255,255,255,0.25)' : '#E2E8F0',
-                color: activeSubTab === 'POOLS' ? '#FFFFFF' : '#334155',
+                backgroundColor: activeSubTab === 'POOLS' ? 'rgba(255,255,255,0.25)' : tokens.border,
+                color: activeSubTab === 'POOLS' ? '#FFFFFF' : tokens.textPrimary,
                 padding: '1px 6px',
                 borderRadius: '10px',
                 fontSize: '11px',
@@ -759,15 +764,16 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         </button>
         <button
           type="button"
+          data-testid="questions-subtab-unassigned"
           onClick={() => setActiveSubTab('UNASSIGNED')}
           style={{
             padding: '8px 18px',
             borderRadius: '8px',
             fontSize: '13px',
             fontWeight: 700,
-            backgroundColor: activeSubTab === 'UNASSIGNED' ? '#1455B8' : '#F8FAFC',
-            color: activeSubTab === 'UNASSIGNED' ? '#FFFFFF' : '#475569',
-            border: activeSubTab === 'UNASSIGNED' ? 'none' : '1px solid #CBD5E1',
+            backgroundColor: activeSubTab === 'UNASSIGNED' ? tokens.cslBlue : tokens.surfaceElevated,
+            color: activeSubTab === 'UNASSIGNED' ? '#FFFFFF' : tokens.textSecondary,
+            border: activeSubTab === 'UNASSIGNED' ? 'none' : `1px solid ${tokens.borderStrong}`,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
@@ -782,7 +788,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       {activeSubTab === 'POOLS' ? (
         <AdminQuestionPoolsView
           onCreateQuestion={() => openCreateMcqModal()}
-          onImportCSV={() => setShowImportModal(true)}
+          onCreateMcqQuestion={() => openCreateMcqModal()}
+          onCreateCodingQuestion={() => openCreateCodingModal()}
+          onImportCSV={() => {
+            setImportResult(null);
+            setShowImportModal(true);
+          }}
           onViewCentralBank={() => setActiveSubTab('BANK')}
           onNavigateToAssessment={(assId) => {
             window.location.href = `/csl-admin/?tab=assessments&assessmentId=${assId}`;
@@ -807,12 +818,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               width: '44px',
               height: '44px',
               borderRadius: '12px',
-              backgroundColor: 'rgba(20, 85, 184, 0.08)',
-              border: '1px solid rgba(20, 85, 184, 0.2)',
+              backgroundColor: tokens.cslBlueSoftBg,
+              border: `1px solid ${tokens.cslBlueSoftBorder}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#1455B8',
+              color: tokens.cslBlue,
             }}
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -825,14 +836,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               style={{
                 fontSize: '22px',
                 fontWeight: 800,
-                color: '#0B2E6F',
+                color: tokens.cslNavy,
                 margin: '0 0 2px 0',
                 letterSpacing: '-0.02em',
               }}
             >
               Independent Question Bank
             </h2>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
+            <p style={{ fontSize: '13px', color: tokens.textMuted, margin: 0 }}>
               Central repository of reusable curriculum items across dynamic sections. Questions can be assigned to multiple assessment pools.
             </p>
           </div>
@@ -967,31 +978,31 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       >
         <div
           style={{
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.surfaceCard,
             borderRadius: '12px',
-            border: '1px solid #E2E8F0',
+            border: `1px solid ${tokens.border}`,
             padding: '16px 18px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: tokens.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Total Bank Questions
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#0B2E6F', marginTop: '4px' }}>
+          <div style={{ fontSize: '26px', fontWeight: 800, color: tokens.cslNavy, marginTop: '4px' }}>
             {questions.length}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '2px' }}>
+          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
             Available across all curriculum tracks
           </div>
         </div>
 
         <div
           style={{
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.surfaceCard,
             borderRadius: '12px',
-            border: '1px solid #E2E8F0',
+            border: `1px solid ${tokens.border}`,
             padding: '16px 18px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
           <div style={{ fontSize: '12px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1000,47 +1011,47 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           <div style={{ fontSize: '26px', fontWeight: 800, color: '#16A34A', marginTop: '4px' }}>
             {questions.filter((q) => q.is_active && !q.is_archived).length}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
-            Live for assignment & delivery
+          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
+            Live for assignment &amp; delivery
           </div>
         </div>
 
         <div
           style={{
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.surfaceCard,
             borderRadius: '12px',
-            border: '1px solid #E2E8F0',
+            border: `1px solid ${tokens.border}`,
             padding: '16px 18px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#5B21B6', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#7C3AED', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Reusable Sections
           </div>
           <div style={{ fontSize: '26px', fontWeight: 800, color: '#7C3AED', marginTop: '4px' }}>
             {sections.length}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
             Categorized section buckets
           </div>
         </div>
 
         <div
           style={{
-            backgroundColor: '#FFFFFF',
+            backgroundColor: tokens.surfaceCard,
             borderRadius: '12px',
-            border: '1px solid #E2E8F0',
+            border: `1px solid ${tokens.border}`,
             padding: '16px 18px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#9A3412', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#EA580C', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Archived Questions
           </div>
           <div style={{ fontSize: '26px', fontWeight: 800, color: '#EA580C', marginTop: '4px' }}>
             {questions.filter((q) => q.is_archived).length}
           </div>
-          <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
             Safely retained historical items
           </div>
         </div>
@@ -1515,16 +1526,16 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       {/* ─── QUESTIONS TABLE ───────────────────────────────────────── */}
       <div
         style={{
-          backgroundColor: '#FFFFFF',
+          backgroundColor: tokens.surfaceCard,
           borderRadius: '14px',
-          border: '1.5px solid rgba(245, 184, 61, 0.25)',
+          border: `1px solid ${tokens.border}`,
           overflow: 'hidden',
-          boxShadow: '0 4px 14px rgba(11, 46, 111, 0.04)',
+          boxShadow: tokens.cardShadow,
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px', color: tokens.textPrimary }}>
           <thead>
-            <tr style={{ backgroundColor: '#FAF7F3', borderBottom: '1.5px solid #E2E8F0', color: '#475569' }}>
+            <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1.5px solid ${tokens.border}`, color: tokens.textSecondary }}>
               <th style={{ padding: '12px 14px', width: '40px', textAlign: 'center' }}>
                 <input
                   type="checkbox"
@@ -2060,35 +2071,6 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           </div>
         </div>
       </div>
-
-      {/* ─── DEDICATED MCQ & CODING QUESTION EDITOR MODALS ────────── */}
-      <AdminQuestionEditorModal
-        isOpen={showMcqEditorModal}
-        question={editingQuestion}
-        assessments={assessments}
-        sections={sections}
-        defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
-        onClose={() => {
-          setShowMcqEditorModal(false);
-          setEditingQuestion(null);
-        }}
-        onSave={handleSaveQuestion}
-        saving={savingQuestion}
-      />
-
-      <AdminCodingQuestionModal
-        isOpen={showCodingEditorModal}
-        question={editingQuestion}
-        assessments={assessments}
-        sections={sections}
-        defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
-        onClose={() => {
-          setShowCodingEditorModal(false);
-          setEditingQuestion(null);
-        }}
-        onSave={handleSaveQuestion}
-        saving={savingQuestion}
-      />
 
       {/* ─── BULK EDIT PROPERTIES MODAL ────────────────────────────── */}
       {showBulkModal && (
@@ -2748,6 +2730,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       
       {showCodingJsonModal && (
         <ImportCodingJsonModal
+          pools={questionPools}
           onClose={() => setShowCodingJsonModal(false)}
           onSuccess={() => {
             loadQuestions();
@@ -3136,55 +3119,108 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 </button>
               </div>
 
-              {poolAssignTargetType === 'POOLS' ? (
-                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
-                  {questionPools.length === 0 ? (
-                    <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
-                      No reusable question pools found. Switch to the "Question Pools" tab to create one.
-                    </div>
-                  ) : (
-                    questionPools.map((p) => {
-                      const isChecked = selectedPoolIds.includes(p.id);
-                      return (
-                        <label
-                          key={p.id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '10px',
-                            padding: '8px 10px',
-                            borderRadius: '6px',
-                            backgroundColor: isChecked ? '#F0F7FF' : 'transparent',
-                            cursor: 'pointer',
-                            marginBottom: '4px',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedPoolIds((prev) => [...prev, p.id]);
-                              } else {
-                                setSelectedPoolIds((prev) => prev.filter((id) => id !== p.id));
-                              }
+              {poolAssignTargetType === 'POOLS' ? (() => {
+                const selectedQuestions = questions.filter((q) => targetQuestionIdsForPool.includes(q.id));
+                const hasCoding = selectedQuestions.some((q) => isCodingQuestion(q));
+                const hasMcq = selectedQuestions.some((q) => !isCodingQuestion(q));
+                const isMixedSelection = hasCoding && hasMcq;
+                const selectionType: 'MCQ' | 'CODING' | null = isMixedSelection ? null : hasCoding ? 'CODING' : 'MCQ';
+
+                return (
+                  <div style={{ maxHeight: '300px', overflowY: 'auto', border: `1px solid ${tokens.borderStrong}`, borderRadius: '8px', padding: '8px', marginBottom: '16px', backgroundColor: tokens.surfaceCard }}>
+                    {isMixedSelection && (
+                      <div style={{ backgroundColor: '#FEF2F2', color: '#DC2626', padding: '10px', borderRadius: '6px', marginBottom: '8px', fontSize: '12px', fontWeight: 600 }}>
+                        Mixed selection detected (MCQ + Coding). A Question Pool can only contain one question type — please select only MCQ or only Coding questions.
+                      </div>
+                    )}
+                    {questionPools.length === 0 ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: tokens.textMuted, fontSize: '13px' }}>
+                        No reusable question pools found. Switch to the &quot;Reusable Question Pools&quot; tab to create one.
+                      </div>
+                    ) : (
+                      questionPools.map((p) => {
+                        const isChecked = selectedPoolIds.includes(p.id);
+                        const poolType = p.question_type || null;
+                        const isCompatible = Boolean(selectionType && poolType && poolType === selectionType);
+                        const incompatibilityReason = isMixedSelection
+                          ? 'Selection mixes MCQ & Coding'
+                          : !poolType
+                          ? p.is_mixed
+                            ? 'Mixed legacy pool must be reconciled first'
+                            : 'Pool type is unclassified'
+                          : poolType !== selectionType
+                          ? `Requires ${poolType} questions`
+                          : '';
+
+                        return (
+                          <label
+                            key={p.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              backgroundColor: isChecked ? tokens.cslBlueSoftBg : 'transparent',
+                              cursor: isCompatible ? 'pointer' : 'not-allowed',
+                              opacity: isCompatible ? 1 : 0.55,
+                              marginBottom: '4px',
                             }}
-                            style={{ width: '16px', height: '16px', accentColor: '#1455B8' }}
-                          />
-                          <div>
-                            <span style={{ fontWeight: 700, color: '#0B2E6F', fontSize: '13px' }}>
-                              [{p.code}] {p.name}
-                            </span>
-                            <div style={{ fontSize: '11px', color: '#64748B' }}>
-                              Category: {p.category || 'General'} • Questions: {p.questions_count || 0}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={!isCompatible}
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (!isCompatible) return;
+                                if (e.target.checked) {
+                                  setSelectedPoolIds((prev) => [...prev, p.id]);
+                                } else {
+                                  setSelectedPoolIds((prev) => prev.filter((id) => id !== p.id));
+                                }
+                              }}
+                              style={{ width: '16px', height: '16px', accentColor: tokens.cslBlue }}
+                            />
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 700, color: tokens.cslNavy, fontSize: '13px' }}>
+                                  [{p.code}] {p.name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 800,
+                                    padding: '2px 7px',
+                                    borderRadius: '9999px',
+                                    backgroundColor:
+                                      poolType === 'CODING'
+                                        ? 'rgba(14, 165, 233, 0.14)'
+                                        : poolType === 'MCQ'
+                                        ? tokens.cslBlueSoftBg
+                                        : 'rgba(245, 158, 11, 0.14)',
+                                    color:
+                                      poolType === 'CODING'
+                                        ? '#0284C7'
+                                        : poolType === 'MCQ'
+                                        ? tokens.cslBlue
+                                        : '#B45309',
+                                  }}
+                                >
+                                  {poolType || (p.is_mixed ? 'MIXED' : 'UNCLASSIFIED')}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '11px', color: tokens.textMuted }}>
+                                Category: {p.category || 'General'} • Questions: {p.questions_count || 0}
+                                {incompatibilityReason ? ` • ⚠️ ${incompatibilityReason}` : ''}
+                              </div>
                             </div>
-                          </div>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              ) : (
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                );
+              })() : (
                 <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
                   {assessments.map((a) => {
                     const isChecked = selectedAssessmentIdsForPool.includes(a.id);
@@ -3274,6 +3310,35 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       )}
         </>
       )}
+
+      {/* ─── DEDICATED MCQ & CODING QUESTION EDITOR MODALS (SHARED ACROSS BANK & POOLS) ────────── */}
+      <AdminQuestionEditorModal
+        isOpen={showMcqEditorModal}
+        question={editingQuestion}
+        assessments={assessments}
+        sections={sections}
+        defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
+        onClose={() => {
+          setShowMcqEditorModal(false);
+          setEditingQuestion(null);
+        }}
+        onSave={handleSaveQuestion}
+        saving={savingQuestion}
+      />
+
+      <AdminCodingQuestionModal
+        isOpen={showCodingEditorModal}
+        question={editingQuestion}
+        assessments={assessments}
+        sections={sections}
+        defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
+        onClose={() => {
+          setShowCodingEditorModal(false);
+          setEditingQuestion(null);
+        }}
+        onSave={handleSaveQuestion}
+        saving={savingQuestion}
+      />
     </div>
   );
 }

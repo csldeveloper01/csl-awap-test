@@ -283,6 +283,7 @@ class QuestionPoolCsvImportTests(BaseWorkflowRepairTestCase):
         self.pool = QuestionPool.objects.create(
             name="DSA Batch Pool",
             code=f"POOL_{uuid.uuid4().hex[:6].upper()}",
+            question_type="MCQ",
             description="Targeted pool",
         )
         self.global_baseline = QuestionBank.objects.create(
@@ -335,7 +336,7 @@ class QuestionPoolCsvImportTests(BaseWorkflowRepairTestCase):
         self.assertEqual(imp_res.data["imported_count"], 2)
         self.assertFalse(imp_res.data["add_to_global_bank"])
 
-        # 2) CODING CSV into the same pool (still isolated with is_global=False)
+        # 2) CODING CSV into an MCQ pool MUST be rejected (HTTP 400)
         coding_csv = (
             "section;prompt;instructions;constraints;input_format;output_format;allowed_languages;example_input_1;example_output_1;hidden_input_1;hidden_output_1;difficulty\n"
             "AlgoSection;Print sum of two numbers;Read two integers and print sum;1<=a,b<=1000;Two ints;Single int;python,cpp;2 3;5;10 20;30;MEDIUM\n"
@@ -348,12 +349,43 @@ class QuestionPoolCsvImportTests(BaseWorkflowRepairTestCase):
             },
             format="multipart",
         )
-        self.assertEqual(coding_imp.status_code, 200, coding_imp.data)
-        self.assertEqual(coding_imp.data["detected_type"], "CODING")
-        self.assertEqual(coding_imp.data["imported_count"], 1)
+        self.assertEqual(coding_imp.status_code, 400, coding_imp.data)
+
+        # Coding JSON into a CODING pool with add_to_global_bank=false stays isolated
+        coding_pool = QuestionPool.objects.create(
+            name="DSA Coding Pool",
+            code=f"CPOOL_{uuid.uuid4().hex[:6].upper()}",
+            question_type="CODING",
+        )
+        coding_json_res = self.admin_client.post(
+            f"/api/csl-admin/questions/import-coding-json/?pool_id={coding_pool.id}",
+            {
+                "pool_id": str(coding_pool.id),
+                "add_to_global_bank": False,
+                "questions": [
+                    {
+                        "title": "Print sum of two numbers",
+                        "problem_statement": "Read two integers and print sum",
+                        "constraints": "1<=a,b<=1000",
+                        "input_format": "Two ints",
+                        "output_format": "Single int",
+                        "difficulty": "MEDIUM",
+                        "section_type": self.coding_section.code,
+                        "marks": 10,
+                        "allowed_languages": ["python", "cpp"],
+                        "test_cases": [
+                            {"input_text": "2 3", "expected_output": "5", "is_public": True},
+                            {"input_text": "10 20", "expected_output": "30", "is_public": False},
+                        ],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(coding_json_res.status_code, 201, coding_json_res.data)
 
         pool_items = QuestionPoolItem.objects.filter(pool=self.pool).select_related("question")
-        self.assertEqual(pool_items.count(), 3)
+        self.assertEqual(pool_items.count(), 2)
         for item in pool_items:
             self.assertFalse(item.question.is_global)
 
@@ -372,8 +404,9 @@ class QuestionPoolCsvImportTests(BaseWorkflowRepairTestCase):
         all_prompts = [q["prompt"] for q in all_items]
         self.assertIn("What is 2+2?", all_prompts)
 
-        # Coding row should have created ProgrammingQuestion details and test cases
+        # Coding JSON should have created ProgrammingQuestion details and test cases
         coding_q = QuestionBank.objects.get(prompt="Print sum of two numbers")
+        self.assertFalse(coding_q.is_global)
         self.assertEqual(coding_q.section_type, self.coding_section.code)
         self.assertTrue(hasattr(coding_q, "programming_details"))
         self.assertEqual(coding_q.programming_details.test_cases.count(), 2)
@@ -746,3 +779,200 @@ class DriveInlineAndAdminRepairsTests(BaseWorkflowRepairTestCase):
         self.assertEqual(reassess_res.status_code, 200, reassess_res.data)
         attempt.refresh_from_db()
         self.assertEqual(attempt.state, AssessmentAttempt.State.IN_PROGRESS)
+
+
+class PoolTypeEnforcementAndImportTests(BaseWorkflowRepairTestCase):
+    def setUp(self):
+        super().setUp()
+        self.mcq_q = QuestionBank.objects.create(
+            prompt="MCQ Only Sample?",
+            section=self.mcq_section,
+            section_type=self.mcq_section.code,
+            option_a="A",
+            option_b="B",
+            option_c="C",
+            option_d="D",
+            correct_option="A",
+            is_active=True,
+        )
+        self.coding_q = QuestionBank.objects.create(
+            prompt="Coding Only Sample",
+            section=self.coding_section,
+            section_type=self.coding_section.code,
+            assessment_type="CODING",
+            option_a="N/A (Coding Question)",
+            option_b="N/A (Coding Question)",
+            option_c="N/A (Coding Question)",
+            option_d="N/A (Coding Question)",
+            correct_option="A",
+            is_active=True,
+        )
+        prog = ProgrammingQuestion.objects.create(
+            question=self.coding_q,
+            problem_statement="Print 42",
+            allowed_languages=["python"],
+        )
+        ProgrammingTestCase.objects.create(
+            programming_question=prog,
+            input_text="",
+            expected_output="42",
+            is_public=True,
+        )
+
+    def test_pool_creation_requires_type_and_rejects_type_change_when_non_empty(self):
+        # Missing question_type rejected
+        missing_res = self.admin_client.post(
+            "/api/csl-admin/question-pools/",
+            {"name": "Untyped Pool", "code": f"UNT_{uuid.uuid4().hex[:6].upper()}"},
+            format="json",
+        )
+        self.assertEqual(missing_res.status_code, 400)
+
+        # Create valid MCQ pool
+        mcq_pool_res = self.admin_client.post(
+            "/api/csl-admin/question-pools/",
+            {"name": "Typed MCQ Pool", "question_type": "MCQ"},
+            format="json",
+        )
+        self.assertEqual(mcq_pool_res.status_code, 201, mcq_pool_res.data)
+        self.assertEqual(mcq_pool_res.data["question_type"], "MCQ")
+        pool_id = mcq_pool_res.data["id"]
+
+        # While empty, type can be changed safely to CODING
+        swap_res = self.admin_client.put(
+            f"/api/csl-admin/question-pools/{pool_id}/",
+            {"question_type": "CODING"},
+            format="json",
+        )
+        self.assertEqual(swap_res.status_code, 200, swap_res.data)
+        self.assertEqual(swap_res.data["question_type"], "CODING")
+
+        # Add coding question -> now changing back to MCQ must be blocked (400)
+        add_res = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{pool_id}/items/",
+            {"question_ids": [self.coding_q.id], "action": "add"},
+            format="json",
+        )
+        self.assertEqual(add_res.status_code, 200, add_res.data)
+        blocked_res = self.admin_client.put(
+            f"/api/csl-admin/question-pools/{pool_id}/",
+            {"question_type": "MCQ"},
+            format="json",
+        )
+        self.assertEqual(blocked_res.status_code, 400)
+
+    def test_incompatible_mutations_and_imports_are_rejected(self):
+        mcq_pool = QuestionPool.objects.create(name="Strict MCQ Pool", code=f"SMCQ_{uuid.uuid4().hex[:5].upper()}", question_type="MCQ")
+        coding_pool = QuestionPool.objects.create(name="Strict Coding Pool", code=f"SCOD_{uuid.uuid4().hex[:5].upper()}", question_type="CODING")
+
+        # 1. Direct creation mismatch
+        r1 = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{mcq_pool.id}/questions/",
+            {
+                "prompt": "Bad coding in MCQ pool",
+                "question_type": "CODING",
+                "coding_details": {"problem_statement": "x", "test_cases": [{"input_text": "1", "expected_output": "1"}]},
+            },
+            format="json",
+        )
+        self.assertEqual(r1.status_code, 400)
+
+        r2 = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{coding_pool.id}/questions/",
+            {
+                "prompt": "Bad MCQ in Coding pool",
+                "question_type": "MCQ",
+                "option_a": "A", "option_b": "B", "option_c": "C", "option_d": "D",
+                "correct_option": "A",
+            },
+            format="json",
+        )
+        self.assertEqual(r2.status_code, 400)
+
+        # 2. Items endpoint mismatch
+        r3 = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{mcq_pool.id}/items/",
+            {"question_ids": [self.coding_q.id], "action": "add"},
+            format="json",
+        )
+        self.assertEqual(r3.status_code, 400)
+
+        r4 = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{coding_pool.id}/items/",
+            {"question_ids": [self.mcq_q.id], "action": "add"},
+            format="json",
+        )
+        self.assertEqual(r4.status_code, 400)
+
+        # 3. Bulk assign mismatch
+        r5 = self.admin_client.post(
+            "/api/csl-admin/questions/bulk-assign-pool/",
+            {"question_ids": [self.mcq_q.id], "pool_ids": [str(coding_pool.id)]},
+            format="json",
+        )
+        self.assertEqual(r5.status_code, 400)
+
+        # 4. CSV import into Coding pool rejected
+        r6 = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{coding_pool.id}/import-preview/",
+            {"csv_content": "prompt,option_a,option_b,option_c,option_d,correct_option\nQ1,1,2,3,4,A"},
+            format="json",
+        )
+        self.assertEqual(r6.status_code, 400)
+
+        # 5. Coding JSON import into MCQ pool rejected (both preview and commit)
+        r7 = self.admin_client.post(
+            f"/api/csl-admin/questions/import-coding-json/?pool_id={mcq_pool.id}",
+            {
+                "pool_id": str(mcq_pool.id),
+                "questions": [{
+                    "title": "Blocked Coding",
+                    "problem_statement": "Print 1",
+                    "test_cases": [{"input_text": "", "expected_output": "1", "is_public": True}],
+                }],
+            },
+            format="json",
+        )
+        self.assertEqual(r7.status_code, 400)
+
+        # 6. Silent type flip on edit rejected
+        r8 = self.admin_client.put(
+            f"/api/csl-admin/questions/{self.mcq_q.id}/",
+            {"question_type": "CODING"},
+            format="json",
+        )
+        self.assertEqual(r8.status_code, 400)
+
+    def test_mixed_legacy_pool_reconciliation_preserves_question_bank(self):
+        legacy_pool = QuestionPool.objects.create(
+            name="Legacy Mixed Pool",
+            code=f"MIX_{uuid.uuid4().hex[:5].upper()}",
+            question_type=None,
+        )
+        QuestionPoolItem.objects.create(pool=legacy_pool, question=self.mcq_q, order=1)
+        QuestionPoolItem.objects.create(pool=legacy_pool, question=self.coding_q, order=2)
+
+        detail = self.admin_client.get(f"/api/csl-admin/question-pools/{legacy_pool.id}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertTrue(detail.data["is_mixed"])
+        self.assertEqual(detail.data["pool_health"], "MIXED_TYPES")
+
+        # Cannot simply PUT question_type=CODING while MCQ remains inside
+        fail_put = self.admin_client.put(
+            f"/api/csl-admin/question-pools/{legacy_pool.id}/",
+            {"question_type": "CODING"},
+            format="json",
+        )
+        self.assertEqual(fail_put.status_code, 400)
+
+        # Reconcile as CODING -> detaches MCQ link without deleting QuestionBank
+        rec_res = self.admin_client.post(
+            f"/api/csl-admin/question-pools/{legacy_pool.id}/reconcile/",
+            {"target_type": "CODING", "detach_incompatible": True},
+            format="json",
+        )
+        self.assertEqual(rec_res.status_code, 200, rec_res.data)
+        self.assertEqual(rec_res.data["detached_count"], 1)
+        self.assertEqual(rec_res.data["pool"]["question_type"], "CODING")
+        self.assertEqual(rec_res.data["pool"]["questions_count"], 1)
+        self.assertTrue(QuestionBank.objects.filter(id=self.mcq_q.id).exists())

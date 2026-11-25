@@ -477,6 +477,7 @@ class Phase21WorkflowTests(TestCase):
         pool_res = self.client.post("/api/csl-admin/question-pools/", {
             "name": "Core Aptitude 2026",
             "category": "Aptitude",
+            "question_type": "MCQ",
             "description": "Standard diagnostic aptitude question pool",
         })
         self.assertEqual(pool_res.status_code, status.HTTP_201_CREATED)

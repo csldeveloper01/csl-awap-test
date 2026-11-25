@@ -13,6 +13,7 @@ from .models import (
     ProgrammingQuestion,
     ProgrammingTestCase,
 )
+from .question_type_utils import ensure_pool_accepts_type
 
 SUPPORTED_ENCODINGS = [
     "utf-8-sig",
@@ -296,6 +297,10 @@ def parse_and_validate_csv(
         }
 
     header_mapping, unmapped_headers, detected_type = map_headers(reader.fieldnames)
+
+    if target_pools:
+        for pool in target_pools:
+            ensure_pool_accepts_type(pool, detected_type, context="CSV import")
 
     # Basic header check
     if "prompt" not in header_mapping:

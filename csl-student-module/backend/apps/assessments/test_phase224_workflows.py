@@ -248,7 +248,7 @@ class Phase224WorkflowTests(TestCase):
         6. Verify lifecycle locking: closed/archived assessment rejects modifications.
         """
         # Create pool
-        pool = QuestionPool.objects.create(name="Algorithm Pool", code="POOL-ALGO", category="Programming")
+        pool = QuestionPool.objects.create(name="Algorithm Pool", code="POOL-ALGO", category="Programming", question_type="CODING")
         q1 = QuestionBank.objects.create(prompt="Binary search complexity?", section=self.sec_cod, section_type=QuestionBank.SectionType.CODING, marks=5)
         q2 = QuestionBank.objects.create(prompt="Merge sort complexity?", section=self.sec_cod, section_type=QuestionBank.SectionType.CODING, marks=5)
 

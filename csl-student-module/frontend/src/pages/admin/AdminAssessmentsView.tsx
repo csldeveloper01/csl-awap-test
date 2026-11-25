@@ -2248,6 +2248,29 @@ export function AdminAssessmentsView({
                             />
                             <div>
                               <strong style={{ color: '#0D52D6' }}>{pool.name}</strong>
+                              <span
+                                style={{
+                                  marginLeft: '6px',
+                                  padding: '1px 6px',
+                                  borderRadius: '9999px',
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  backgroundColor:
+                                    pool.question_type === 'CODING'
+                                      ? '#E0F2FE'
+                                      : pool.question_type === 'MCQ'
+                                      ? '#EFF6FF'
+                                      : '#FEF3C7',
+                                  color:
+                                    pool.question_type === 'CODING'
+                                      ? '#0369A1'
+                                      : pool.question_type === 'MCQ'
+                                      ? '#1455B8'
+                                      : '#92400E',
+                                }}
+                              >
+                                {pool.question_type || (pool.is_mixed ? 'MIXED' : 'UNSET')}
+                              </span>
                               <span style={{ color: '#64748B', marginLeft: '4px' }}>({pool.questions_count ?? 0} Qs)</span>
                             </div>
                           </label>
@@ -6677,7 +6700,7 @@ export function AdminAssessmentsView({
                     <option value="">-- Choose a Question Pool --</option>
                     {availableQuestionPools.map((p) => (
                       <option key={p.id} value={p.id}>
-                        [{p.code}] {p.name} ({p.questions_count} questions)
+                        [{p.code}] {p.name} — {p.question_type || (p.is_mixed ? 'MIXED' : 'UNCLASSIFIED')} ({p.questions_count} questions)
                       </option>
                     ))}
                   </select>

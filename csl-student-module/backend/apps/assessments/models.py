@@ -151,11 +151,23 @@ class QuestionBank(models.Model):
 class QuestionPool(models.Model):
     """
     Independent reusable collection of questions, decoupled from specific assessments.
-    Can be curated, categorized, and linked to multiple assessments simultaneously.
+    Strictly typed as MCQ or CODING to prevent mixed-format contamination.
     """
+    class QuestionType(models.TextChoices):
+        MCQ = "MCQ", "MCQ Question Pool"
+        CODING = "CODING", "Coding Question Pool"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=150, unique=True, help_text="Pool name, e.g. Core Aptitude 2026")
     code = models.CharField(max_length=50, unique=True, db_index=True, help_text="Unique uppercase code, e.g. POOL_APT_2026")
+    question_type = models.CharField(
+        max_length=10,
+        choices=QuestionType.choices,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Authoritative pool question format: MCQ or CODING (null only for unclassified/mixed legacy pools)",
+    )
     description = models.TextField(blank=True, default="", help_text="Description of pool contents/purpose")
     category = models.CharField(max_length=100, blank=True, default="", db_index=True, help_text="Category tag, e.g. Aptitude, Technical")
     is_active = models.BooleanField(default=True, db_index=True)
@@ -166,6 +178,7 @@ class QuestionPool(models.Model):
         ordering = ["name"]
         indexes = [
             models.Index(fields=["code"]),
+            models.Index(fields=["question_type", "is_active"]),
             models.Index(fields=["category", "is_active"]),
         ]
 

@@ -3,9 +3,11 @@ import {
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
+  type AdminQuestionPool,
   getAdminSections,
 } from '../../api/admin';
 import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 export function isCodingQuestion(q?: Partial<AdminQuestion> | null): boolean {
   if (!q) return false;
@@ -29,6 +31,7 @@ interface AdminQuestionEditorModalProps {
   assessments?: AdminAssessment[];
   defaultAssessmentId?: string;
   sections?: AdminSection[];
+  targetPool?: AdminQuestionPool | null;
 }
 
 const EMPTY_ASSESSMENTS: AdminAssessment[] = [];
@@ -43,7 +46,9 @@ export function AdminQuestionEditorModal({
   assessments = EMPTY_ASSESSMENTS,
   defaultAssessmentId = '',
   sections = EMPTY_SECTIONS,
+  targetPool = null,
 }: AdminQuestionEditorModalProps) {
+  const { tokens } = useAdminTheme();
   const isEditMode = Boolean(question && question.id);
 
   // Form fields (MCQ Only)
@@ -265,8 +270,9 @@ export function AdminQuestionEditorModal({
       return;
     }
 
-    const payload: Partial<AdminQuestion> & { assessment_id?: string; question_type: 'MCQ' } = {
-      ...(assessmentId.trim() ? { assessment_id: assessmentId.trim() } : {}),
+    const payload: Partial<AdminQuestion> & { assessment_id?: string; pool_id?: string; question_type: 'MCQ' } = {
+      ...(!targetPool && assessmentId.trim() ? { assessment_id: assessmentId.trim() } : {}),
+      ...(targetPool ? { pool_id: targetPool.id } : {}),
       marks: Number(marks) || 1,
       is_archived: isArchived,
       prompt: prompt.trim(),
@@ -363,7 +369,7 @@ export function AdminQuestionEditorModal({
         zIndex: 1000,
         padding: '20px 16px',
         boxSizing: 'border-box',
-        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        fontFamily: tokens.fontFamily,
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) handleAttemptClose();
@@ -375,10 +381,10 @@ export function AdminQuestionEditorModal({
           maxWidth: '1280px',
           height: '92vh',
           maxHeight: '92vh',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '20px',
-          border: '1.5px solid rgba(245, 184, 61, 0.4)',
-          boxShadow: '0 25px 60px -15px rgba(11, 46, 111, 0.3)',
+          backgroundColor: tokens.surfaceCard,
+          borderRadius: '16px',
+          border: `1.5px solid ${tokens.border}`,
+          boxShadow: tokens.modalShadow,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -389,8 +395,8 @@ export function AdminQuestionEditorModal({
         <div
           style={{
             padding: '18px 28px',
-            borderBottom: '1px solid #E2E8F0',
-            backgroundColor: '#FFFFFF',
+            borderBottom: `1px solid ${tokens.border}`,
+            backgroundColor: tokens.surfaceCard,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
@@ -404,13 +410,13 @@ export function AdminQuestionEditorModal({
                 width: '44px',
                 height: '44px',
                 borderRadius: '12px',
-                backgroundColor: '#EFF6FF',
-                border: '1.5px solid #BFDBFE',
+                backgroundColor: tokens.cslBlueSoftBg,
+                border: `1.5px solid ${tokens.cslBlueSoftBorder}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: '22px',
-                color: '#1455B8',
+                color: tokens.cslBlue,
                 flexShrink: 0,
               }}
             >
@@ -421,16 +427,22 @@ export function AdminQuestionEditorModal({
                 style={{
                   fontSize: '20px',
                   fontWeight: 800,
-                  color: '#0B2E6F',
+                  color: tokens.cslNavy,
                   margin: '0 0 2px 0',
                   letterSpacing: '-0.01em',
                 }}
               >
-                {isEditMode ? `Edit MCQ Question #${question!.id}` : 'Create MCQ Question'}
+                {isEditMode
+                  ? `Edit MCQ Question #${question!.id}`
+                  : targetPool
+                  ? `Add MCQ to ${targetPool.name}`
+                  : 'Create MCQ Question'}
               </h2>
-              <p style={{ fontSize: '12.5px', color: '#64748B', margin: 0 }}>
+              <p style={{ fontSize: '12.5px', color: tokens.textMuted, margin: 0 }}>
                 {isEditMode
                   ? 'Update multiple choice question prompt, answer options, or explanation.'
+                  : targetPool
+                  ? `Authoring directly inside MCQ Pool "${targetPool.code}".`
                   : 'Compose a multiple choice question with options, correct answer, and explanation.'}
               </p>
             </div>
@@ -529,7 +541,7 @@ export function AdminQuestionEditorModal({
             flex: 1,
             overflowY: 'auto',
             padding: '24px 28px',
-            backgroundColor: '#FCFAF5',
+            backgroundColor: tokens.pageBg,
             boxSizing: 'border-box',
           }}
         >
@@ -546,93 +558,145 @@ export function AdminQuestionEditorModal({
                   LEFT COLUMN: THE FORM EDITOR (approx 65%)
                   ──────────────────────────────────────────────────────── */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {/* 0. Target Assessment / Question Pool Selector */}
-                <div
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    borderRadius: '14px',
-                    border: '1.5px solid #1455B8',
-                    padding: '16px 20px',
-                    boxShadow: '0 2px 8px rgba(11, 46, 111, 0.04)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                    <label
-                      htmlFor="question-assessment-selector"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontSize: '12.5px',
-                        fontWeight: 800,
-                        color: '#0B2E6F',
-                      }}
-                    >
-                      <span>🏛️</span>
-                      <span>Target Assessment (Optional - Independent Question Bank)</span>
-                    </label>
-                    {selectedAssessmentObj && (
+                {/* 0. Target Pool Banner OR Optional Assessment Selector */}
+                {targetPool ? (
+                  <div
+                    style={{
+                      backgroundColor: tokens.cslBlueSoftBg,
+                      borderRadius: '14px',
+                      border: `1.5px solid ${tokens.cslBlueSoftBorder}`,
+                      padding: '14px 18px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11.5px', fontWeight: 800, color: tokens.cslBlue, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        Target MCQ Question Pool
+                      </div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: tokens.cslNavy, marginTop: '2px' }}>
+                        {targetPool.name}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span
                         style={{
                           fontSize: '11px',
                           fontWeight: 700,
-                          padding: '2px 10px',
+                          padding: '3px 10px',
                           borderRadius: '9999px',
-                          backgroundColor: '#EFF6FF',
-                          color: '#1455B8',
-                          border: '1px solid #BFDBFE',
+                          backgroundColor: tokens.surfaceCard,
+                          color: tokens.cslBlue,
+                          border: `1px solid ${tokens.cslBlueSoftBorder}`,
                         }}
                       >
-                        Code: {selectedAssessmentObj.code}
+                        Code: {targetPool.code}
                       </span>
-                    )}
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          padding: '3px 10px',
+                          borderRadius: '9999px',
+                          backgroundColor: tokens.cslBlue,
+                          color: '#FFFFFF',
+                        }}
+                      >
+                        MCQ ONLY
+                      </span>
+                    </div>
                   </div>
-
-                  <select
-                    id="question-assessment-selector"
-                    value={assessmentId}
-                    onChange={(e) => setAssessmentId(e.target.value)}
+                ) : (
+                  <div
                     style={{
-                      width: '100%',
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: '1.5px solid #CBD5E1',
-                      fontSize: '13.5px',
-                      fontWeight: 600,
-                      color: '#0F172A',
-                      backgroundColor: '#F8FAFC',
-                      boxSizing: 'border-box',
-                      outlineColor: '#1455B8',
+                      backgroundColor: tokens.surfaceCard,
+                      borderRadius: '14px',
+                      border: `1.5px solid ${tokens.cslBlue}`,
+                      padding: '16px 20px',
+                      boxShadow: tokens.cardShadow,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
                     }}
                   >
-                    <option value="">-- Standalone Question Bank (No Assessment Assigned) --</option>
-                    {assessments && assessments.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.code} — {a.title} ({a.pool_questions_count ?? 0} questions in pool)
-                      </option>
-                    ))}
-                    {/* Fallback if editing a question whose assigned assessment isn't in assessments array */}
-                    {question?.assigned_assessments?.map((a) => {
-                      if (!assessments?.some((item) => item.id === a.id)) {
-                        return (
-                          <option key={a.id} value={a.id}>
-                            {a.code} — {a.title} (Currently Assigned)
-                          </option>
-                        );
-                      }
-                      return null;
-                    })}
-                  </select>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <label
+                        htmlFor="question-assessment-selector"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '12.5px',
+                          fontWeight: 800,
+                          color: tokens.cslNavy,
+                        }}
+                      >
+                        <span>🏛️</span>
+                        <span>Target Assessment (Optional - Independent Question Bank)</span>
+                      </label>
+                      {selectedAssessmentObj && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            padding: '2px 10px',
+                            borderRadius: '9999px',
+                            backgroundColor: tokens.cslBlueSoftBg,
+                            color: tokens.cslBlue,
+                            border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                          }}
+                        >
+                          Code: {selectedAssessmentObj.code}
+                        </span>
+                      )}
+                    </div>
 
-                  <p style={{ margin: 0, fontSize: '11.5px', color: '#64748B', lineHeight: 1.4 }}>
-                    {isEditMode
-                      ? 'Optional: select an assessment to assign or move this question.'
-                      : 'Optional: link directly to an assessment or leave unassigned in Question Bank / Pool.'}
-                  </p>
-                </div>
+                    <select
+                      id="question-assessment-selector"
+                      value={assessmentId}
+                      onChange={(e) => setAssessmentId(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: `1.5px solid ${tokens.borderStrong}`,
+                        fontSize: '13.5px',
+                        fontWeight: 600,
+                        color: tokens.textPrimary,
+                        backgroundColor: tokens.inputBg,
+                        boxSizing: 'border-box',
+                        outlineColor: tokens.cslBlue,
+                      }}
+                    >
+                      <option value="">-- Standalone Question Bank (No Assessment Assigned) --</option>
+                      {assessments && assessments.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.code} — {a.title} ({a.pool_questions_count ?? 0} questions in pool)
+                        </option>
+                      ))}
+                      {/* Fallback if editing a question whose assigned assessment isn't in assessments array */}
+                      {question?.assigned_assessments?.map((a) => {
+                        if (!assessments?.some((item) => item.id === a.id)) {
+                          return (
+                            <option key={a.id} value={a.id}>
+                              {a.code} — {a.title} (Currently Assigned)
+                            </option>
+                          );
+                        }
+                        return null;
+                      })}
+                    </select>
+
+                    <p style={{ margin: 0, fontSize: '11.5px', color: tokens.textMuted, lineHeight: 1.4 }}>
+                      {isEditMode
+                        ? 'Optional: select an assessment to assign or move this question.'
+                        : 'Optional: link directly to an assessment or leave unassigned in Question Bank / Pool.'}
+                    </p>
+                  </div>
+                )}
 
                 {/* 1. Metadata Selector Bar */}
                 <div

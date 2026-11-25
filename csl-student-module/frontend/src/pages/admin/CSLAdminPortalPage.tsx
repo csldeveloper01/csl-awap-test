@@ -19,6 +19,7 @@ import { AdminUsersView } from './AdminUsersView';
 import { AdminDrivesView } from './AdminDrivesView';
 import { undoAdminAuditAction } from '../../api/admin';
 import { AccessibleModal } from '../../components/admin/AccessibleModal';
+import { useAdminTheme } from '../../utils/adminTheme';
 import {
   OverviewIcon,
   CollegesIcon,
@@ -50,6 +51,7 @@ const MIN_DESKTOP_HEIGHT = 650;
 const CSL_ADMIN_TAB_AUTH_KEY = 'csl_admin_tab_authenticated';
 
 export function CSLAdminPortalPage() {
+  const { isDark, toggleTheme, tokens } = useAdminTheme();
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -481,23 +483,26 @@ export function CSLAdminPortalPage() {
 
   return (
     <div
+      data-csl-theme={isDark ? 'dark' : 'light'}
       style={{
         display: 'flex',
         height: '100vh',
         maxHeight: '100vh',
         overflow: 'hidden',
-        backgroundColor: '#F8F9FA',
-        fontFamily: "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+        backgroundColor: tokens.pageBg,
+        color: tokens.textPrimary,
+        fontFamily: tokens.fontFamily,
       }}
     >
-      {/* ─── 1. DEEP BLUE LEFT SIDEBAR (Mockup 1-5, Collapsible) ───────────────────── */}
+      {/* ─── 1. CHARCOAL CSL SIDEBAR (Collapsible) ───────────────────── */}
       <aside
         style={{
-          width: leftSidebarCollapsed ? '76px' : '210px',
-          minWidth: leftSidebarCollapsed ? '76px' : '210px',
-          maxWidth: leftSidebarCollapsed ? '76px' : '210px',
-          backgroundColor: '#0D52D6',
+          width: leftSidebarCollapsed ? '76px' : '214px',
+          minWidth: leftSidebarCollapsed ? '76px' : '214px',
+          maxWidth: leftSidebarCollapsed ? '76px' : '214px',
+          backgroundColor: isDark ? '#0F172A' : '#1E293B',
           color: '#FFFFFF',
+          borderRight: isDark ? '1px solid #1F2937' : '1px solid #0F172A',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
@@ -522,9 +527,9 @@ export function CSLAdminPortalPage() {
             width: '28px',
             height: '28px',
             borderRadius: '50%',
-            backgroundColor: '#072C77',
+            backgroundColor: '#1455B8',
             color: '#FFFFFF',
-            border: '2px solid #FFFFFF',
+            border: '2px solid #F5B83D',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -533,8 +538,8 @@ export function CSLAdminPortalPage() {
             boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
             transition: 'all 0.15s ease',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0052CC')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#072C77')}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0F4496')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#1455B8')}
         >
           {leftSidebarCollapsed ? <ChevronRightIcon size={14} /> : <ChevronLeftIcon size={14} />}
         </button>
@@ -542,13 +547,13 @@ export function CSLAdminPortalPage() {
           {/* Top Admin Active Session Card */}
           <div
             style={{
-              backgroundColor: '#072C77',
-              borderRadius: '22px',
-              padding: '16px 14px',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              marginBottom: '26px',
+              backgroundColor: 'rgba(15, 23, 42, 0.72)',
+              borderRadius: '14px',
+              padding: '15px 14px',
+              border: '1px solid rgba(245, 184, 61, 0.28)',
+              marginBottom: '22px',
               position: 'relative',
-              boxShadow: '0 6px 16px rgba(0, 0, 0, 0.15)',
+              boxShadow: '0 6px 16px rgba(0, 0, 0, 0.18)',
             }}
           >
             {/* Green glowing status dot */}
@@ -702,15 +707,16 @@ export function CSLAdminPortalPage() {
           height: '100vh',
           maxHeight: '100vh',
           overflow: 'hidden',
-          backgroundColor: '#FAF9F5',
+          backgroundColor: tokens.pageBg,
         }}
       >
-        {/* Top Gold / Amber Bar (Mockups 1-5) */}
+        {/* Top CSL Yellow Accent Header Bar */}
         <header
           style={{
-            height: '42px',
-            minHeight: '42px',
-            backgroundColor: '#C59A27',
+            height: '44px',
+            minHeight: '44px',
+            backgroundColor: isDark ? '#111827' : '#F5B83D',
+            borderBottom: isDark ? '2px solid #F5B83D' : '1px solid rgba(15, 23, 42, 0.08)',
             padding: '0 24px',
             display: 'flex',
             justifyContent: 'space-between',
@@ -719,23 +725,24 @@ export function CSLAdminPortalPage() {
           }}
         >
           {/* Breadcrumb e.g. admin/overview */}
-          <div style={{ fontSize: '13px', fontWeight: 700, color: '#1E293B', letterSpacing: '-0.01em' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F5B83D' : '#1E293B', letterSpacing: '-0.01em' }}>
             admin/{activeTab === 'review' ? 'review' : activeTab}
           </div>
 
           {/* Right Circular Icons & Right Panel Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <button
+              type="button"
               onClick={toggleRightPanel}
               title={rightPanelCollapsed ? 'Show Quick Actions' : 'Hide Quick Actions'}
               style={{
-                backgroundColor: 'rgba(0,0,0,0.12)',
-                border: 'none',
-                borderRadius: '12px',
+                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
+                border: isDark ? '1px solid #334155' : 'none',
+                borderRadius: '8px',
                 padding: '4px 10px',
                 fontSize: '12px',
                 fontWeight: 700,
-                color: '#1E293B',
+                color: isDark ? '#F1F5F9' : '#1E293B',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -744,17 +751,19 @@ export function CSLAdminPortalPage() {
             >
               {rightPanelCollapsed ? '‹ Quick Actions' : 'Quick Actions ›'}
             </button>
-            <div
+            <button
+              type="button"
               title="User Directory"
               style={{
-                width: '26px',
-                height: '26px',
-                borderRadius: '50%',
-                backgroundColor: 'rgba(0,0,0,0.12)',
+                width: '28px',
+                height: '28px',
+                borderRadius: '8px',
+                border: isDark ? '1px solid #334155' : 'none',
+                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#1E293B',
+                color: isDark ? '#F1F5F9' : '#1E293B',
                 cursor: 'pointer',
               }}
               onClick={() => setActiveTab('users')}
@@ -763,26 +772,47 @@ export function CSLAdminPortalPage() {
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                 <circle cx="9" cy="7" r="4"></circle>
               </svg>
-            </div>
+            </button>
 
-            <div
-              title="Toggle Dark Mode"
+            <button
+              type="button"
+              data-testid="admin-theme-toggle"
+              onClick={toggleTheme}
+              title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               style={{
-                width: '26px',
-                height: '26px',
-                borderRadius: '50%',
-                backgroundColor: 'rgba(0,0,0,0.12)',
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                color: '#1E293B',
+                gap: '5px',
+                padding: '4px 10px',
+                borderRadius: '8px',
+                border: isDark ? '1px solid #F5B83D' : '1px solid rgba(15, 23, 42, 0.14)',
+                backgroundColor: isDark ? 'rgba(245, 184, 61, 0.14)' : 'rgba(255, 255, 255, 0.72)',
+                color: isDark ? '#F5B83D' : '#1E293B',
+                fontSize: '11.5px',
+                fontWeight: 700,
                 cursor: 'pointer',
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-              </svg>
-            </div>
+              {isDark ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="5"></circle>
+                  <line x1="12" y1="1" x2="12" y2="3"></line>
+                  <line x1="12" y1="21" x2="12" y2="23"></line>
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                  <line x1="1" y1="12" x2="3" y2="12"></line>
+                  <line x1="21" y1="12" x2="23" y2="12"></line>
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+              )}
+              <span>{isDark ? 'Light' : 'Dark'}</span>
+            </button>
           </div>
         </header>
 
@@ -804,7 +834,10 @@ export function CSLAdminPortalPage() {
               overflowY: 'auto',
               padding: '28px 32px',
               boxSizing: 'border-box',
-              background: 'radial-gradient(ellipse at 50% 0%, rgba(245, 230, 190, 0.35) 0%, rgba(250, 249, 245, 0) 65%)',
+              backgroundColor: tokens.pageBg,
+              backgroundImage: isDark
+                ? 'radial-gradient(ellipse at 50% 0%, rgba(20, 85, 184, 0.14) 0%, rgba(11, 17, 32, 0) 65%)'
+                : 'radial-gradient(ellipse at 50% 0%, rgba(245, 184, 61, 0.12) 0%, rgba(248, 250, 252, 0) 60%)',
             }}
           >
             {activeTab === 'overview' && (

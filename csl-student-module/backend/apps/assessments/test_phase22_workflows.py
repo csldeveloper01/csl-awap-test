@@ -173,7 +173,12 @@ class Phase22WorkflowTests(TestCase):
             is_active=True,
         )
 
-        pool = QuestionPool.objects.create(name="Data Structures Pool", code="DS_POOL_01", is_active=True)
+        pool = QuestionPool.objects.create(
+            name="Data Structures Pool",
+            code="DS_POOL_01",
+            question_type=QuestionPool.QuestionType.MCQ,
+            is_active=True,
+        )
         QuestionPoolItem.objects.create(pool=pool, question=q1)
 
         # 1. Fetch Global Questions
@@ -196,7 +201,12 @@ class Phase22WorkflowTests(TestCase):
 
     def test_csv_question_import_with_destination_pools(self):
         """Test CSV import supporting destination mode: EXISTING_POOLS and NEW_POOL."""
-        pool = QuestionPool.objects.create(name="Logical Reasoning", code="LOGIC_01", is_active=True)
+        pool = QuestionPool.objects.create(
+            name="Logical Reasoning",
+            code="LOGIC_01",
+            question_type=QuestionPool.QuestionType.MCQ,
+            is_active=True,
+        )
 
         csv_content = (
             "prompt,section_type,category,difficulty,marks,option_a,option_b,option_c,option_d,correct_option,explanation\n"
@@ -229,7 +239,12 @@ class Phase22WorkflowTests(TestCase):
             correct_option="A",
             is_active=True,
         )
-        pool = QuestionPool.objects.create(name="Quantitative Pool", code="QUANT_01", is_active=True)
+        pool = QuestionPool.objects.create(
+            name="Quantitative Pool",
+            code="QUANT_01",
+            question_type=QuestionPool.QuestionType.MCQ,
+            is_active=True,
+        )
 
         res = self.client.post("/api/csl-admin/questions/bulk-assign-pool/", {
             "question_ids": [q1.id],

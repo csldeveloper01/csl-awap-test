@@ -1062,16 +1062,23 @@ export async function bulkDeleteAdminSections(ids: number[]): Promise<{
 }
 
 // ─── INDEPENDENT QUESTION POOLS MODULE ─────────────────────────────────────
+export type PoolQuestionType = 'MCQ' | 'CODING';
+
 export interface AdminQuestionPool {
   id: string;
   name: string;
   code: string;
+  question_type: PoolQuestionType | null;
   drive_code?: string;
   description: string;
   category: string;
   is_active: boolean;
   questions_count: number;
   assessments_count: number;
+  mcq_count?: number;
+  coding_count?: number;
+  is_mixed?: boolean;
+  pool_health?: 'VALID' | 'EMPTY_UNCLASSIFIED' | 'UNCLASSIFIED' | 'MIXED_TYPES' | 'TYPE_MISMATCH';
   created_at: string;
   updated_at: string;
   items?: {
@@ -1105,6 +1112,7 @@ export interface AdminAssessmentPoolSource {
   pool: string;
   pool_name: string;
   pool_code: string;
+  pool_question_type?: PoolQuestionType | null;
   section?: number;
   section_name?: string;
   section_code?: string;
@@ -1117,6 +1125,7 @@ export async function getAdminQuestionPools(params?: {
   q?: string;
   category?: string;
   is_active?: boolean;
+  question_type?: PoolQuestionType | 'UNCLASSIFIED';
 }): Promise<AdminQuestionPool[]> {
   const res = await adminApi.get<AdminQuestionPool[]>('/question-pools/', { params });
   return res.data;
@@ -1125,11 +1134,24 @@ export async function getAdminQuestionPools(params?: {
 export async function createAdminQuestionPool(data: {
   name: string;
   code?: string;
+  question_type: PoolQuestionType;
   description?: string;
   category?: string;
   is_active?: boolean;
 }): Promise<AdminQuestionPool> {
   const res = await adminApi.post<AdminQuestionPool>('/question-pools/', data);
+  return res.data;
+}
+
+export async function reconcileAdminQuestionPool(
+  poolId: string,
+  targetType: PoolQuestionType,
+  detachIncompatible = true
+): Promise<{ success: boolean; detached_count: number; pool: AdminQuestionPool }> {
+  const res = await adminApi.post(`/question-pools/${poolId}/reconcile/`, {
+    target_type: targetType,
+    detach_incompatible: detachIncompatible,
+  });
   return res.data;
 }
 
@@ -1809,12 +1831,15 @@ export interface CodingJsonImportResult {
 
 export const importCodingQuestionsJson = async (
   payload: any,
-  options?: { preview?: boolean; poolId?: string; duplicatePolicy?: string }
+  options?: { preview?: boolean; poolId?: string; duplicatePolicy?: string; addToGlobalBank?: boolean }
 ): Promise<CodingJsonImportResult> => {
   const params: Record<string, string> = {};
   if (options?.preview) params.preview = 'true';
   if (options?.poolId) params.pool_id = options.poolId;
   if (options?.duplicatePolicy) params.duplicate_policy = options.duplicatePolicy;
+  if (options?.addToGlobalBank !== undefined) {
+    params.add_to_global_bank = options.addToGlobalBank ? 'true' : 'false';
+  }
   const res = await adminApi.post<CodingJsonImportResult>('/questions/import-coding-json/', payload, { params });
   return res.data;
 };

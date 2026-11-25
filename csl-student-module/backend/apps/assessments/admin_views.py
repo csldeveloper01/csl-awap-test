@@ -87,6 +87,14 @@ from .admin_serializers import (
     AdminProctoringEvidenceSerializer,
     AdminProctoringReviewActionSerializer,
 )
+from .question_type_utils import (
+    POOL_QUESTION_TYPES,
+    get_question_canonical_type,
+    get_payload_canonical_type,
+    get_pool_type_breakdown,
+    ensure_pool_accepts_type,
+    ensure_pool_accepts_questions,
+)
 from django.http import HttpResponse
 from .services import (
     prepare_assessment,
@@ -1600,6 +1608,11 @@ class AdminQuestionListView(APIView):
                         },
                     )
                 if target_pool:
+                    ensure_pool_accepts_type(
+                        target_pool,
+                        get_payload_canonical_type(request.data),
+                        context="direct bank creation",
+                    )
                     order_idx = target_pool.items.count() + 1
                     QuestionPoolItem.objects.get_or_create(
                         pool=target_pool,
@@ -1686,6 +1699,8 @@ class AdminQuestionDetailView(APIView):
                 )
                 if coding_details and is_coding_req:
                     _upsert_coding_details_for_question(question, coding_details, replace_test_cases=True)
+                for pool_item in question.pool_items.select_related("pool").all():
+                    ensure_pool_accepts_questions(pool_item.pool, [question])
             question.refresh_from_db()
             return Response(AdminQuestionSerializer(question).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -1837,11 +1852,20 @@ def _extract_csv_from_request(request):
 
 
 def _build_csv_preview_response(decoded_text: str, detected_enc: str, target_pool: QuestionPool = None) -> Response:
-    result = parse_and_validate_csv(decoded_text, commit=False)
+    result = parse_and_validate_csv(
+        decoded_text,
+        target_pools=[target_pool] if target_pool is not None else None,
+        commit=False,
+    )
     result["detected_encoding"] = detected_enc
     result["supported_encodings"] = SUPPORTED_ENCODINGS
     if target_pool is not None:
-        result["target_pool"] = {"id": str(target_pool.id), "name": target_pool.name, "code": target_pool.code}
+        result["target_pool"] = {
+            "id": str(target_pool.id),
+            "name": target_pool.name,
+            "code": target_pool.code,
+            "question_type": target_pool.question_type,
+        }
 
     existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
     existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
@@ -1988,21 +2012,6 @@ class AdminQuestionImportCSVView(APIView):
         target_pools = []
         if destination_mode in ["EXISTING_POOLS", "GLOBAL_AND_POOLS", "POOL_ONLY"] and pool_ids:
             target_pools = list(QuestionPool.objects.filter(id__in=pool_ids, is_active=True))
-        elif destination_mode in ["NEW_POOL", "GLOBAL_AND_NEW_POOL"] and new_pool_name:
-            import re as _re
-            clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
-            new_code = clean_code
-            counter = 1
-            while QuestionPool.objects.filter(code=new_code).exists():
-                new_code = f"{clean_code[:8]}_{counter}"
-                counter += 1
-            created_pool = QuestionPool.objects.create(
-                name=new_pool_name,
-                code=new_code,
-                description=f"Created during CSV import on {timezone.now().strftime('%Y-%m-%d')}",
-                is_active=True,
-            )
-            target_pools.append(created_pool)
 
         assessment_id = request.data.get("assessment_id")
         assessment = None
@@ -2019,6 +2028,25 @@ class AdminQuestionImportCSVView(APIView):
         if err_resp is not None:
             return err_resp
 
+        if destination_mode in ["NEW_POOL", "GLOBAL_AND_NEW_POOL"] and new_pool_name:
+            preview_probe = parse_and_validate_csv(decoded_text, commit=False)
+            inferred_pool_type = preview_probe.get("detected_type") or "MCQ"
+            import re as _re
+            clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
+            new_code = clean_code
+            counter = 1
+            while QuestionPool.objects.filter(code=new_code).exists():
+                new_code = f"{clean_code[:8]}_{counter}"
+                counter += 1
+            created_pool = QuestionPool.objects.create(
+                name=new_pool_name,
+                code=new_code,
+                question_type=inferred_pool_type if inferred_pool_type in POOL_QUESTION_TYPES else "MCQ",
+                description=f"Created during CSV import on {timezone.now().strftime('%Y-%m-%d')}",
+                is_active=True,
+            )
+            target_pools.append(created_pool)
+
         default_is_global = destination_mode != "POOL_ONLY"
         is_global = _parse_bool_flag(request.data.get("add_to_global_bank"), default=default_is_global)
 
@@ -2034,11 +2062,21 @@ class AdminQuestionImportCSVView(APIView):
 
 
 class AdminQuestionPoolImportPreviewView(APIView):
-    """Direct CSV preview endpoint scoped to a specific QuestionPool."""
+    """Direct CSV preview endpoint scoped to a specific QuestionPool (MCQ pools only)."""
     permission_classes = [IsCSLAdminUser]
 
     def post(self, request, pk):
         pool = get_object_or_404(QuestionPool, pk=pk)
+        if pool.question_type != QuestionPool.QuestionType.MCQ:
+            return Response(
+                {
+                    "detail": (
+                        f"CSV import is only permitted for MCQ Question Pools. "
+                        f"Pool '{pool.name}' is classified as '{pool.question_type or 'UNCLASSIFIED'}'."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
         if err_resp is not None:
             return err_resp
@@ -2047,7 +2085,7 @@ class AdminQuestionPoolImportPreviewView(APIView):
 
 class AdminQuestionPoolImportCSVView(APIView):
     """
-    Direct CSV import endpoint scoped to a specific QuestionPool.
+    Direct CSV import endpoint scoped to a specific QuestionPool (MCQ pools only).
     Pool-scoped by default (is_global=False); only adds to Global Question Bank when
     add_to_global_bank=true is explicitly selected.
     """
@@ -2055,6 +2093,16 @@ class AdminQuestionPoolImportCSVView(APIView):
 
     def post(self, request, pk):
         pool = get_object_or_404(QuestionPool, pk=pk)
+        if pool.question_type != QuestionPool.QuestionType.MCQ:
+            return Response(
+                {
+                    "detail": (
+                        f"CSV import is only permitted for MCQ Question Pools. "
+                        f"Pool '{pool.name}' is classified as '{pool.question_type or 'UNCLASSIFIED'}'."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
         if err_resp is not None:
             return err_resp
@@ -2073,7 +2121,7 @@ class AdminQuestionPoolImportCSVView(APIView):
 
 class AdminQuestionBulkAssignPoolView(APIView):
     """
-    Bulk assigns questions to one or more Question Pools.
+    Bulk assigns questions to one or more Question Pools, enforcing pool question_type compatibility.
     """
     permission_classes = [IsCSLAdminUser]
 
@@ -2097,7 +2145,9 @@ class AdminQuestionBulkAssignPoolView(APIView):
         if not question_ids:
             return Response({"detail": "No questions selected."}, status=status.HTTP_400_BAD_REQUEST)
 
-        questions = list(QuestionBank.objects.filter(id__in=question_ids))
+        questions = list(
+            QuestionBank.objects.select_related("programming_details").filter(id__in=question_ids)
+        )
         if not questions:
             return Response({"detail": "Selected questions not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2112,7 +2162,20 @@ class AdminQuestionBulkAssignPoolView(APIView):
             if valid_pool_uuids:
                 target_pools.extend(list(QuestionPool.objects.filter(id__in=valid_pool_uuids, is_active=True)))
 
+        created_new_pool = None
         if new_pool_name:
+            distinct_types = {get_question_canonical_type(q) for q in questions}
+            if len(distinct_types) > 1:
+                return Response(
+                    {"detail": "Cannot create a single Question Pool from a mixed selection of MCQ and Coding questions."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            requested_new_type = str(request.data.get("new_pool_type") or next(iter(distinct_types))).strip().upper()
+            if requested_new_type not in POOL_QUESTION_TYPES:
+                return Response(
+                    {"detail": f"Invalid new_pool_type '{requested_new_type}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             import re as _re
             clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
             new_code = clean_code
@@ -2120,21 +2183,30 @@ class AdminQuestionBulkAssignPoolView(APIView):
             while QuestionPool.objects.filter(code=new_code).exists():
                 new_code = f"{clean_code[:8]}_{counter}"
                 counter += 1
-            created_pool = QuestionPool.objects.create(
+            created_new_pool = QuestionPool(
                 name=new_pool_name,
                 code=new_code,
+                question_type=requested_new_type,
                 description=f"Created for bulk assignment on {timezone.now().strftime('%Y-%m-%d')}",
                 is_active=True,
             )
-            target_pools.append(created_pool)
 
-        if not target_pools:
+        if not target_pools and created_new_pool is None:
             return Response(
                 {"detail": "Please select an existing pool or specify a new pool name."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        for pool in target_pools:
+            ensure_pool_accepts_questions(pool, questions)
+
+        if created_new_pool is not None:
+            ensure_pool_accepts_questions(created_new_pool, questions)
+
         with transaction.atomic():
+            if created_new_pool is not None:
+                created_new_pool.save()
+                target_pools.append(created_new_pool)
             for pool in target_pools:
                 for q in questions:
                     QuestionPoolItem.objects.get_or_create(pool=pool, question=q)
@@ -3421,20 +3493,28 @@ class AdminClearCacheView(APIView):
 
 class AdminQuestionPoolListCreateView(APIView):
     """
-    Workstream 1 & 7: Independent Question Pool Management.
-    List all question pools with question counts and linked assessments,
-    or create a new reusable question pool.
+    Workstream 1 & 7 + Workstream A: Independent Question Pool Management.
+    List all question pools with question counts, pool type, and linked assessments,
+    or create a new typed reusable question pool (MCQ or CODING).
     """
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        qs = QuestionPool.objects.all().prefetch_related("items", "assessment_sources")
+        qs = QuestionPool.objects.all().prefetch_related(
+            "items__question__programming_details",
+            "assessment_sources",
+        )
         q = (request.query_params.get("q") or "").strip()
         if q:
             qs = qs.filter(Q(name__icontains=q) | Q(code__icontains=q) | Q(category__icontains=q))
         category = request.query_params.get("category")
         if category:
             qs = qs.filter(category__iexact=category)
+        qtype = (request.query_params.get("question_type") or "").strip().upper()
+        if qtype in POOL_QUESTION_TYPES:
+            qs = qs.filter(question_type=qtype)
+        elif qtype == "UNCLASSIFIED":
+            qs = qs.filter(question_type__isnull=True)
         is_active = request.query_params.get("is_active")
         if is_active is not None and is_active != "":
             qs = qs.filter(is_active=(is_active.lower() in ["true", "1"]))
@@ -3447,9 +3527,15 @@ class AdminQuestionPoolListCreateView(APIView):
         code = (request.data.get("code") or "").strip().upper()
         description = (request.data.get("description") or "").strip()
         category = (request.data.get("category") or "").strip()
+        question_type = (request.data.get("question_type") or "").strip().upper()
 
         if not name:
             return Response({"name": ["Pool name is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        if question_type not in POOL_QUESTION_TYPES:
+            return Response(
+                {"question_type": ["Pool type is required and must be either 'MCQ' or 'CODING'."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not code:
             import re
             code = re.sub(r"[^A-Z0-9_]", "_", name.upper()).strip("_")[:50]
@@ -3462,6 +3548,7 @@ class AdminQuestionPoolListCreateView(APIView):
         pool = QuestionPool.objects.create(
             name=name,
             code=code,
+            question_type=question_type,
             description=description,
             category=category,
             is_active=request.data.get("is_active", True),
@@ -3472,7 +3559,7 @@ class AdminQuestionPoolListCreateView(APIView):
             entity_type="QUESTION_POOL",
             entity_id=str(pool.id),
             user=request.user,
-            details={"name": pool.name, "code": pool.code, "category": pool.category},
+            details={"name": pool.name, "code": pool.code, "question_type": pool.question_type, "category": pool.category},
         )
 
         return Response(AdminQuestionPoolSerializer(pool).data, status=status.HTTP_201_CREATED)
@@ -3486,13 +3573,16 @@ class AdminQuestionPoolDetailView(APIView):
 
     def get(self, request, pk):
         pool = get_object_or_404(
-            QuestionPool.objects.prefetch_related("items__question", "assessment_sources"),
+            QuestionPool.objects.prefetch_related("items__question__programming_details", "assessment_sources"),
             pk=pk,
         )
         return Response(AdminQuestionPoolDetailSerializer(pool).data)
 
     def put(self, request, pk):
-        pool = get_object_or_404(QuestionPool, pk=pk)
+        pool = get_object_or_404(
+            QuestionPool.objects.prefetch_related("items__question__programming_details"),
+            pk=pk,
+        )
         name = (request.data.get("name") or "").strip()
         code = (request.data.get("code") or "").strip().upper()
 
@@ -3505,6 +3595,47 @@ class AdminQuestionPoolDetailView(APIView):
             if QuestionPool.objects.filter(code=code).exclude(pk=pk).exists():
                 return Response({"code": ["Another pool with this code already exists."]}, status=status.HTTP_400_BAD_REQUEST)
             pool.code = code
+
+        if "question_type" in request.data:
+            req_qtype = str(request.data.get("question_type") or "").strip().upper()
+            if req_qtype not in POOL_QUESTION_TYPES:
+                return Response(
+                    {"question_type": ["Pool question_type must be 'MCQ' or 'CODING'."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            breakdown = get_pool_type_breakdown(pool)
+            if breakdown["is_mixed"]:
+                return Response(
+                    {
+                        "question_type": [
+                            f"This pool currently contains both MCQ ({breakdown['mcq_count']}) and Coding ({breakdown['coding_count']}) questions. "
+                            "Reconcile conflicting questions first before assigning its type."
+                        ],
+                        "breakdown": breakdown,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if pool.question_type in POOL_QUESTION_TYPES and req_qtype != pool.question_type and breakdown["total"] > 0:
+                return Response(
+                    {
+                        "question_type": [
+                            f"Cannot change pool type from {pool.question_type} to {req_qtype} while it contains {breakdown['total']} question(s). "
+                            "Remove all questions first or create a new pool."
+                        ]
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if req_qtype == "MCQ" and breakdown["coding_count"] > 0:
+                return Response(
+                    {"question_type": [f"Cannot classify pool as MCQ while it contains {breakdown['coding_count']} Coding question(s)."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if req_qtype == "CODING" and breakdown["mcq_count"] > 0:
+                return Response(
+                    {"question_type": [f"Cannot classify pool as CODING while it contains {breakdown['mcq_count']} MCQ question(s)."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            pool.question_type = req_qtype
 
         if "description" in request.data:
             pool.description = str(request.data["description"]).strip()
@@ -3520,9 +3651,12 @@ class AdminQuestionPoolDetailView(APIView):
             entity_type="QUESTION_POOL",
             entity_id=str(pool.id),
             user=request.user,
-            details={"name": pool.name, "code": pool.code},
+            details={"name": pool.name, "code": pool.code, "question_type": pool.question_type},
         )
         return Response(AdminQuestionPoolSerializer(pool).data)
+
+    def patch(self, request, pk):
+        return self.put(request, pk)
 
     def delete(self, request, pk):
         pool = get_object_or_404(QuestionPool, pk=pk)
@@ -3547,9 +3681,72 @@ class AdminQuestionPoolDetailView(APIView):
         return Response({"message": f"Question pool '{pool_name}' successfully deleted.", "deleted": True})
 
 
+class AdminQuestionPoolReconcileView(APIView):
+    """
+    Reconcile a mixed or legacy unclassified QuestionPool by setting an authoritative
+    target_type ('MCQ' or 'CODING') and detaching incompatible QuestionPoolItem links
+    without deleting any underlying QuestionBank or ProgrammingQuestion records.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        target_type = str(request.data.get("target_type") or "").strip().upper()
+        detach_incompatible = bool(request.data.get("detach_incompatible", True))
+
+        if target_type not in POOL_QUESTION_TYPES:
+            return Response(
+                {"target_type": ["target_type must be 'MCQ' or 'CODING'."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        breakdown = get_pool_type_breakdown(pool)
+        incompatible_ids = breakdown["coding_ids"] if target_type == "MCQ" else breakdown["mcq_ids"]
+
+        if incompatible_ids and not detach_incompatible:
+            return Response(
+                {
+                    "detail": (
+                        f"Pool '{pool.name}' has {len(incompatible_ids)} incompatible question(s) for target type {target_type}. "
+                        "Pass detach_incompatible=true to remove only pool membership links."
+                    ),
+                    "incompatible_question_ids": incompatible_ids,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            detached_count = 0
+            if incompatible_ids:
+                detached_count, _ = pool.items.filter(question_id__in=incompatible_ids).delete()
+            pool.question_type = target_type
+            pool.save(update_fields=["question_type", "updated_at"])
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.QUESTION_POOL_UPDATED,
+                entity_type="QUESTION_POOL",
+                entity_id=str(pool.id),
+                user=request.user,
+                details={
+                    "action": "RECONCILE_POOL_TYPE",
+                    "target_type": target_type,
+                    "detached_count": detached_count,
+                    "detached_question_ids": incompatible_ids,
+                },
+            )
+
+        pool.refresh_from_db()
+        return Response({
+            "success": True,
+            "detached_count": detached_count,
+            "pool": AdminQuestionPoolDetailSerializer(pool).data,
+        })
+
+
 class AdminQuestionPoolItemsView(APIView):
     """
     Manage questions inside a QuestionPool: add, remove, or replace question items.
+    Enforces strict pool.question_type compatibility on add and replace operations.
     """
     permission_classes = [IsCSLAdminUser]
 
@@ -3568,16 +3765,32 @@ class AdminQuestionPoolItemsView(APIView):
 
         with transaction.atomic():
             if action == "replace":
+                if pool.question_type not in POOL_QUESTION_TYPES:
+                    return Response(
+                        {"pool_id": [f"Question pool '{pool.name}' must be classified as MCQ or CODING before replacing items."]},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                valid_questions = list(
+                    QuestionBank.objects.select_related("programming_details").filter(id__in=question_ids, is_active=True)
+                )
+                ensure_pool_accepts_questions(pool, valid_questions)
                 pool.items.all().delete()
-                valid_questions = QuestionBank.objects.filter(id__in=question_ids, is_active=True)
                 items = [QuestionPoolItem(pool=pool, question=q, order=idx + 1) for idx, q in enumerate(valid_questions)]
                 QuestionPoolItem.objects.bulk_create(items)
             elif action == "remove":
                 pool.items.filter(question_id__in=question_ids).delete()
             else:  # add
+                if pool.question_type not in POOL_QUESTION_TYPES:
+                    return Response(
+                        {"pool_id": [f"Question pool '{pool.name}' must be classified as MCQ or CODING before adding questions."]},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 existing_q_ids = set(pool.items.values_list("question_id", flat=True))
                 new_q_ids = [qid for qid in question_ids if qid not in existing_q_ids]
-                valid_questions = QuestionBank.objects.filter(id__in=new_q_ids, is_active=True)
+                valid_questions = list(
+                    QuestionBank.objects.select_related("programming_details").filter(id__in=new_q_ids, is_active=True)
+                )
+                ensure_pool_accepts_questions(pool, valid_questions)
                 start_order = pool.items.count() + 1
                 items = [QuestionPoolItem(pool=pool, question=q, order=start_order + idx) for idx, q in enumerate(valid_questions)]
                 QuestionPoolItem.objects.bulk_create(items)
@@ -3629,7 +3842,7 @@ class AdminQuestionPoolItemsView(APIView):
 class AdminQuestionPoolQuestionsView(APIView):
     """
     Direct question authoring and pool detachment inside a QuestionPool.
-    Supports atomic creation of both MCQ and Coding questions directly inside a pool.
+    Enforces pool.question_type compatibility on every direct question creation request.
     Removing a question only deletes the QuestionPoolItem association, preserving QuestionBank.
     """
     permission_classes = [IsCSLAdminUser]
@@ -3638,8 +3851,10 @@ class AdminQuestionPoolQuestionsView(APIView):
         pool = get_object_or_404(QuestionPool, pk=pk)
         data = request.data
 
-        question_type = (data.get("question_type") or data.get("assessment_type") or data.get("section_type") or "MCQ").upper()
-        is_coding = question_type == "CODING" or (data.get("section_type") or "").upper() == "CODING"
+        resolved_type = get_payload_canonical_type(data)
+        ensure_pool_accepts_type(pool, resolved_type, context="direct question creation")
+
+        is_coding = resolved_type == "CODING"
         is_global = _parse_bool_flag(data.get("add_to_global_bank", data.get("is_global")), default=True)
 
         with transaction.atomic():
@@ -3647,6 +3862,14 @@ class AdminQuestionPoolQuestionsView(APIView):
                 prompt = (data.get("prompt") or data.get("title") or "").strip()
                 if not prompt:
                     return Response({"prompt": ["Question prompt / problem title is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+                coding_data = data.get("coding_details") or data
+                test_cases_payload = coding_data.get("test_cases")
+                if not isinstance(test_cases_payload, list) or len(test_cases_payload) == 0:
+                    return Response(
+                        {"test_cases": ["At least one evaluation test case is required for a coding question."]},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
                 difficulty = (data.get("difficulty") or "MEDIUM").upper()
                 if difficulty not in ["EASY", "MEDIUM", "HARD"]:
@@ -3678,7 +3901,6 @@ class AdminQuestionPoolQuestionsView(APIView):
                     is_global=is_global,
                 )
 
-                coding_data = data.get("coding_details") or data
                 _upsert_coding_details_for_question(question, coding_data, replace_test_cases=False)
             else:
                 mcq_payload = data.copy() if hasattr(data, "copy") else dict(data)
@@ -4836,6 +5058,12 @@ class AdminQuestionImportCodingJsonView(APIView):
                     return Response({"detail": f"Target QuestionPool '{pool_id}' not found."}, status=status.HTTP_404_NOT_FOUND)
             except Exception:
                 return Response({"detail": f"Invalid pool_id format '{pool_id}'."}, status=status.HTTP_400_BAD_REQUEST)
+            ensure_pool_accepts_type(target_pool, "CODING", context="Coding JSON import")
+
+        is_global = _parse_bool_flag(
+            data.get("add_to_global_bank") if isinstance(data, dict) else request.query_params.get("add_to_global_bank"),
+            default=(target_pool is None),
+        )
 
         # Validation pass
         validated_items = []
@@ -4948,6 +5176,8 @@ class AdminQuestionImportCodingJsonView(APIView):
                     "statement": statement,
                     "difficulty": difficulty,
                     "section_type": section_type,
+                    "category": str(q_raw.get("category") or "").strip(),
+                    "explanation": str(q_raw.get("explanation") or "").strip(),
                     "marks": marks,
                     "constraints": q_raw.get("constraints", ""),
                     "input_format": q_raw.get("input_format", ""),
@@ -4997,6 +5227,13 @@ class AdminQuestionImportCodingJsonView(APIView):
 
         with transaction.atomic():
             for item in validated_items:
+                sec_obj = (
+                    AssessmentSection.objects.filter(code__iexact=item["section_type"]).first()
+                    or AssessmentSection.objects.filter(name__iexact=item["section_type"]).first()
+                    or AssessmentSection.objects.filter(code__iexact="CODING").first()
+                )
+                resolved_sec_code = sec_obj.code if sec_obj else item["section_type"]
+
                 existing_q = item["existing_q"]
                 if existing_q:
                     if duplicate_policy == "SKIP":
@@ -5007,7 +5244,11 @@ class AdminQuestionImportCodingJsonView(APIView):
                         q_obj.prompt = item["title"]
                         q_obj.difficulty = item["difficulty"]
                         q_obj.marks = item["marks"]
-                        q_obj.section_type = item["section_type"]
+                        q_obj.section = sec_obj
+                        q_obj.section_type = resolved_sec_code
+                        q_obj.assessment_type = "CODING"
+                        q_obj.category = item["category"]
+                        q_obj.explanation = item["explanation"]
                         q_obj.save()
 
                         prog, _ = ProgrammingQuestion.objects.update_or_create(
@@ -5048,7 +5289,12 @@ class AdminQuestionImportCodingJsonView(APIView):
                             prompt=item["title"],
                             difficulty=item["difficulty"],
                             marks=item["marks"],
-                            section_type=item["section_type"],
+                            section=sec_obj,
+                            section_type=resolved_sec_code,
+                            assessment_type="CODING",
+                            category=item["category"],
+                            explanation=item["explanation"],
+                            is_global=is_global,
                             option_a="N/A (Coding Question)",
                             option_b="N/A (Coding Question)",
                             option_c="N/A (Coding Question)",
@@ -5082,7 +5328,12 @@ class AdminQuestionImportCodingJsonView(APIView):
                         prompt=item["title"],
                         difficulty=item["difficulty"],
                         marks=item["marks"],
-                        section_type=item["section_type"],
+                        section=sec_obj,
+                        section_type=resolved_sec_code,
+                        assessment_type="CODING",
+                        category=item["category"],
+                        explanation=item["explanation"],
+                        is_global=is_global,
                         option_a="N/A (Coding Question)",
                         option_b="N/A (Coding Question)",
                         option_c="N/A (Coding Question)",

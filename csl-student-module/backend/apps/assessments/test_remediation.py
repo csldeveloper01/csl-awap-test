@@ -30,7 +30,8 @@ class RemediationEndToEndTests(TestCase):
         self.client.force_authenticate(user=self.admin_user)
 
         self.college = College.objects.create(name="Test Engineering College", code="TEC01")
-        self.pool = QuestionPool.objects.create(name="Core Aptitude Pool", code="CORE-APT")
+        self.pool = QuestionPool.objects.create(name="Core Aptitude Pool", code="CORE-APT", question_type="MCQ")
+        self.coding_pool = QuestionPool.objects.create(name="Core Coding Pool", code="CORE-COD", question_type="CODING")
         self.drive = Drive.objects.create(name="Placement Drive 2026", code="DRIVE-2026")
 
         # Create basic question bank for assessment sampling
@@ -70,7 +71,7 @@ class RemediationEndToEndTests(TestCase):
         self.assertTrue(QuestionPoolItem.objects.filter(pool=self.pool, question_id=q_id).exists())
 
     def test_question_pool_create_coding_directly(self):
-        url = f"/api/csl-admin/question-pools/{self.pool.id}/questions/"
+        url = f"/api/csl-admin/question-pools/{self.coding_pool.id}/questions/"
         payload = {
             "prompt": "Reverse a Linked List",
             "section_type": "CODING",
@@ -93,7 +94,7 @@ class RemediationEndToEndTests(TestCase):
         self.assertEqual(q.assessment_type, "CODING")
         self.assertTrue(hasattr(q, "programming_details"))
         self.assertEqual(q.programming_details.test_cases.count(), 2)
-        self.assertTrue(QuestionPoolItem.objects.filter(pool=self.pool, question=q).exists())
+        self.assertTrue(QuestionPoolItem.objects.filter(pool=self.coding_pool, question=q).exists())
 
     def test_remove_question_from_pool_does_not_delete_question(self):
         q = QuestionBank.objects.create(

@@ -1,28 +1,60 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   importCodingQuestionsJson,
   fetchCodingQuestionsJsonTemplate,
+  getAdminQuestionPools,
+  type AdminQuestionPool,
   type CodingJsonImportResult,
 } from '../../api/admin';
+import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 interface ImportCodingJsonModalProps {
   onClose: () => void;
   onSuccess: () => void;
   poolId?: string;
+  targetPool?: AdminQuestionPool | null;
+  pools?: AdminQuestionPool[];
 }
 
 export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
   onClose,
   onSuccess,
   poolId,
+  targetPool = null,
+  pools,
 }) => {
+  const { tokens } = useAdminTheme();
+  const initialPoolId = targetPool?.id || poolId || '';
+  const isPoolLocked = Boolean(initialPoolId);
+
+  const [availableCodingPools, setAvailableCodingPools] = useState<AdminQuestionPool[]>(() =>
+    (pools || []).filter((p) => p.question_type === 'CODING')
+  );
+  const [selectedPoolId, setSelectedPoolId] = useState<string>(initialPoolId);
+  const [addToGlobalBank, setAddToGlobalBank] = useState<boolean>(!isPoolLocked);
+
   const [jsonText, setJsonText] = useState('');
   const [duplicatePolicy, setDuplicatePolicy] = useState<'CREATE_NEW' | 'SKIP' | 'OVERWRITE'>('CREATE_NEW');
-  const [targetPoolId, setTargetPoolId] = useState(poolId || '');
   const [previewResult, setPreviewResult] = useState<CodingJsonImportResult | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  useEffect(() => {
+    if (pools && pools.length > 0) {
+      setAvailableCodingPools(pools.filter((p) => p.question_type === 'CODING'));
+      return;
+    }
+    getAdminQuestionPools({ question_type: 'CODING', is_active: true })
+      .then((res) => setAvailableCodingPools(res))
+      .catch(() => {});
+  }, [pools]);
+
+  const resolvedPool =
+    targetPool && targetPool.id === selectedPoolId
+      ? targetPool
+      : availableCodingPools.find((p) => p.id === selectedPoolId) || null;
 
   const handleDownloadTemplate = async () => {
     try {
@@ -39,7 +71,7 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
-      alert('Failed to download sample JSON template.');
+      setErrorMsg('Failed to download sample JSON template.');
     }
   };
 
@@ -48,24 +80,23 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (evt) => {
-      setJsonText(evt.target?.result as string || '');
+      setJsonText((evt.target?.result as string) || '');
       setPreviewResult(null);
       setErrorMsg('');
+      setSuccessMsg('');
     };
     reader.readAsText(file);
   };
 
   const parsePayload = () => {
     if (!jsonText.trim()) {
-      throw new Error('Please paste JSON or upload a file.');
+      throw new Error('Please paste JSON or upload a .json file.');
     }
-    let parsed: any;
     try {
-      parsed = JSON.parse(jsonText);
+      return JSON.parse(jsonText);
     } catch (e: any) {
       throw new Error(`Invalid JSON syntax: ${e.message}`);
     }
-    return parsed;
   };
 
   const handlePreview = async () => {
@@ -76,18 +107,24 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
       setIsProcessing(true);
       const res = await importCodingQuestionsJson(payload, {
         preview: true,
-        poolId: targetPoolId || undefined,
+        poolId: selectedPoolId || undefined,
         duplicatePolicy,
+        addToGlobalBank,
       });
       setPreviewResult(res);
     } catch (err: any) {
-      setErrorMsg(err?.response?.data?.detail || err.message || 'Validation failed.');
+      setPreviewResult(null);
+      setErrorMsg(formatApiError(err, 'Validation failed.'));
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleCommit = async () => {
+    if (!previewResult || (previewResult.invalid_count || 0) > 0) {
+      setErrorMsg('Run Validate & Preview cleanly with zero invalid questions before committing.');
+      return;
+    }
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -95,23 +132,31 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
       setIsProcessing(true);
       const res = await importCodingQuestionsJson(payload, {
         preview: false,
-        poolId: targetPoolId || undefined,
+        poolId: selectedPoolId || undefined,
         duplicatePolicy,
+        addToGlobalBank,
       });
       setSuccessMsg(res.message || 'Coding questions imported successfully.');
       setTimeout(() => {
         onSuccess();
         onClose();
-      }, 1500);
+      }, 900);
     } catch (err: any) {
-      setErrorMsg(err?.response?.data?.detail || err.message || 'Import failed.');
+      setErrorMsg(formatApiError(err, 'Import failed.'));
     } finally {
       setIsProcessing(false);
     }
   };
 
+  const canCommit =
+    Boolean(previewResult) &&
+    (previewResult?.invalid_count || 0) === 0 &&
+    ((previewResult?.valid_count || 0) > 0 || (previewResult?.duplicate_count || 0) > 0) &&
+    !isProcessing;
+
   return (
     <div
+      data-testid="import-coding-json-modal"
       style={{
         position: 'fixed',
         inset: 0,
@@ -122,27 +167,33 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
         justifyContent: 'center',
         zIndex: 9999,
         padding: '20px',
+        fontFamily: tokens.fontFamily,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isProcessing) onClose();
       }}
     >
       <div
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '16px',
+          backgroundColor: tokens.surfaceCard,
+          color: tokens.textPrimary,
+          border: `1px solid ${tokens.borderStrong}`,
+          borderRadius: '14px',
           width: '100%',
-          maxWidth: '780px',
+          maxWidth: '820px',
           maxHeight: '90vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.2)',
+          boxShadow: tokens.modalShadow,
           overflow: 'hidden',
-          fontFamily: "'Manrope', 'Plus Jakarta Sans', system-ui, sans-serif",
         }}
       >
         {/* Header */}
         <div
           style={{
-            padding: '18px 24px',
-            backgroundColor: '#0B2E6F',
+            padding: '16px 24px',
+            backgroundColor: tokens.cslCharcoal,
+            borderBottom: `2px solid ${tokens.cslYellow}`,
             color: '#FFFFFF',
             display: 'flex',
             justifyContent: 'space-between',
@@ -150,40 +201,73 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
           }}
         >
           <div>
-            <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span
+                style={{
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(245, 184, 61, 0.18)',
+                  color: '#F5B83D',
+                  border: '1px solid rgba(245, 184, 61, 0.4)',
+                }}
+              >
+                Coding JSON Importer
+              </span>
+              {resolvedPool && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+                    color: '#93C5FD',
+                  }}
+                >
+                  Pool: {resolvedPool.name} ({resolvedPool.code})
+                </span>
+              )}
+            </div>
+            <h2 style={{ fontSize: '17px', fontWeight: 700, margin: '4px 0 0 0' }}>
               Bulk Import Coding Questions (JSON)
             </h2>
-            <p style={{ fontSize: '12px', opacity: 0.85, margin: '2px 0 0 0' }}>
-              Import problem statements, boilerplate templates, and public/hidden test cases.
-            </p>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            disabled={isProcessing}
+            aria-label="Close JSON importer"
             style={{
-              backgroundColor: 'transparent',
-              border: 'none',
+              backgroundColor: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '8px',
+              width: '32px',
+              height: '32px',
               color: '#FFFFFF',
-              fontSize: '20px',
+              fontSize: '16px',
               cursor: 'pointer',
-              fontWeight: 800,
             }}
           >
             ✕
           </button>
         </div>
 
-        {/* Content Body */}
+        {/* Body */}
         <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
           {errorMsg && (
             <div
               style={{
                 marginBottom: '16px',
-                padding: '12px 16px',
-                backgroundColor: '#FEF2F2',
-                border: '1px solid #FECACA',
+                padding: '12px 14px',
+                backgroundColor: tokens.dangerBg,
+                border: `1px solid ${tokens.dangerBorder}`,
                 borderRadius: '8px',
-                color: '#DC2626',
-                fontSize: '12px',
+                color: tokens.dangerText,
+                fontSize: '12.5px',
                 fontWeight: 600,
               }}
             >
@@ -195,11 +279,11 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
             <div
               style={{
                 marginBottom: '16px',
-                padding: '12px 16px',
-                backgroundColor: '#F0FDF4',
-                border: '1px solid #BBF7D0',
+                padding: '12px 14px',
+                backgroundColor: tokens.successBg,
+                border: `1px solid ${tokens.successBorder}`,
                 borderRadius: '8px',
-                color: '#16A34A',
+                color: tokens.successText,
                 fontSize: '13px',
                 fontWeight: 700,
               }}
@@ -208,29 +292,86 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
             </div>
           )}
 
-          {/* Options Row */}
+          {/* Target Pool & Duplicate Policy */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '16px',
-              marginBottom: '16px',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: '14px',
+              marginBottom: '14px',
             }}
           >
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+              <label
+                htmlFor="json-target-pool-select"
+                style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '5px' }}
+              >
+                Target Coding Question Pool
+              </label>
+              {isPoolLocked && resolvedPool ? (
+                <div
+                  style={{
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                    backgroundColor: tokens.cslBlueSoftBg,
+                    color: tokens.cslBlueSoftText,
+                    fontSize: '12.5px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {resolvedPool.name} ({resolvedPool.code}) — CODING
+                </div>
+              ) : (
+                <select
+                  id="json-target-pool-select"
+                  value={selectedPoolId}
+                  onChange={(e) => {
+                    setSelectedPoolId(e.target.value);
+                    setPreviewResult(null);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: `1px solid ${tokens.borderStrong}`,
+                    fontSize: '12.5px',
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
+                  }}
+                >
+                  <option value="">Global Question Bank Only (No Pool)</option>
+                  {availableCodingPools.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.code}) — {p.questions_count} Qs
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="json-duplicate-policy"
+                style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '5px' }}
+              >
                 Duplicate Question Policy
               </label>
               <select
+                id="json-duplicate-policy"
                 value={duplicatePolicy}
-                onChange={(e) => setDuplicatePolicy(e.target.value as any)}
+                onChange={(e) => {
+                  setDuplicatePolicy(e.target.value as 'CREATE_NEW' | 'SKIP' | 'OVERWRITE');
+                  setPreviewResult(null);
+                }}
                 style={{
                   width: '100%',
                   padding: '8px 12px',
                   borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
-                  fontSize: '12px',
-                  backgroundColor: '#FFFFFF',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  fontSize: '12.5px',
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
                 }}
               >
                 <option value="CREATE_NEW">Create as New Question (Always)</option>
@@ -238,27 +379,34 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
                 <option value="SKIP">Skip Duplicates</option>
               </select>
             </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                Target Question Pool UUID (Optional)
-              </label>
-              <input
-                type="text"
-                value={targetPoolId}
-                onChange={(e) => setTargetPoolId(e.target.value)}
-                placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
-                  fontSize: '12px',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
           </div>
+
+          {/* Explicit Global Bank Policy */}
+          {selectedPoolId && (
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 12px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.surfaceElevated,
+                fontSize: '12.5px',
+                fontWeight: 600,
+                color: tokens.textPrimary,
+                marginBottom: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={addToGlobalBank}
+                onChange={(e) => setAddToGlobalBank(e.target.checked)}
+              />
+              <span>Also add imported coding questions to the Global Question Bank</span>
+            </label>
+          )}
 
           {/* Upload and Template Actions */}
           <div
@@ -267,30 +415,27 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
               justifyContent: 'space-between',
               alignItems: 'center',
               marginBottom: '8px',
+              flexWrap: 'wrap',
+              gap: '8px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <label
                 style={{
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: '#F1F5F9',
-                  border: '1px solid #CBD5E1',
+                  padding: '7px 13px',
+                  borderRadius: '8px',
+                  backgroundColor: tokens.surfaceElevated,
+                  border: `1px solid ${tokens.borderStrong}`,
                   fontSize: '12px',
                   fontWeight: 700,
-                  color: '#0B2E6F',
+                  color: tokens.textPrimary,
                   cursor: 'pointer',
                 }}
               >
-                📁 Choose JSON File
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleFileUpload}
-                  style={{ display: 'none' }}
-                />
+                Choose JSON File
+                <input type="file" accept=".json" onChange={handleFileUpload} style={{ display: 'none' }} />
               </label>
-              <span style={{ fontSize: '11px', color: '#64748B' }}>or paste JSON below</span>
+              <span style={{ fontSize: '12px', color: tokens.textSecondary }}>or paste structured JSON below</span>
             </div>
 
             <button
@@ -299,48 +444,51 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#1455B8',
+                color: tokens.cslBlueSoftText,
                 fontSize: '12px',
                 fontWeight: 700,
                 cursor: 'pointer',
                 textDecoration: 'underline',
               }}
             >
-              📥 Download Sample JSON Template
+              Download Sample JSON Template
             </button>
           </div>
 
           {/* JSON Textarea */}
           <textarea
+            data-testid="coding-json-textarea"
             value={jsonText}
             onChange={(e) => {
               setJsonText(e.target.value);
               setPreviewResult(null);
             }}
-            placeholder="Paste your JSON content here...&#10;{&#10;  &quot;questions&quot;: [&#10;    {&#10;      &quot;title&quot;: &quot;Two Sum&quot;,&#10;      &quot;problem_statement&quot;: &quot;...&quot;,&#10;      &quot;test_cases&quot;: [...]&#10;    }&#10;  ]&#10;}"
+            placeholder='{"questions": [{"title": "Two Sum", "problem_statement": "...", "allowed_languages": ["python"], "test_cases": [{"input_text": "2 3", "expected_output": "5", "is_public": true}]}]}'
             style={{
               width: '100%',
               height: '180px',
-              padding: '10px 14px',
-              fontFamily: 'Consolas, monospace',
+              padding: '12px 14px',
+              fontFamily: tokens.monoFamily,
               fontSize: '12px',
               borderRadius: '8px',
-              border: '1px solid #CBD5E1',
+              border: `1px solid ${tokens.borderStrong}`,
               boxSizing: 'border-box',
-              backgroundColor: '#F8FAFC',
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               resize: 'vertical',
             }}
           />
 
-          {/* Validation Preview Card */}
+          {/* Preview Result */}
           {previewResult && (
             <div
+              data-testid="coding-json-preview-summary"
               style={{
                 marginTop: '16px',
-                border: '1px solid #CBD5E1',
+                border: `1px solid ${tokens.borderStrong}`,
                 borderRadius: '10px',
-                padding: '14px 18px',
-                backgroundColor: '#F8FAFC',
+                padding: '14px 16px',
+                backgroundColor: tokens.surfaceElevated,
               }}
             >
               <div
@@ -349,51 +497,53 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   marginBottom: '10px',
+                  flexWrap: 'wrap',
+                  gap: '8px',
                 }}
               >
-                <strong style={{ fontSize: '13px', color: '#0B2E6F' }}>
-                  Validation Summary: {previewResult.total_questions} question(s) analyzed
+                <strong style={{ fontSize: '13px', color: tokens.textPrimary }}>
+                  Validation Preview: {previewResult.total_questions} question(s)
                 </strong>
-                <div style={{ display: 'flex', gap: '10px', fontSize: '12px' }}>
-                  <span style={{ color: '#16A34A', fontWeight: 700 }}>
+                <div style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
+                  <span style={{ color: tokens.successText, fontWeight: 700 }}>
                     ✓ {previewResult.valid_count} Valid
                   </span>
                   {(previewResult.invalid_count || 0) > 0 && (
-                    <span style={{ color: '#DC2626', fontWeight: 700 }}>
+                    <span style={{ color: tokens.dangerText, fontWeight: 700 }}>
                       ✗ {previewResult.invalid_count} Invalid
                     </span>
                   )}
                   {(previewResult.duplicate_count || 0) > 0 && (
-                    <span style={{ color: '#D97706', fontWeight: 700 }}>
+                    <span style={{ color: tokens.cslYellowSoftText, fontWeight: 700 }}>
                       ⚠ {previewResult.duplicate_count} Duplicate
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* Items List */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '190px', overflowY: 'auto' }}>
                 {previewResult.items?.map((item) => (
                   <div
                     key={item.index}
                     style={{
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      backgroundColor: item.status === 'ERROR' ? '#FEF2F2' : '#FFFFFF',
-                      border: `1px solid ${item.status === 'ERROR' ? '#FECACA' : '#E2E8F0'}`,
-                      fontSize: '11px',
+                      padding: '9px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: item.status === 'ERROR' ? tokens.dangerBg : tokens.surfaceCard,
+                      border: `1px solid ${item.status === 'ERROR' ? tokens.dangerBorder : tokens.border}`,
+                      fontSize: '12px',
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
+                      gap: '10px',
                     }}
                   >
                     <div>
-                      <strong style={{ color: '#0F172A' }}>#{item.index} {item.title}</strong>
-                      <span style={{ marginLeft: '8px', color: '#64748B' }}>
-                        ({item.difficulty} • {item.marks} marks) • {item.public_test_case_count} public, {item.hidden_test_case_count} hidden
+                      <strong style={{ color: tokens.textPrimary }}>#{item.index} {item.title}</strong>
+                      <span style={{ marginLeft: '8px', color: tokens.textSecondary, fontSize: '11.5px' }}>
+                        {item.difficulty} • {item.marks} marks • {item.public_test_case_count} public, {item.hidden_test_case_count} hidden
                       </span>
                       {item.errors && item.errors.length > 0 && (
-                        <div style={{ color: '#DC2626', marginTop: '2px' }}>
+                        <div style={{ color: tokens.dangerText, marginTop: '3px', fontSize: '11.5px' }}>
                           {item.errors.join('; ')}
                         </div>
                       )}
@@ -402,10 +552,20 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
                       style={{
                         padding: '2px 8px',
                         borderRadius: '4px',
-                        fontWeight: 800,
-                        fontSize: '10px',
-                        backgroundColor: item.status === 'VALID' ? '#DCFCE7' : item.status === 'DUPLICATE' ? '#FEF3C7' : '#FEE2E2',
-                        color: item.status === 'VALID' ? '#166534' : item.status === 'DUPLICATE' ? '#92400E' : '#991B1B',
+                        fontWeight: 700,
+                        fontSize: '10.5px',
+                        backgroundColor:
+                          item.status === 'VALID'
+                            ? tokens.successBg
+                            : item.status === 'DUPLICATE'
+                            ? tokens.cslYellowSoftBg
+                            : tokens.dangerBg,
+                        color:
+                          item.status === 'VALID'
+                            ? tokens.successText
+                            : item.status === 'DUPLICATE'
+                            ? tokens.cslYellowSoftText
+                            : tokens.dangerText,
                       }}
                     >
                       {item.status}
@@ -417,70 +577,81 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
           )}
         </div>
 
-        {/* Footer Actions */}
+        {/* Footer */}
         <div
           style={{
             padding: '14px 24px',
-            backgroundColor: '#F8FAFC',
-            borderTop: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceElevated,
+            borderTop: `1px solid ${tokens.border}`,
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             gap: '12px',
+            flexWrap: 'wrap',
           }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isProcessing}
-            style={{
-              padding: '8px 16px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: '#FFFFFF',
-              color: '#475569',
-              fontSize: '12px',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            onClick={handlePreview}
-            disabled={isProcessing || !jsonText.trim()}
-            style={{
-              padding: '8px 18px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: '#FFFFFF',
-              color: '#0B2E6F',
-              fontSize: '12px',
-              fontWeight: 700,
-              cursor: isProcessing || !jsonText.trim() ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {isProcessing ? 'Validating...' : '🔍 Validate & Preview'}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleCommit}
-            disabled={isProcessing || !jsonText.trim() || (previewResult?.invalid_count || 0) > 0}
-            style={{
-              padding: '8px 22px',
-              borderRadius: '8px',
-              border: 'none',
-              backgroundColor: isProcessing || !jsonText.trim() || (previewResult?.invalid_count || 0) > 0 ? '#94A3B8' : '#1455B8',
-              color: '#FFFFFF',
-              fontSize: '12px',
-              fontWeight: 800,
-              cursor: isProcessing || !jsonText.trim() || (previewResult?.invalid_count || 0) > 0 ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {isProcessing ? 'Importing...' : '✓ Confirm & Import Questions'}
-          </button>
+          <span style={{ fontSize: '11.5px', color: tokens.textSecondary }}>
+            {!previewResult
+              ? 'Step 1: Validate & Preview JSON before committing.'
+              : (previewResult.invalid_count || 0) > 0
+              ? 'Resolve all invalid rows before importing.'
+              : 'Ready to commit transactionally.'}
+          </span>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isProcessing}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.surfaceCard,
+                color: tokens.textPrimary,
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="coding-json-preview-btn"
+              onClick={handlePreview}
+              disabled={isProcessing || !jsonText.trim()}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                backgroundColor: tokens.cslBlueSoftBg,
+                color: tokens.cslBlueSoftText,
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: isProcessing || !jsonText.trim() ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isProcessing ? 'Validating...' : 'Validate & Preview'}
+            </button>
+            <button
+              type="button"
+              data-testid="coding-json-commit-btn"
+              onClick={handleCommit}
+              disabled={!canCommit}
+              style={{
+                padding: '8px 20px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: canCommit ? tokens.cslBlue : tokens.borderStrong,
+                color: '#FFFFFF',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: canCommit ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {isProcessing ? 'Importing...' : 'Confirm & Import'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -1,16 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   getAdminQuestionPools,
   createAdminQuestionPool,
   getAdminQuestionPoolDetail,
   updateAdminQuestionPool,
   deleteAdminQuestionPool,
+  reconcileAdminQuestionPool,
   manageAdminQuestionPoolItems,
   getAdminQuestions,
   getAdminQuestion,
   getAdminSections,
   archiveAdminQuestion,
   updateAdminQuestion,
+  createAdminQuestion,
   createAdminQuestionInPool,
   removeAdminQuestionFromPool,
   previewAdminPoolCSV,
@@ -20,43 +22,56 @@ import {
   type AdminSection,
   type CSVImportPreviewResponse,
   type SectionMappingRule,
+  type PoolQuestionType,
 } from '../../api/admin';
 import { AdminQuestionEditorModal, isCodingQuestion } from './AdminQuestionEditorModal';
 import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
-import { OdometerCard } from '../../components/admin/OdometerCard';
-import { generateCodeFromTitle } from '../../utils/codeGenerator';
+import { ImportCodingJsonModal } from './ImportCodingJsonModal';
 import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 interface AdminQuestionPoolsViewProps {
   onCreateQuestion?: () => void;
+  onCreateMcqQuestion?: () => void;
+  onCreateCodingQuestion?: () => void;
   onImportCSV?: () => void;
   onViewCentralBank?: () => void;
   onNavigateToAssessment?: (assessmentId: string) => void;
 }
 
 export function AdminQuestionPoolsView({
-  onCreateQuestion,
+  onCreateMcqQuestion,
+  onCreateCodingQuestion,
   onViewCentralBank,
   onNavigateToAssessment,
 }: AdminQuestionPoolsViewProps = {}) {
+  const { tokens } = useAdminTheme();
+
   const [pools, setPools] = useState<AdminQuestionPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [toastMsg, setToastMsg] = useState<string>('');
 
-  // View Mode: Grid (Mockup 5) vs List
+  // Layout & Filters
   const [viewLayout, setViewLayout] = useState<'GRID' | 'LIST'>('GRID');
-  const [bulkActionActive, setBulkActionActive] = useState(false);
-
-  // Filters
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'ARCHIVED'>('ALL');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'MCQ' | 'CODING' | 'UNCLASSIFIED'>('ALL');
 
-  // Create / Edit Modal
+  // Create / Edit Pool Modal
   const [showFormModal, setShowFormModal] = useState(false);
   const [editingPool, setEditingPool] = useState<AdminQuestionPool | null>(null);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    name: string;
+    code: string;
+    question_type: PoolQuestionType;
+    category: string;
+    description: string;
+    is_active: boolean;
+  }>({
     name: '',
     code: '',
+    question_type: 'MCQ',
     category: '',
     description: '',
     is_active: true,
@@ -65,24 +80,29 @@ export function AdminQuestionPoolsView({
   const [useCustomCode, setUseCustomCode] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Manage Questions Modal / Drawer
+  // Standalone Question Creation Fallback Modal (when component used without parent callbacks)
+  const [standaloneQuestionModal, setStandaloneQuestionModal] = useState<'MCQ' | 'CODING' | null>(null);
+  const [savingStandaloneQuestion, setSavingStandaloneQuestion] = useState(false);
+
+  // Manage Pool Drawer / Modal
   const [managingPool, setManagingPool] = useState<AdminQuestionPool | null>(null);
   const [poolDetailLoading, setPoolDetailLoading] = useState(false);
-  const [showAddQuestionsModal, setShowAddQuestionsModal] = useState(false);
+  const [drawerNotice, setDrawerNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [reconciling, setReconciling] = useState(false);
 
-  // Direct Question Authoring inside Pool Drawer
+  // Pool-scoped Question Authoring (MCQ or Coding strictly by pool type)
   const [showPoolQuestionModal, setShowPoolQuestionModal] = useState(false);
-  const [poolQuestionType, setPoolQuestionType] = useState<'MCQ' | 'CODING'>('MCQ');
+  const [poolQuestionType, setPoolQuestionType] = useState<PoolQuestionType>('MCQ');
   const [editingQuestionInPool, setEditingQuestionInPool] = useState<AdminQuestion | null>(null);
   const [savingPoolQuestion, setSavingPoolQuestion] = useState(false);
 
-  // Pool-Scoped CSV Import Modal State
+  // Pool-Scoped MCQ CSV Import Modal
   const [showPoolCsvModal, setShowPoolCsvModal] = useState(false);
   const [targetCsvPoolId, setTargetCsvPoolId] = useState<string>('');
   const [poolCsvStep, setPoolCsvStep] = useState<'UPLOAD' | 'PREVIEW' | 'RESULT'>('UPLOAD');
   const [poolCsvFile, setPoolCsvFile] = useState<File | null>(null);
   const [poolCsvText, setPoolCsvText] = useState('');
-  const [poolCsvAddToGlobal, setPoolCsvAddToGlobal] = useState(false); // Unchecked by default
+  const [poolCsvAddToGlobal, setPoolCsvAddToGlobal] = useState(false);
   const [poolCsvPreview, setPoolCsvPreview] = useState<CSVImportPreviewResponse | null>(null);
   const [poolCsvSectionMapping, setPoolCsvSectionMapping] = useState<Record<string, SectionMappingRule>>({});
   const [poolCsvLoading, setPoolCsvLoading] = useState(false);
@@ -95,49 +115,73 @@ export function AdminQuestionPoolsView({
     add_to_global_bank: boolean;
   } | null>(null);
 
+  // Pool-Scoped Coding JSON Import Modal
+  const [codingImportPool, setCodingImportPool] = useState<AdminQuestionPool | null>(null);
+
   // Drawer Filters
   const [drawerSearch, setDrawerSearch] = useState('');
   const [drawerSectionFilter, setDrawerSectionFilter] = useState('');
   const [drawerDifficultyFilter, setDrawerDifficultyFilter] = useState('');
 
-  // Add questions from bank state
+  // Add Questions from Bank Picker Modal
+  const [showAddQuestionsModal, setShowAddQuestionsModal] = useState(false);
   const [bankQuestions, setBankQuestions] = useState<AdminQuestion[]>([]);
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [bankLoading, setBankLoading] = useState(false);
   const [bankSearch, setBankSearch] = useState('');
   const [bankSectionFilter, setBankSectionFilter] = useState('');
+  const [showIncompatibleBank, setShowIncompatibleBank] = useState(false);
   const [selectedBankQuestionIds, setSelectedBankQuestionIds] = useState<number[]>([]);
   const [addingToPool, setAddingToPool] = useState(false);
+  const [bankModalError, setBankModalError] = useState('');
 
-  const loadPools = async () => {
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg((prev) => (prev === msg ? '' : prev)), 4000);
+  };
+
+  const loadPools = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const params: { search?: string; is_active?: boolean } = {};
-      if (search.trim()) params.search = search.trim();
+      const params: {
+        q?: string;
+        is_active?: boolean;
+        question_type?: PoolQuestionType | 'UNCLASSIFIED';
+      } = {};
+      if (search.trim()) params.q = search.trim();
       if (statusFilter === 'ACTIVE') params.is_active = true;
       if (statusFilter === 'ARCHIVED') params.is_active = false;
+      if (typeFilter !== 'ALL') params.question_type = typeFilter;
 
       const data = await getAdminQuestionPools(params);
       setPools(data);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to load question pools.';
-      setError(msg);
+      setError(formatApiError(err, 'Failed to load question pools.'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [search, statusFilter, typeFilter]);
 
   useEffect(() => {
     loadPools();
     getAdminSections().then(setSections).catch(() => {});
-  }, [statusFilter]);
+  }, [loadPools]);
+
+  const generatePoolCode = (name: string) =>
+    name
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 28);
 
   const handleOpenCreateModal = () => {
     setEditingPool(null);
     setFormData({
       name: '',
       code: '',
+      question_type: 'MCQ',
       category: '',
       description: '',
       is_active: true,
@@ -153,6 +197,7 @@ export function AdminQuestionPoolsView({
     setFormData({
       name: pool.name,
       code: pool.code,
+      question_type: pool.question_type || ((pool.coding_count || 0) > 0 && (pool.mcq_count || 0) === 0 ? 'CODING' : 'MCQ'),
       category: pool.category || '',
       description: pool.description || '',
       is_active: pool.is_active,
@@ -167,24 +212,62 @@ export function AdminQuestionPoolsView({
       setFormError('Pool name and unique code are required.');
       return;
     }
+    if (formData.question_type !== 'MCQ' && formData.question_type !== 'CODING') {
+      setFormError('Please select whether this pool holds MCQ or CODING questions.');
+      return;
+    }
 
     try {
       setSubmittingForm(true);
       setFormError('');
 
       if (editingPool) {
-        await updateAdminQuestionPool(editingPool.id, formData);
+        const updated = await updateAdminQuestionPool(editingPool.id, formData);
+        if (managingPool && managingPool.id === updated.id) {
+          const detail = await getAdminQuestionPoolDetail(updated.id);
+          setManagingPool(detail);
+        }
+        showToast(`Pool "${updated.name}" updated.`);
       } else {
-        await createAdminQuestionPool(formData);
+        const created = await createAdminQuestionPool(formData);
+        showToast(`Created ${created.question_type} pool "${created.name}".`);
       }
 
       setShowFormModal(false);
-      loadPools();
+      await loadPools();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save question pool.';
-      setFormError(msg);
+      setFormError(formatApiError(err, 'Failed to save question pool.'));
     } finally {
       setSubmittingForm(false);
+    }
+  };
+
+  const handleClassifyOrReconcilePool = async (pool: AdminQuestionPool, targetType: PoolQuestionType) => {
+    const isMixed = Boolean(pool.is_mixed) || ((pool.mcq_count || 0) > 0 && (pool.coding_count || 0) > 0);
+    if (isMixed) {
+      const incompatibleCount = targetType === 'MCQ' ? (pool.coding_count || 0) : (pool.mcq_count || 0);
+      const ok = window.confirm(
+        `Classify "${pool.name}" as a ${targetType} pool and detach ${incompatibleCount} incompatible question(s) from this pool?\n\nDetached questions remain safely stored in the Global Question Bank.`
+      );
+      if (!ok) return;
+    }
+    try {
+      setReconciling(true);
+      setDrawerNotice(null);
+      const res = await reconcileAdminQuestionPool(pool.id, targetType, true);
+      setManagingPool(res.pool);
+      await loadPools();
+      setDrawerNotice({
+        type: 'success',
+        text:
+          res.detached_count > 0
+            ? `Pool classified as ${targetType}; ${res.detached_count} incompatible item(s) detached cleanly.`
+            : `Pool classified as ${targetType}.`,
+      });
+    } catch (err: unknown) {
+      setDrawerNotice({ type: 'error', text: formatApiError(err, 'Failed to classify pool.') });
+    } finally {
+      setReconciling(false);
     }
   };
 
@@ -195,36 +278,43 @@ export function AdminQuestionPoolsView({
     }
     try {
       await updateAdminQuestionPool(pool.id, { is_active: !pool.is_active });
-      loadPools();
+      await loadPools();
+      showToast(`Pool "${pool.name}" ${action}d.`);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : `Failed to ${action} pool.`);
+      setError(formatApiError(err, `Failed to ${action} pool.`));
     }
   };
 
   const handleDeletePool = async (pool: AdminQuestionPool) => {
     if (pool.assessments_count > 0) {
-      alert(`Cannot delete pool "${pool.name}" because it is currently linked to ${pool.assessments_count} assessment(s). Unlink it from assessments first.`);
+      setError(`Cannot delete pool "${pool.name}" because it is linked to ${pool.assessments_count} assessment(s).`);
       return;
     }
-    if (!window.confirm(`Delete question pool "${pool.name}" (${pool.code})?\n\nThis will remove the pool grouping. Questions inside will safely remain in the Question Bank.`)) {
+    if (!window.confirm(`Delete question pool "${pool.name}" (${pool.code})?\n\nQuestions inside remain safely in the Question Bank.`)) {
       return;
     }
     try {
       await deleteAdminQuestionPool(pool.id);
-      loadPools();
+      if (managingPool?.id === pool.id) setManagingPool(null);
+      await loadPools();
+      showToast(`Deleted pool "${pool.name}".`);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to delete question pool.');
+      setError(formatApiError(err, 'Failed to delete question pool.'));
     }
   };
 
   const handleOpenManageQuestions = async (pool: AdminQuestionPool) => {
     setManagingPool(pool);
+    setDrawerNotice(null);
+    setDrawerSearch('');
+    setDrawerSectionFilter('');
+    setDrawerDifficultyFilter('');
     try {
       setPoolDetailLoading(true);
       const detail = await getAdminQuestionPoolDetail(pool.id);
       setManagingPool(detail);
     } catch {
-      // keep existing
+      // keep summary
     } finally {
       setPoolDetailLoading(false);
     }
@@ -235,27 +325,48 @@ export function AdminQuestionPoolsView({
     try {
       const updated = await removeAdminQuestionFromPool(managingPool.id, questionId);
       setManagingPool(updated);
-      loadPools();
+      await loadPools();
+      setDrawerNotice({ type: 'success', text: `Removed question #${questionId} from pool (preserved in Question Bank).` });
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to remove question from pool.');
+      setDrawerNotice({ type: 'error', text: formatApiError(err, 'Failed to remove question from pool.') });
     }
   };
 
   const handleOpenCreateMCQInPool = () => {
+    if (!managingPool || managingPool.question_type !== 'MCQ') return;
     setEditingQuestionInPool(null);
     setPoolQuestionType('MCQ');
     setShowPoolQuestionModal(true);
   };
 
   const handleOpenCreateCodingInPool = () => {
+    if (!managingPool || managingPool.question_type !== 'CODING') return;
     setEditingQuestionInPool(null);
     setPoolQuestionType('CODING');
     setShowPoolQuestionModal(true);
   };
 
-  const handleOpenPoolCsvImport = (pool?: AdminQuestionPool | null) => {
-    const selectedPool = pool || managingPool || pools[0] || null;
-    setTargetCsvPoolId(selectedPool ? selectedPool.id : '');
+  // Unified Import Handler (B1): chooses CSV or Coding JSON strictly by Pool Type
+  const handleOpenUnifiedImport = async (pool?: AdminQuestionPool | null) => {
+    const target = pool || managingPool || pools.find((p) => p.question_type !== null) || pools[0] || null;
+    if (!target) {
+      setError('Create a Question Pool first before importing questions.');
+      return;
+    }
+    if (!target.question_type) {
+      await handleOpenManageQuestions(target);
+      setDrawerNotice({
+        type: 'error',
+        text: 'Classify this pool as MCQ or CODING before importing questions.',
+      });
+      return;
+    }
+    if (target.question_type === 'CODING') {
+      setCodingImportPool(target);
+      return;
+    }
+    // MCQ Pool -> CSV Import
+    setTargetCsvPoolId(target.id);
     setPoolCsvStep('UPLOAD');
     setPoolCsvFile(null);
     setPoolCsvText('');
@@ -270,7 +381,7 @@ export function AdminQuestionPoolsView({
   const handlePreviewPoolCsv = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!targetCsvPoolId) {
-      setPoolCsvError('Please select a target Question Pool first.');
+      setPoolCsvError('Please select a target MCQ Question Pool first.');
       return;
     }
     if (!poolCsvFile && !poolCsvText.trim()) {
@@ -285,6 +396,11 @@ export function AdminQuestionPoolsView({
         poolCsvFile || undefined,
         poolCsvText || undefined
       );
+      if ((preview.detected_type || '').toUpperCase() === 'CODING') {
+        setPoolCsvError('Detected CODING CSV content. MCQ pools accept only MCQ CSV files.');
+        setPoolCsvPreview(null);
+        return;
+      }
       setPoolCsvPreview(preview);
       const initialMapping: Record<string, SectionMappingRule> = {};
       (preview.detected_sections || []).forEach((sec) => {
@@ -313,8 +429,9 @@ export function AdminQuestionPoolsView({
   };
 
   const handleCommitPoolCsv = async () => {
-    if (!targetCsvPoolId) {
-      setPoolCsvError('Please select a target Question Pool.');
+    if (!targetCsvPoolId || !poolCsvPreview) return;
+    if ((poolCsvPreview.valid_count ?? poolCsvPreview.total_rows ?? 0) === 0) {
+      setPoolCsvError('No valid rows detected. Fix CSV errors before importing.');
       return;
     }
     setPoolCsvLoading(true);
@@ -328,19 +445,19 @@ export function AdminQuestionPoolsView({
       });
       setPoolCsvResult({
         success: Boolean(res.success),
-        imported_count: res.imported_count ?? res.success_count ?? 0,
-        error_count: res.error_count ?? 0,
+        imported_count: res.imported_count || res.success_count || 0,
+        error_count: res.error_count || 0,
         errors: res.errors || [],
         add_to_global_bank: Boolean(res.add_to_global_bank),
       });
       setPoolCsvStep('RESULT');
       await loadPools();
       if (managingPool && managingPool.id === targetCsvPoolId) {
-        const refreshed = await getAdminQuestionPoolDetail(managingPool.id);
-        setManagingPool(refreshed);
+        const detail = await getAdminQuestionPoolDetail(targetCsvPoolId);
+        setManagingPool(detail);
       }
     } catch (err: unknown) {
-      setPoolCsvError(formatApiError(err, 'Pool CSV import failed.'));
+      setPoolCsvError(formatApiError(err, 'Failed to import CSV into pool.'));
     } finally {
       setPoolCsvLoading(false);
     }
@@ -354,7 +471,7 @@ export function AdminQuestionPoolsView({
       setPoolQuestionType(isCodingQuestion(match) ? 'CODING' : 'MCQ');
       setShowPoolQuestionModal(true);
     } catch (err: unknown) {
-      alert(formatApiError(err, 'Failed to load question details for editing.'));
+      setDrawerNotice({ type: 'error', text: formatApiError(err, 'Failed to load question details for editing.') });
     } finally {
       setPoolDetailLoading(false);
     }
@@ -367,9 +484,9 @@ export function AdminQuestionPoolsView({
         const detail = await getAdminQuestionPoolDetail(managingPool.id);
         setManagingPool(detail);
       }
-      loadPools();
-    } catch {
-      alert('Failed to update question archive status.');
+      await loadPools();
+    } catch (err: unknown) {
+      setDrawerNotice({ type: 'error', text: formatApiError(err, 'Failed to update archive status.') });
     }
   };
 
@@ -392,24 +509,40 @@ export function AdminQuestionPoolsView({
       setEditingQuestionInPool(null);
       const detail = await getAdminQuestionPoolDetail(managingPool.id);
       setManagingPool(detail);
-      loadPools();
+      await loadPools();
+      setDrawerNotice({
+        type: 'success',
+        text: editingQuestionInPool ? 'Question updated.' : 'Question created and added to pool.',
+      });
     } finally {
       setSavingPoolQuestion(false);
     }
   };
 
+  const handleSaveStandaloneQuestion = async (data: any) => {
+    try {
+      setSavingStandaloneQuestion(true);
+      await createAdminQuestion(data);
+      setStandaloneQuestionModal(null);
+      showToast('New question saved to Global Question Bank.');
+    } finally {
+      setSavingStandaloneQuestion(false);
+    }
+  };
+
   const handleOpenAddQuestions = async () => {
-    if (!managingPool) return;
+    if (!managingPool || !managingPool.question_type) return;
     setShowAddQuestionsModal(true);
     setSelectedBankQuestionIds([]);
+    setBankModalError('');
+    setShowIncompatibleBank(false);
     try {
       setBankLoading(true);
       const data = await getAdminQuestions({ is_active: 'true' });
-      // Exclude questions already in the pool
       const existingQIds = new Set((managingPool.items || []).map((it) => it.question));
       setBankQuestions(data.filter((q) => !existingQIds.has(q.id)));
-    } catch {
-      alert('Failed to load question bank.');
+    } catch (err: unknown) {
+      setBankModalError(formatApiError(err, 'Failed to load Global Question Bank.'));
     } finally {
       setBankLoading(false);
     }
@@ -419,6 +552,7 @@ export function AdminQuestionPoolsView({
     if (!managingPool || selectedBankQuestionIds.length === 0) return;
     try {
       setAddingToPool(true);
+      setBankModalError('');
       const updated = await manageAdminQuestionPoolItems(
         managingPool.id,
         selectedBankQuestionIds,
@@ -427,16 +561,25 @@ export function AdminQuestionPoolsView({
       setManagingPool(updated);
       setShowAddQuestionsModal(false);
       setSelectedBankQuestionIds([]);
-      loadPools();
+      await loadPools();
+      setDrawerNotice({ type: 'success', text: `Added ${selectedBankQuestionIds.length} question(s) to pool.` });
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to add questions to pool.');
+      setBankModalError(formatApiError(err, 'Failed to add questions to pool.'));
     } finally {
       setAddingToPool(false);
     }
   };
 
-  // Filter bank questions in picker
+  const poolTargetType = managingPool?.question_type || null;
+
   const filteredBankQuestions = bankQuestions.filter((q) => {
+    const qIsCoding = isCodingQuestion(q);
+    const compatible =
+      !poolTargetType ||
+      (poolTargetType === 'CODING' && qIsCoding) ||
+      (poolTargetType === 'MCQ' && !qIsCoding);
+    if (!showIncompatibleBank && !compatible) return false;
+
     if (bankSectionFilter) {
       const filterUpper = bankSectionFilter.trim().toUpperCase();
       const qType = (q.section_type || '').trim().toUpperCase();
@@ -453,496 +596,535 @@ export function AdminQuestionPoolsView({
     return true;
   });
 
-  // Calculate statistics
-  const totalPoolsCount = pools.length;
-  const activePoolsCount = pools.filter((p) => p.is_active).length;
-  const totalQuestionsInPools = pools.reduce((acc, p) => acc + (p.questions_count || 0), 0);
+  const compatibleFilteredIds = filteredBankQuestions
+    .filter((q) => {
+      const qIsCoding = isCodingQuestion(q);
+      return (
+        poolTargetType === 'CODING' ? qIsCoding : poolTargetType === 'MCQ' ? !qIsCoding : false
+      );
+    })
+    .map((q) => q.id);
 
-  return (
-    <div style={{ maxWidth: '1100px' }}>
-      {/* ─── PAGE TITLE (Mockup 5) ─── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1
+  // Summary Metrics
+  const totalPoolsCount = pools.length;
+  const mcqPoolsCount = pools.filter((p) => p.question_type === 'MCQ').length;
+  const codingPoolsCount = pools.filter((p) => p.question_type === 'CODING').length;
+  const attentionCount = pools.filter((p) => p.is_mixed || !p.question_type || (p.questions_count || 0) === 0).length;
+
+  const renderPoolTypeBadge = (pool: AdminQuestionPool) => {
+    if (pool.is_mixed) {
+      return (
+        <span
           style={{
-            fontSize: '44px',
-            fontWeight: 900,
-            color: '#0F172A',
-            margin: 0,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.1,
+            fontSize: '10.5px',
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: '6px',
+            backgroundColor: tokens.dangerBg,
+            color: tokens.dangerText,
+            border: `1px solid ${tokens.dangerBorder}`,
           }}
         >
-          Question Bank
-        </h1>
-
-        {onViewCentralBank && (
-          <button
-            type="button"
-            onClick={onViewCentralBank}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#FFFFFF',
-              color: '#0D52D6',
-              border: '1.5px solid #0D52D6',
-              borderRadius: '20px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <span>Central Question Repository →</span>
-          </button>
-        )}
-      </div>
-
-      {/* ─── 4 ODOMETER COUNTERS (Mockup 5) ─── */}
-      <div
+          Mixed Types
+        </span>
+      );
+    }
+    if (pool.question_type === 'CODING') {
+      return (
+        <span
+          style={{
+            fontSize: '10.5px',
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: '6px',
+            backgroundColor: tokens.codingBg,
+            color: tokens.codingText,
+            border: `1px solid ${tokens.codingBorder}`,
+          }}
+        >
+          CODING Pool
+        </span>
+      );
+    }
+    if (pool.question_type === 'MCQ') {
+      return (
+        <span
+          style={{
+            fontSize: '10.5px',
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: '6px',
+            backgroundColor: tokens.cslBlueSoftBg,
+            color: tokens.cslBlueSoftText,
+            border: `1px solid ${tokens.cslBlueSoftBorder}`,
+          }}
+        >
+          MCQ Pool
+        </span>
+      );
+    }
+    return (
+      <span
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gap: '16px',
-          marginBottom: '28px',
+          fontSize: '10.5px',
+          fontWeight: 700,
+          padding: '3px 8px',
+          borderRadius: '6px',
+          backgroundColor: tokens.cslYellowSoftBg,
+          color: tokens.cslYellowSoftText,
         }}
       >
-        <OdometerCard label="Pools" value={totalPoolsCount} />
-        <OdometerCard label="Active" value={activePoolsCount} />
-        <OdometerCard
-          label="Action Required"
-          value={pools.filter((p) => (p.questions_count || 0) === 0).length}
-        />
-        <OdometerCard label="Bank Strength" value={totalQuestionsInPools} />
-      </div>
+        Unclassified
+      </span>
+    );
+  };
 
-      {/* ─── SEARCH & FILTER PILL BAR (Mockup 5) ─── */}
+  const inputStyle: React.CSSProperties = {
+    padding: '8px 12px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.borderStrong}`,
+    backgroundColor: tokens.inputBg,
+    color: tokens.textPrimary,
+    fontSize: '13px',
+    fontFamily: tokens.fontFamily,
+    boxSizing: 'border-box',
+  };
+
+  const mcqPoolsOnly = pools.filter((p) => p.question_type === 'MCQ');
+
+  return (
+    <div style={{ maxWidth: '1220px', fontFamily: tokens.fontFamily, color: tokens.textPrimary }}>
+      {/* Header */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '16px',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: '16px',
+          flexWrap: 'wrap',
+          marginBottom: '20px',
         }}
       >
-        {/* Grid/List View Toggle */}
+        <div>
+          <h1 style={{ fontSize: '26px', fontWeight: 800, color: tokens.textPrimary, margin: 0, letterSpacing: '-0.02em' }}>
+            Question Pools
+          </h1>
+          <p style={{ fontSize: '13px', color: tokens.textSecondary, margin: '4px 0 0 0' }}>
+            Curate strictly typed MCQ and Coding pools, enforce format boundaries, and link pools to assessments.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {onViewCentralBank && (
+            <button
+              type="button"
+              onClick={onViewCentralBank}
+              style={{
+                padding: '8px 14px',
+                backgroundColor: tokens.surfaceCard,
+                color: tokens.cslBlueSoftText,
+                border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                borderRadius: '8px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Global Question Bank →
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="pools-create-mcq-btn"
+            onClick={() => {
+              if (onCreateMcqQuestion) onCreateMcqQuestion();
+              else setStandaloneQuestionModal('MCQ');
+            }}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderStrong}`,
+              borderRadius: '8px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            + Create MCQ
+          </button>
+          <button
+            type="button"
+            data-testid="pools-create-coding-btn"
+            onClick={() => {
+              if (onCreateCodingQuestion) onCreateCodingQuestion();
+              else setStandaloneQuestionModal('CODING');
+            }}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: tokens.codingBg,
+              color: tokens.codingText,
+              border: `1px solid ${tokens.codingBorder}`,
+              borderRadius: '8px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            &lt;/&gt; + Create Coding
+          </button>
+          <button
+            type="button"
+            data-testid="create-pool-btn"
+            onClick={handleOpenCreateModal}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: tokens.cslBlue,
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            + Create Pool
+          </button>
+        </div>
+      </div>
+
+      {/* Feedback Banners */}
+      {toastMsg && (
+        <div
+          style={{
+            marginBottom: '16px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            backgroundColor: tokens.successBg,
+            border: `1px solid ${tokens.successBorder}`,
+            color: tokens.successText,
+            fontSize: '13px',
+            fontWeight: 600,
+            display: 'flex',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>✓ {toastMsg}</span>
+          <button type="button" onClick={() => setToastMsg('')} style={{ background: 'none', border: 'none', color: tokens.successText, cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
+      {error && (
+        <div
+          style={{
+            marginBottom: '16px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            backgroundColor: tokens.dangerBg,
+            border: `1px solid ${tokens.dangerBorder}`,
+            color: tokens.dangerText,
+            fontSize: '13px',
+            fontWeight: 600,
+            display: 'flex',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>{error}</span>
+          <button type="button" onClick={() => setError('')} style={{ background: 'none', border: 'none', color: tokens.dangerText, cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
+      {/* Summary Metric Cards */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+          gap: '14px',
+          marginBottom: '20px',
+        }}
+      >
+        {[
+          { label: 'Total Pools', value: totalPoolsCount, accent: tokens.cslBlue },
+          { label: 'MCQ Pools', value: mcqPoolsCount, accent: '#0EA5E9' },
+          { label: 'Coding Pools', value: codingPoolsCount, accent: '#7C3AED' },
+          { label: 'Needs Classification / Empty', value: attentionCount, accent: tokens.cslYellow },
+        ].map((metric) => (
+          <div
+            key={metric.label}
+            style={{
+              backgroundColor: tokens.surfaceCard,
+              borderRight: `1px solid ${tokens.border}`,
+              borderBottom: `1px solid ${tokens.border}`,
+              borderLeft: `1px solid ${tokens.border}`,
+              borderTop: `3px solid ${metric.accent}`,
+              borderRadius: '12px',
+              padding: '16px 18px',
+              boxShadow: tokens.cardShadow,
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 600, color: tokens.textSecondary }}>{metric.label}</div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: tokens.textPrimary, marginTop: '4px' }}>
+              {metric.value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter Toolbar */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '10px',
+          alignItems: 'center',
+          padding: '12px 14px',
+          backgroundColor: tokens.surfaceCard,
+          border: `1px solid ${tokens.border}`,
+          borderRadius: '12px',
+          boxShadow: tokens.cardShadow,
+          marginBottom: '20px',
+        }}
+      >
         <div style={{ display: 'flex', gap: '4px' }}>
           <button
             type="button"
             onClick={() => setViewLayout('GRID')}
             title="Grid View"
             style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: viewLayout === 'GRID' ? '#0D52D6' : '#FFFFFF',
-              color: viewLayout === 'GRID' ? '#FFFFFF' : '#64748B',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              padding: '7px 11px',
+              borderRadius: '7px',
+              border: `1px solid ${viewLayout === 'GRID' ? tokens.cslBlue : tokens.borderStrong}`,
+              backgroundColor: viewLayout === 'GRID' ? tokens.cslBlue : tokens.surfaceElevated,
+              color: viewLayout === 'GRID' ? '#FFFFFF' : tokens.textSecondary,
+              fontSize: '12px',
+              fontWeight: 700,
               cursor: 'pointer',
             }}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="7"></rect>
-              <rect x="14" y="3" width="7" height="7"></rect>
-              <rect x="14" y="14" width="7" height="7"></rect>
-              <rect x="3" y="14" width="7" height="7"></rect>
-            </svg>
+            Grid
           </button>
           <button
             type="button"
             onClick={() => setViewLayout('LIST')}
-            title="List View"
+            title="Table View"
             style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: viewLayout === 'LIST' ? '#0D52D6' : '#FFFFFF',
-              color: viewLayout === 'LIST' ? '#FFFFFF' : '#64748B',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="8" y1="6" x2="21" y2="6"></line>
-              <line x1="8" y1="12" x2="21" y2="12"></line>
-              <line x1="8" y1="18" x2="21" y2="18"></line>
-              <line x1="3" y1="6" x2="3.01" y2="6"></line>
-              <line x1="3" y1="12" x2="3.01" y2="12"></line>
-              <line x1="3" y1="18" x2="3.01" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-
-        {/* Pill Search Input with integrated icon */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            type="text"
-            placeholder="Search..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                loadPools();
-              }
-            }}
-            style={{
-              width: '100%',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 42px 10px 18px',
-              fontSize: '13px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              color: '#1E293B',
-            }}
-          />
-          <button
-            type="button"
-            onClick={loadPools}
-            style={{
-              position: 'absolute',
-              right: '4px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              border: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </button>
-        </div>
-
-        {/* All Statuses Pill Dropdown */}
-        <div style={{ position: 'relative' }}>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'ALL' | 'ACTIVE' | 'ARCHIVED')}
-            style={{
-              appearance: 'none',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 36px 10px 18px',
-              fontSize: '13px',
+              padding: '7px 11px',
+              borderRadius: '7px',
+              border: `1px solid ${viewLayout === 'LIST' ? tokens.cslBlue : tokens.borderStrong}`,
+              backgroundColor: viewLayout === 'LIST' ? tokens.cslBlue : tokens.surfaceElevated,
+              color: viewLayout === 'LIST' ? '#FFFFFF' : tokens.textSecondary,
+              fontSize: '12px',
               fontWeight: 700,
-              color: '#1E293B',
-              outline: 'none',
               cursor: 'pointer',
             }}
           >
-            <option value="ALL">All Statuses</option>
-            <option value="ACTIVE">Active</option>
-            <option value="ARCHIVED">Archived</option>
-          </select>
-          <div
-            style={{
-              position: 'absolute',
-              right: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              pointerEvents: 'none',
-              color: '#0D52D6',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-        </div>
-      </div>
-
-      {/* ─── ACTION BUTTONS ROW (Mockup 5) ─── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '26px',
-        }}
-      >
-        {/* Bulk Action Toggle */}
-        <div
-          style={{
-            backgroundColor: '#CBD5E1',
-            borderRadius: '20px',
-            padding: '4px 10px 4px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '12px',
-            fontWeight: 800,
-            color: '#1E293B',
-          }}
-        >
-          <span>Bulk Action</span>
-          <input
-            type="checkbox"
-            checked={bulkActionActive}
-            onChange={(e) => setBulkActionActive(e.target.checked)}
-            style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-          />
+            List
+          </button>
         </div>
 
-        {/* Create New Question Button (Mockup 5) */}
-        <button
-          type="button"
-          onClick={() => {
-            if (onCreateQuestion) {
-              onCreateQuestion();
-            } else {
-              handleOpenCreateModal();
+        <input
+          type="text"
+          placeholder="Search pools by name, code, or category..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              loadPools();
             }
           }}
-          style={{
-            backgroundColor: '#0D52D6',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '20px',
-            padding: '8px 18px',
-            fontSize: '13px',
-            fontWeight: 800,
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(13, 82, 214, 0.25)',
-          }}
-        >
-          Create New Question
-        </button>
+          style={{ ...inputStyle, flex: 1, minWidth: '210px' }}
+        />
 
-        {/* Create New Pool Button */}
+        <select
+          aria-label="Filter by pool type"
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value as 'ALL' | 'MCQ' | 'CODING' | 'UNCLASSIFIED')}
+          style={inputStyle}
+        >
+          <option value="ALL">All Pool Types</option>
+          <option value="MCQ">MCQ Pools</option>
+          <option value="CODING">Coding Pools</option>
+          <option value="UNCLASSIFIED">Unclassified / Mixed</option>
+        </select>
+
+        <select
+          aria-label="Filter by status"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as 'ALL' | 'ACTIVE' | 'ARCHIVED')}
+          style={inputStyle}
+        >
+          <option value="ALL">All Statuses</option>
+          <option value="ACTIVE">Active</option>
+          <option value="ARCHIVED">Archived</option>
+        </select>
+
         <button
           type="button"
-          onClick={handleOpenCreateModal}
+          onClick={loadPools}
           style={{
-            backgroundColor: '#1E293B',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '20px',
-            padding: '8px 18px',
-            fontSize: '13px',
-            fontWeight: 800,
+            padding: '8px 14px',
+            borderRadius: '8px',
+            border: `1px solid ${tokens.borderStrong}`,
+            backgroundColor: tokens.surfaceElevated,
+            color: tokens.textPrimary,
+            fontSize: '12.5px',
+            fontWeight: 700,
             cursor: 'pointer',
           }}
         >
-          + Create Pool
-        </button>
-
-        {/* Pool-Scoped Import CSV Button */}
-        <button
-          type="button"
-          onClick={() => handleOpenPoolCsvImport(managingPool || pools[0] || null)}
-          style={{
-            backgroundColor: '#22C55E',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '20px',
-            padding: '8px 18px',
-            fontSize: '13px',
-            fontWeight: 800,
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(34, 197, 94, 0.25)',
-          }}
-        >
-          Import CSV
+          Refresh
         </button>
       </div>
 
-      {/* ─── POOLS DISPLAY: GRID (Mockup 5) OR LIST ─── */}
+      {/* Pools Grid / List */}
       {loading ? (
-        <div style={{ padding: '60px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-          Loading Question Pools from PostgreSQL...
-        </div>
-      ) : error ? (
-        <div style={{ padding: '24px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '16px', color: '#DC2626' }}>
-          {error}
+        <div style={{ padding: '48px', textAlign: 'center', color: tokens.textSecondary, fontWeight: 600 }}>
+          Loading Question Pools...
         </div>
       ) : pools.length === 0 ? (
         <div
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '24px',
-            border: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '14px',
+            border: `1px solid ${tokens.border}`,
             padding: '48px 24px',
             textAlign: 'center',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-            No Question Pools Created
+          <div style={{ fontSize: '17px', fontWeight: 700, color: tokens.textPrimary, marginBottom: '6px' }}>
+            No Question Pools Found
           </div>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 20px 0' }}>
-            Question Pools organize questions into reusable curriculum modules for assessments.
+          <p style={{ fontSize: '13px', color: tokens.textSecondary, margin: '0 0 18px 0' }}>
+            Create an MCQ Question Pool or Coding Question Pool to organize reusable assessment content.
           </p>
           <button
             type="button"
             onClick={handleOpenCreateModal}
             style={{
-              padding: '10px 22px',
-              backgroundColor: '#0D52D6',
+              padding: '9px 20px',
+              backgroundColor: tokens.cslBlue,
               color: '#FFFFFF',
               border: 'none',
-              borderRadius: '20px',
+              borderRadius: '8px',
               fontSize: '13px',
-              fontWeight: 800,
+              fontWeight: 700,
               cursor: 'pointer',
             }}
           >
-            Create Question Pool
+            + Create Question Pool
           </button>
         </div>
       ) : viewLayout === 'GRID' ? (
-        /* ─── QUESTION POOLS CARD GRID (Mockup 5) ─── */
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))',
-            gap: '20px',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))',
+            gap: '18px',
           }}
         >
           {pools.map((pool) => {
             const count = pool.questions_count || 0;
-            const statusLabel = count >= 10 ? 'Sufficient' : count > 0 ? 'Insufficient' : 'Empty';
-            const statusBg = count >= 10 ? '#D1FAE5' : count > 0 ? '#FEF3C7' : '#F1F5F9';
-            const statusColor = count >= 10 ? '#065F46' : count > 0 ? '#92400E' : '#64748B';
-
+            const healthOk = pool.pool_health === 'VALID' || (!pool.is_mixed && Boolean(pool.question_type));
             return (
               <div
                 key={pool.id}
+                data-testid={`pool-card-${pool.code}`}
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '24px',
-                  border: '1px solid #CBD5E1',
-                  padding: '24px 22px 20px',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.04)',
+                  backgroundColor: tokens.surfaceCard,
+                  borderRadius: '14px',
+                  border: `1px solid ${pool.is_mixed || !pool.question_type ? tokens.cslYellow : tokens.border}`,
+                  padding: '20px',
+                  boxShadow: tokens.cardShadow,
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  minHeight: '230px',
+                  gap: '14px',
                 }}
               >
-                {/* Blue Folded Corner Ribbon Accent (Mockup 5) */}
-                <svg
-                  style={{ position: 'absolute', top: 0, right: 0 }}
-                  width="46"
-                  height="46"
-                  viewBox="0 0 46 46"
-                  fill="none"
-                >
-                  <path d="M0 0 L46 0 L46 46 Z" fill="#0D52D6" />
-                </svg>
-
-                {/* Pool Title & Actions */}
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingRight: '24px' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1.25 }}>
-                      {pool.name}
-                    </div>
-                  </div>
-
-                  <div style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', fontFamily: 'monospace' }}>
-                    {pool.code} {pool.category ? `• ${pool.category}` : ''}
-                  </div>
-
-                  {/* Questions Available Box (Mockup 5) */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      marginTop: '16px',
-                      marginBottom: '12px',
-                    }}
-                  >
-                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#1E293B' }}>
-                      Questions<br />Available
-                    </span>
-
-                    {/* Recessed Digital Display */}
-                    <div
-                      style={{
-                        backgroundColor: '#8C96A6',
-                        border: '1.5px solid #788291',
-                        borderRadius: '12px',
-                        padding: '4px 14px',
-                        minWidth: '60px',
-                        textAlign: 'center',
-                        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
-                      }}
-                    >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {renderPoolTypeBadge(pool)}
                       <span
                         style={{
-                          fontSize: '32px',
-                          fontWeight: 900,
-                          color: '#0F172A',
-                          lineHeight: 1,
+                          fontSize: '10.5px',
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          backgroundColor: pool.is_active ? tokens.successBg : tokens.surfaceMuted,
+                          color: pool.is_active ? tokens.successText : tokens.textMuted,
                         }}
                       >
-                        {String(count).padStart(2, '0')}
+                        {pool.is_active ? 'Active' : 'Archived'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Status Row (Mockup 5) */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#1E293B' }}>
-                      Status
-                    </span>
+                  <h3 style={{ fontSize: '16px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 4px 0', lineHeight: 1.35 }}>
+                    {pool.name}
+                  </h3>
+                  <div style={{ fontSize: '11.5px', fontFamily: tokens.monoFamily, color: tokens.textSecondary }}>
+                    {pool.code} {pool.category ? `• ${pool.category}` : ''}
+                  </div>
 
-                    <span
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: '10px',
+                      marginTop: '14px',
+                      padding: '10px 12px',
+                      borderRadius: '10px',
+                      backgroundColor: tokens.surfaceElevated,
+                      border: `1px solid ${tokens.border}`,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11px', color: tokens.textSecondary }}>Questions</div>
+                      <div style={{ fontSize: '18px', fontWeight: 800, color: tokens.textPrimary }}>{count}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: tokens.textSecondary }}>Assessments</div>
+                      <div style={{ fontSize: '18px', fontWeight: 800, color: tokens.textPrimary }}>{pool.assessments_count || 0}</div>
+                    </div>
+                  </div>
+
+                  {!healthOk && (
+                    <div
                       style={{
-                        backgroundColor: statusBg,
-                        color: statusColor,
-                        padding: '4px 14px',
-                        borderRadius: '16px',
-                        fontSize: '11px',
-                        fontWeight: 800,
+                        marginTop: '10px',
+                        padding: '7px 10px',
+                        borderRadius: '8px',
+                        backgroundColor: tokens.cslYellowSoftBg,
+                        color: tokens.cslYellowSoftText,
+                        fontSize: '11.5px',
+                        fontWeight: 600,
                       }}
                     >
-                      {statusLabel}
-                    </span>
-                  </div>
+                      {pool.is_mixed
+                        ? `Mixed Pool (${pool.mcq_count || 0} MCQ / ${pool.coding_count || 0} Coding) — Open Manage Pool to reconcile`
+                        : 'Needs type classification before authoring'}
+                    </div>
+                  )}
                 </div>
 
-                {/* Manage Pool Button & Auxiliary Actions (Mockup 5) */}
                 <div>
                   <button
                     type="button"
                     onClick={() => handleOpenManageQuestions(pool)}
                     style={{
                       width: '100%',
-                      backgroundColor: '#0D52D6',
-                      color: '#FFFFFF',
+                      padding: '9px 14px',
+                      borderRadius: '8px',
                       border: 'none',
-                      borderRadius: '20px',
-                      padding: '10px 0',
+                      backgroundColor: tokens.cslBlue,
+                      color: '#FFFFFF',
                       fontSize: '13px',
-                      fontWeight: 800,
+                      fontWeight: 700,
                       cursor: 'pointer',
-                      textAlign: 'center',
-                      boxShadow: '0 2px 6px rgba(13, 82, 214, 0.25)',
-                      transition: 'opacity 0.15s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
                   >
                     Manage Pool
                   </button>
@@ -950,28 +1132,43 @@ export function AdminQuestionPoolsView({
                   <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
-                      onClick={() => handleOpenPoolCsvImport(pool)}
-                      style={{ background: 'none', border: 'none', fontSize: '11px', fontWeight: 700, color: '#059669', cursor: 'pointer' }}
+                      onClick={() => handleOpenUnifiedImport(pool)}
+                      disabled={!pool.question_type}
+                      title={
+                        pool.question_type === 'CODING'
+                          ? 'Import Coding JSON'
+                          : pool.question_type === 'MCQ'
+                          ? 'Import MCQ CSV'
+                          : 'Classify pool first'
+                      }
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        color: !pool.question_type ? tokens.textMuted : tokens.successText,
+                        cursor: !pool.question_type ? 'not-allowed' : 'pointer',
+                      }}
                     >
-                      Import CSV
+                      {pool.question_type === 'CODING' ? 'Import JSON' : 'Import CSV'}
                     </button>
-                    <span style={{ color: '#CBD5E1' }}>•</span>
+                    <span style={{ color: tokens.borderStrong }}>•</span>
                     <button
                       type="button"
                       onClick={() => handleOpenEditModal(pool)}
-                      style={{ background: 'none', border: 'none', fontSize: '11px', fontWeight: 700, color: '#475569', cursor: 'pointer' }}
+                      style={{ background: 'none', border: 'none', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, cursor: 'pointer' }}
                     >
-                      Edit Details
+                      Edit
                     </button>
-                    <span style={{ color: '#CBD5E1' }}>•</span>
+                    <span style={{ color: tokens.borderStrong }}>•</span>
                     <button
                       type="button"
                       onClick={() => handleToggleArchive(pool)}
-                      style={{ background: 'none', border: 'none', fontSize: '11px', fontWeight: 700, color: pool.is_active ? '#D97706' : '#16A34A', cursor: 'pointer' }}
+                      style={{ background: 'none', border: 'none', fontSize: '11.5px', fontWeight: 700, color: tokens.cslYellowSoftText, cursor: 'pointer' }}
                     >
                       {pool.is_active ? 'Archive' : 'Restore'}
                     </button>
-                    <span style={{ color: '#CBD5E1' }}>•</span>
+                    <span style={{ color: tokens.borderStrong }}>•</span>
                     <button
                       type="button"
                       onClick={() => handleDeletePool(pool)}
@@ -979,9 +1176,9 @@ export function AdminQuestionPoolsView({
                       style={{
                         background: 'none',
                         border: 'none',
-                        fontSize: '11px',
+                        fontSize: '11.5px',
                         fontWeight: 700,
-                        color: pool.assessments_count > 0 ? '#CBD5E1' : '#DC2626',
+                        color: pool.assessments_count > 0 ? tokens.textMuted : tokens.dangerText,
                         cursor: pool.assessments_count > 0 ? 'not-allowed' : 'pointer',
                       }}
                     >
@@ -994,77 +1191,78 @@ export function AdminQuestionPoolsView({
           })}
         </div>
       ) : (
-        /* ─── POOLS TABLE (LIST VIEW) ─── */
         <div
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '16px',
-            border: '1px solid #E2E8F0',
-            overflow: 'hidden',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '12px',
+            border: `1px solid ${tokens.border}`,
+            boxShadow: tokens.cardShadow,
+            overflowX: 'auto',
           }}
         >
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
             <thead>
-              <tr style={{ backgroundColor: '#0D52D6', color: '#FFFFFF' }}>
-                <th style={{ padding: '12px 16px', fontWeight: 700 }}>Pool Name & Code</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700 }}>Category</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700 }}>Questions</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700 }}>Linked Assessments</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700 }}>Status</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'right' }}>Actions</th>
+              <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}` }}>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary }}>Pool Name & Code</th>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary }}>Pool Type</th>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary }}>Questions</th>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary }}>Assessments</th>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary }}>Status</th>
+                <th style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {pools.map((pool) => (
-                <tr key={pool.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                  <td style={{ padding: '14px 16px' }}>
-                    <div style={{ fontWeight: 800, color: '#0F172A' }}>{pool.name}</div>
-                    <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#64748B' }}>{pool.code}</div>
+                <tr key={pool.id} style={{ borderBottom: `1px solid ${tokens.border}` }}>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ fontWeight: 700, color: tokens.textPrimary }}>{pool.name}</div>
+                    <div style={{ fontFamily: tokens.monoFamily, fontSize: '11px', color: tokens.textSecondary }}>{pool.code}</div>
                   </td>
-                  <td style={{ padding: '14px 16px', color: '#475569' }}>{pool.category || 'General'}</td>
-                  <td style={{ padding: '14px 16px', fontWeight: 800 }}>{pool.questions_count}</td>
-                  <td style={{ padding: '14px 16px', color: '#475569' }}>{pool.assessments_count}</td>
-                  <td style={{ padding: '14px 16px' }}>
+                  <td style={{ padding: '12px 16px' }}>{renderPoolTypeBadge(pool)}</td>
+                  <td style={{ padding: '12px 16px', fontWeight: 700 }}>{pool.questions_count}</td>
+                  <td style={{ padding: '12px 16px', color: tokens.textSecondary }}>{pool.assessments_count}</td>
+                  <td style={{ padding: '12px 16px' }}>
                     <span
                       style={{
                         fontSize: '11px',
                         fontWeight: 700,
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        backgroundColor: pool.is_active ? '#DCFCE7' : '#F1F5F9',
-                        color: pool.is_active ? '#15803D' : '#64748B',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        backgroundColor: pool.is_active ? tokens.successBg : tokens.surfaceMuted,
+                        color: pool.is_active ? tokens.successText : tokens.textMuted,
                       }}
                     >
                       {pool.is_active ? 'Active' : 'Archived'}
                     </span>
                   </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                  <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                     <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
                       <button
                         type="button"
-                        onClick={() => handleOpenPoolCsvImport(pool)}
+                        onClick={() => handleOpenUnifiedImport(pool)}
+                        disabled={!pool.question_type}
                         style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#ECFDF5',
-                          color: '#065F46',
-                          border: '1px solid #A7F3D0',
-                          borderRadius: '16px',
+                          padding: '6px 11px',
+                          backgroundColor: tokens.surfaceElevated,
+                          color: tokens.successText,
+                          border: `1px solid ${tokens.successBorder}`,
+                          borderRadius: '7px',
                           fontSize: '12px',
                           fontWeight: 700,
-                          cursor: 'pointer',
+                          cursor: !pool.question_type ? 'not-allowed' : 'pointer',
                         }}
                       >
-                        Import CSV
+                        {pool.question_type === 'CODING' ? 'Import JSON' : 'Import CSV'}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleOpenManageQuestions(pool)}
                         style={{
-                          padding: '6px 14px',
-                          backgroundColor: '#0D52D6',
+                          padding: '6px 13px',
+                          backgroundColor: tokens.cslBlue,
                           color: '#FFFFFF',
                           border: 'none',
-                          borderRadius: '16px',
+                          borderRadius: '7px',
                           fontSize: '12px',
                           fontWeight: 700,
                           cursor: 'pointer',
@@ -1081,38 +1279,45 @@ export function AdminQuestionPoolsView({
         </div>
       )}
 
-      {/* ─── CREATE / EDIT POOL MODAL ─── */}
+      {/* ─── CREATE / EDIT POOL MODAL (REQUIRED QUESTION TYPE) ───────── */}
       {showFormModal && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.6)',
+            backdropFilter: 'blur(3px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
             padding: '16px',
           }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !submittingForm) setShowFormModal(false);
+          }}
         >
           <div
+            data-testid="pool-form-modal"
             style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '12px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              borderRadius: '14px',
+              border: `1px solid ${tokens.borderStrong}`,
               width: '100%',
-              maxWidth: '520px',
+              maxWidth: '540px',
               padding: '24px',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 {editingPool ? 'Edit Question Pool' : 'Create Question Pool'}
               </h3>
               <button
                 type="button"
                 onClick={() => setShowFormModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: tokens.textSecondary }}
               >
                 ✕
               </button>
@@ -1122,12 +1327,13 @@ export function AdminQuestionPoolsView({
               <div
                 style={{
                   padding: '10px 14px',
-                  backgroundColor: '#FEF2F2',
-                  border: '1px solid #FECACA',
-                  borderRadius: '6px',
-                  color: '#DC2626',
-                  fontSize: '13px',
-                  marginBottom: '16px',
+                  backgroundColor: tokens.dangerBg,
+                  border: `1px solid ${tokens.dangerBorder}`,
+                  borderRadius: '8px',
+                  color: tokens.dangerText,
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  marginBottom: '14px',
                 }}
               >
                 {formError}
@@ -1136,10 +1342,11 @@ export function AdminQuestionPoolsView({
 
             <form onSubmit={handleSavePool} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Pool Name *
                 </label>
                 <input
+                  data-testid="pool-name-input"
                   type="text"
                   required
                   placeholder="e.g. Core Java Assessment Pool"
@@ -1149,26 +1356,17 @@ export function AdminQuestionPoolsView({
                     setFormData((prev) => ({
                       ...prev,
                       name: val,
-                      code: useCustomCode ? prev.code : generateCodeFromTitle(val, 24),
+                      code: useCustomCode ? prev.code : generatePoolCode(val),
                     }));
                   }}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    boxSizing: 'border-box',
-                  }}
+                  style={{ ...inputStyle, width: '100%' }}
                 />
               </div>
 
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
-                    Unique Code *
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer', fontWeight: 600 }}>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary }}>Unique Code *</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: tokens.cslBlueSoftText, cursor: 'pointer', fontWeight: 600 }}>
                     <input
                       type="checkbox"
                       checked={useCustomCode}
@@ -1176,95 +1374,132 @@ export function AdminQuestionPoolsView({
                         const checked = e.target.checked;
                         setUseCustomCode(checked);
                         if (!checked) {
-                          setFormData((prev) => ({ ...prev, code: generateCodeFromTitle(prev.name, 24) }));
+                          setFormData((prev) => ({ ...prev, code: generatePoolCode(prev.name) }));
                         }
                       }}
-                      style={{ accentColor: '#0052CC', cursor: 'pointer' }}
                     />
                     Custom
                   </label>
                 </div>
                 <input
+                  data-testid="pool-code-input"
                   type="text"
                   required
-                  placeholder="e.g. POOL-JAVA-01"
+                  placeholder="e.g. POOL_JAVA_01"
                   value={formData.code}
-                  onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase().replace(/\s+/g, '-') })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    fontFamily: 'monospace',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    boxSizing: 'border-box',
-                    backgroundColor: useCustomCode ? '#FFFFFF' : '#F8FAFC',
-                  }}
+                  onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase().replace(/\s+/g, '_') })}
+                  style={{ ...inputStyle, width: '100%', fontFamily: tokens.monoFamily }}
                 />
               </div>
 
+              {/* Required Pool Type Selection (Workstream A2) */}
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                  Question Pool Format Type *
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {(
+                    [
+                      {
+                        type: 'MCQ' as PoolQuestionType,
+                        title: 'MCQ Question Pool',
+                        desc: 'Permits multiple-choice questions and bulk CSV import.',
+                      },
+                      {
+                        type: 'CODING' as PoolQuestionType,
+                        title: 'Coding Question Pool',
+                        desc: 'Permits coding problems with test cases and Coding JSON import.',
+                      },
+                    ] as const
+                  ).map((opt) => {
+                    const selected = formData.question_type === opt.type;
+                    const typeLocked =
+                      Boolean(editingPool) &&
+                      (editingPool?.questions_count || 0) > 0 &&
+                      editingPool?.question_type !== null;
+                    return (
+                      <button
+                        key={opt.type}
+                        type="button"
+                        data-testid={`pool-type-${opt.type.toLowerCase()}`}
+                        disabled={typeLocked && !selected}
+                        onClick={() => {
+                          if (!typeLocked) {
+                            setFormData((prev) => ({ ...prev, question_type: opt.type }));
+                          }
+                        }}
+                        style={{
+                          textAlign: 'left',
+                          padding: '11px 12px',
+                          borderRadius: '10px',
+                          border: `2px solid ${selected ? tokens.cslBlue : tokens.borderStrong}`,
+                          backgroundColor: selected ? tokens.cslBlueSoftBg : tokens.surfaceElevated,
+                          opacity: typeLocked && !selected ? 0.45 : 1,
+                          cursor: typeLocked && !selected ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: '12.5px', fontWeight: 700, color: selected ? tokens.cslBlueSoftText : tokens.textPrimary }}>
+                          {opt.title}
+                        </div>
+                        <div style={{ fontSize: '11px', color: tokens.textSecondary, marginTop: '3px', lineHeight: 1.4 }}>
+                          {opt.desc}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {editingPool && (editingPool.questions_count || 0) > 0 && editingPool.question_type !== null && (
+                  <div style={{ fontSize: '11px', color: tokens.cslYellowSoftText, marginTop: '5px', fontWeight: 600 }}>
+                    Pool type cannot be modified while {editingPool.questions_count} question(s) are inside.
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Category (Optional)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Technical, Aptitude, Soft Skills"
+                  placeholder="e.g. Aptitude, Algorithms, DBMS"
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    boxSizing: 'border-box',
-                  }}
+                  style={{ ...inputStyle, width: '100%' }}
                 />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Description (Optional)
                 </label>
                 <textarea
-                  rows={3}
-                  placeholder="Describe the topics and purpose of this pool..."
+                  rows={2}
+                  placeholder="Describe pool contents and intended assessment usage..."
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    boxSizing: 'border-box',
-                    resize: 'vertical',
-                  }}
+                  style={{ ...inputStyle, width: '100%', resize: 'vertical' }}
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: tokens.textPrimary, fontWeight: 600, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
-                  id="poolActiveCheck"
                   checked={formData.is_active}
                   onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
                 />
-                <label htmlFor="poolActiveCheck" style={{ fontSize: '13px', color: '#334155', fontWeight: 600 }}>
-                  Active (Available for assessment assignment)
-                </label>
-              </div>
+                <span>Active (Available for assessment selection)</span>
+              </label>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
                 <button
                   type="button"
                   onClick={() => setShowFormModal(false)}
                   style={{
                     padding: '8px 16px',
-                    backgroundColor: '#F1F5F9',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
+                    backgroundColor: tokens.surfaceElevated,
+                    color: tokens.textPrimary,
+                    border: `1px solid ${tokens.borderStrong}`,
+                    borderRadius: '8px',
                     fontSize: '13px',
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -1274,19 +1509,20 @@ export function AdminQuestionPoolsView({
                 </button>
                 <button
                   type="submit"
+                  data-testid="pool-save-submit-btn"
                   disabled={submittingForm}
                   style={{
                     padding: '8px 18px',
-                    backgroundColor: '#1455B8',
+                    backgroundColor: tokens.cslBlue,
                     color: '#FFFFFF',
                     border: 'none',
-                    borderRadius: '6px',
+                    borderRadius: '8px',
                     fontSize: '13px',
                     fontWeight: 700,
                     cursor: submittingForm ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  {submittingForm ? 'Saving...' : editingPool ? 'Update Pool' : 'Create Pool'}
+                  {submittingForm ? 'Saving...' : editingPool ? 'Save Pool' : 'Create Pool'}
                 </button>
               </div>
             </form>
@@ -1294,13 +1530,14 @@ export function AdminQuestionPoolsView({
         </div>
       )}
 
-      {/* ─── MANAGE QUESTIONS MODAL ─── */}
+      {/* ─── MANAGE POOL MODAL ─────────────────────────────────────────── */}
       {managingPool && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(3px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1309,136 +1546,283 @@ export function AdminQuestionPoolsView({
           }}
         >
           <div
+            data-testid="manage-pool-modal"
             style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '12px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              borderRadius: '14px',
+              border: `1px solid ${tokens.borderStrong}`,
               width: '100%',
-              maxWidth: '850px',
+              maxWidth: '960px',
               maxHeight: '90vh',
               display: 'flex',
               flexDirection: 'column',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
               overflow: 'hidden',
             }}
           >
-            {/* Modal Header */}
+            {/* Header */}
             <div
               style={{
-                padding: '16px 20px',
-                borderBottom: '1px solid #E2E8F0',
+                padding: '16px 22px',
+                borderBottom: `1px solid ${tokens.border}`,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                backgroundColor: '#F8FAFC',
+                gap: '12px',
+                flexWrap: 'wrap',
+                backgroundColor: tokens.surfaceElevated,
               }}
             >
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                     {managingPool.name}
                   </h3>
-                  <span style={{ fontFamily: 'monospace', fontSize: '11px', backgroundColor: '#E2E8F0', padding: '2px 6px', borderRadius: '4px' }}>
+                  <span style={{ fontFamily: tokens.monoFamily, fontSize: '11px', backgroundColor: tokens.surfaceMuted, color: tokens.textSecondary, padding: '2px 7px', borderRadius: '5px' }}>
                     {managingPool.code}
                   </span>
+                  {renderPoolTypeBadge(managingPool)}
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '5px',
+                      backgroundColor: managingPool.is_active ? tokens.successBg : tokens.surfaceMuted,
+                      color: managingPool.is_active ? tokens.successText : tokens.textMuted,
+                    }}
+                  >
+                    {managingPool.is_active ? 'Active' : 'Archived'}
+                  </span>
                 </div>
-                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                  {managingPool.questions_count} questions in this pool • Linked to {managingPool.assessments_count} assessments
+                <div style={{ fontSize: '12px', color: tokens.textSecondary, marginTop: '4px' }}>
+                  {managingPool.questions_count} question(s) • Linked to {managingPool.assessments_count} assessment(s)
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={handleOpenCreateMCQInPool}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#0D52D6',
-                    color: '#FFFFFF',
-                    border: 'none',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <span>+ Create MCQ</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenCreateCodingInPool}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#7C3AED',
-                    color: '#FFFFFF',
-                    border: 'none',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <span>+ Create Coding</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenPoolCsvImport(managingPool)}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#ECFDF5',
-                    color: '#065F46',
-                    border: '1px solid #A7F3D0',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <span>Import CSV</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenAddQuestions}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#F1F5F9',
-                    color: '#1E293B',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <span>+ Add from Bank</span>
-                </button>
+              {/* Type-Strict Action Buttons (Workstream A4 + B1) */}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {managingPool.question_type === 'MCQ' && !managingPool.is_mixed && (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="pool-create-mcq-btn"
+                      onClick={handleOpenCreateMCQInPool}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: tokens.cslBlue,
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Create MCQ Question
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="pool-import-btn"
+                      onClick={() => handleOpenUnifiedImport(managingPool)}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: tokens.successBg,
+                        color: tokens.successText,
+                        border: `1px solid ${tokens.successBorder}`,
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Import MCQ CSV
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="pool-add-from-bank-btn"
+                      onClick={handleOpenAddQuestions}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: tokens.surfaceCard,
+                        color: tokens.textPrimary,
+                        border: `1px solid ${tokens.borderStrong}`,
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Add MCQs from Bank
+                    </button>
+                  </>
+                )}
+
+                {managingPool.question_type === 'CODING' && !managingPool.is_mixed && (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="pool-create-coding-btn"
+                      onClick={handleOpenCreateCodingInPool}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: '#7C3AED',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Create Coding Question
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="pool-import-btn"
+                      onClick={() => handleOpenUnifiedImport(managingPool)}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: tokens.cslBlueSoftBg,
+                        color: tokens.cslBlueSoftText,
+                        border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Import Coding JSON
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="pool-add-from-bank-btn"
+                      onClick={handleOpenAddQuestions}
+                      style={{
+                        padding: '8px 13px',
+                        backgroundColor: tokens.surfaceCard,
+                        color: tokens.textPrimary,
+                        border: `1px solid ${tokens.borderStrong}`,
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Add Coding from Bank
+                    </button>
+                  </>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setManagingPool(null)}
-                  style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+                  aria-label="Close pool manager"
+                  style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: tokens.textSecondary }}
                 >
                   ✕
                 </button>
               </div>
             </div>
 
-            {/* Modal Body: Questions Table */}
-            <div style={{ padding: '16px 20px', overflowY: 'auto', flex: 1 }}>
-              {/* Linked Assessments Section (Phase 2.2.4) */}
+            {/* Body */}
+            <div style={{ padding: '18px 22px', overflowY: 'auto', flex: 1 }}>
+              {drawerNotice && (
+                <div
+                  style={{
+                    marginBottom: '14px',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    backgroundColor: drawerNotice.type === 'error' ? tokens.dangerBg : tokens.successBg,
+                    border: `1px solid ${drawerNotice.type === 'error' ? tokens.dangerBorder : tokens.successBorder}`,
+                    color: drawerNotice.type === 'error' ? tokens.dangerText : tokens.successText,
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                  }}
+                >
+                  {drawerNotice.text}
+                </div>
+              )}
+
+              {/* Legacy Unclassified / Mixed Reconciliation Banner */}
+              {(managingPool.is_mixed || !managingPool.question_type) && (
+                <div
+                  data-testid="pool-reconciliation-banner"
+                  style={{
+                    marginBottom: '16px',
+                    padding: '14px 16px',
+                    borderRadius: '10px',
+                    backgroundColor: tokens.cslYellowSoftBg,
+                    border: `1px solid ${tokens.cslYellow}`,
+                    color: tokens.cslYellowSoftText,
+                  }}
+                >
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, marginBottom: '4px' }}>
+                    {managingPool.is_mixed
+                      ? `Mixed Pool Detected (${managingPool.mcq_count || 0} MCQ, ${managingPool.coding_count || 0} Coding)`
+                      : 'Pool Classification Required'}
+                  </div>
+                  <p style={{ fontSize: '12.5px', margin: '0 0 12px 0', color: tokens.textPrimary }}>
+                    {managingPool.is_mixed
+                      ? 'Choose whether this pool should keep only MCQ or only Coding questions. Incompatible items are detached from this pool without deleting them from the Question Bank.'
+                      : 'Classify this pool as either an MCQ Pool or Coding Pool before creating, importing, or adding questions.'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {(!managingPool.is_mixed && (managingPool.coding_count || 0) === 0) || managingPool.is_mixed ? (
+                      <button
+                        type="button"
+                        disabled={reconciling}
+                        onClick={() => handleClassifyOrReconcilePool(managingPool, 'MCQ')}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '7px',
+                          border: 'none',
+                          backgroundColor: tokens.cslBlue,
+                          color: '#FFFFFF',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {managingPool.is_mixed ? 'Classify as MCQ (Detach Coding)' : 'Classify as MCQ Pool'}
+                      </button>
+                    ) : null}
+                    {(!managingPool.is_mixed && (managingPool.mcq_count || 0) === 0) || managingPool.is_mixed ? (
+                      <button
+                        type="button"
+                        disabled={reconciling}
+                        onClick={() => handleClassifyOrReconcilePool(managingPool, 'CODING')}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '7px',
+                          border: 'none',
+                          backgroundColor: '#7C3AED',
+                          color: '#FFFFFF',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {managingPool.is_mixed ? 'Classify as CODING (Detach MCQ)' : 'Classify as Coding Pool'}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
+              {/* Linked Assessments */}
               {managingPool.linked_assessments && managingPool.linked_assessments.length > 0 && (
-                <div style={{ marginBottom: '16px', padding: '12px 14px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '8px' }}>
+                <div
+                  style={{
+                    marginBottom: '16px',
+                    padding: '12px 14px',
+                    backgroundColor: tokens.surfaceElevated,
+                    borderRadius: '10px',
+                    border: `1px solid ${tokens.border}`,
+                  }}
+                >
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '8px' }}>
                     Linked Assessments ({managingPool.linked_assessments.length})
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1449,35 +1833,32 @@ export function AdminQuestionPoolsView({
                           display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'center',
-                          padding: '6px 10px',
-                          backgroundColor: '#FFFFFF',
-                          border: '1px solid #CBD5E1',
-                          borderRadius: '6px',
+                          padding: '7px 10px',
+                          backgroundColor: tokens.surfaceCard,
+                          border: `1px solid ${tokens.border}`,
+                          borderRadius: '7px',
                           fontSize: '12px',
                         }}
                       >
                         <div>
-                          <strong style={{ color: '#0F172A' }}>{la.assessment_title}</strong>{' '}
-                          <span style={{ fontFamily: 'monospace', color: '#64748B' }}>({la.assessment_code})</span>
-                          <span style={{ marginLeft: '8px', color: '#0052CC', fontSize: '11px', fontWeight: 600 }}>
+                          <strong>{la.assessment_title}</strong>{' '}
+                          <span style={{ fontFamily: tokens.monoFamily, color: tokens.textSecondary }}>({la.assessment_code})</span>
+                          <span style={{ marginLeft: '8px', color: tokens.cslBlueSoftText, fontSize: '11.5px', fontWeight: 600 }}>
                             Section: {la.section_name} • Quota: {la.question_count} Qs
                           </span>
                         </div>
                         <button
                           type="button"
                           onClick={() => {
-                            if (onNavigateToAssessment) {
-                              onNavigateToAssessment(la.assessment_id);
-                            } else {
-                              window.location.href = `/csl-admin/?tab=assessments&assessmentId=${la.assessment_id}`;
-                            }
+                            if (onNavigateToAssessment) onNavigateToAssessment(la.assessment_id);
+                            else window.location.href = `/csl-admin/?tab=assessments&assessmentId=${la.assessment_id}`;
                           }}
                           style={{
                             padding: '4px 10px',
-                            backgroundColor: '#0052CC',
+                            backgroundColor: tokens.cslBlue,
                             color: '#FFFFFF',
                             border: 'none',
-                            borderRadius: '4px',
+                            borderRadius: '5px',
                             fontSize: '11px',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -1492,307 +1873,192 @@ export function AdminQuestionPoolsView({
               )}
 
               {poolDetailLoading ? (
-                <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>
+                <div style={{ padding: '40px', textAlign: 'center', color: tokens.textSecondary }}>
                   Loading pool questions...
                 </div>
               ) : !managingPool.items || managingPool.items.length === 0 ? (
-                <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '30px', marginBottom: '8px' }}>📝</div>
-                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A', marginBottom: '4px' }}>
+                <div style={{ padding: '36px 20px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, marginBottom: '4px' }}>
                     This pool currently has no questions
                   </div>
-                  <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 16px 0' }}>
-                    Add questions from the independent Question Bank to populate this pool.
+                  <p style={{ fontSize: '13px', color: tokens.textSecondary, margin: '0 0 16px 0' }}>
+                    {managingPool.question_type === 'CODING'
+                      ? 'Create coding problems, import structured JSON, or add compatible coding questions from the Global Bank.'
+                      : managingPool.question_type === 'MCQ'
+                      ? 'Create MCQ questions, import CSV rows, or add compatible MCQs from the Global Bank.'
+                      : 'Classify this pool above to enable authoring and import actions.'}
                   </p>
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={handleOpenCreateMCQInPool}
-                      style={{
-                        padding: '8px 14px',
-                        backgroundColor: '#0D52D6',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      + Create MCQ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenCreateCodingInPool}
-                      style={{
-                        padding: '8px 14px',
-                        backgroundColor: '#7C3AED',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      + Create Coding
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenPoolCsvImport(managingPool)}
-                      style={{
-                        padding: '8px 16px',
-                        backgroundColor: '#16A34A',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Import CSV to Pool
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenAddQuestions}
-                      style={{
-                        padding: '8px 16px',
-                        backgroundColor: '#1455B8',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      + Add Questions from Bank
-                    </button>
-                  </div>
+                  {managingPool.question_type && (
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                      {managingPool.question_type === 'MCQ' ? (
+                        <button
+                          type="button"
+                          onClick={handleOpenCreateMCQInPool}
+                          style={{ padding: '8px 14px', backgroundColor: tokens.cslBlue, color: '#FFFFFF', border: 'none', borderRadius: '7px', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          + Create MCQ Question
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleOpenCreateCodingInPool}
+                          style={{ padding: '8px 14px', backgroundColor: '#7C3AED', color: '#FFFFFF', border: 'none', borderRadius: '7px', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          + Create Coding Question
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenUnifiedImport(managingPool)}
+                        style={{ padding: '8px 14px', backgroundColor: '#16A34A', color: '#FFFFFF', border: 'none', borderRadius: '7px', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        {managingPool.question_type === 'CODING' ? 'Import Coding JSON' : 'Import MCQ CSV'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenAddQuestions}
+                        style={{ padding: '8px 14px', backgroundColor: tokens.surfaceElevated, color: tokens.textPrimary, border: `1px solid ${tokens.borderStrong}`, borderRadius: '7px', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        + Add from Bank
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
-                  {/* Drawer Filters Bar */}
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
+                  {/* Drawer Filter Controls */}
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
                     <input
                       type="text"
-                      placeholder="Filter by prompt or category..."
+                      placeholder="Filter pool questions..."
                       value={drawerSearch}
                       onChange={(e) => setDrawerSearch(e.target.value)}
-                      style={{
-                        flex: '1',
-                        minWidth: '180px',
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12px',
-                      }}
+                      style={{ ...inputStyle, flex: 1, minWidth: '180px', fontSize: '12.5px' }}
                     />
                     <select
                       value={drawerSectionFilter}
                       onChange={(e) => setDrawerSectionFilter(e.target.value)}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12px',
-                        backgroundColor: '#FFFFFF',
-                      }}
+                      style={{ ...inputStyle, fontSize: '12.5px' }}
                     >
                       <option value="">All Sections</option>
                       {sections.map((s) => (
-                        <option key={s.id} value={s.code}>{s.name || s.code}</option>
+                        <option key={s.id} value={s.code}>
+                          {s.name || s.code}
+                        </option>
                       ))}
                       <option value="CODING">Coding</option>
                     </select>
                     <select
                       value={drawerDifficultyFilter}
                       onChange={(e) => setDrawerDifficultyFilter(e.target.value)}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid #CBD5E1',
-                        fontSize: '12px',
-                        backgroundColor: '#FFFFFF',
-                      }}
+                      style={{ ...inputStyle, fontSize: '12.5px' }}
                     >
                       <option value="">All Difficulties</option>
                       <option value="EASY">Easy</option>
                       <option value="MEDIUM">Medium</option>
                       <option value="HARD">Hard</option>
                     </select>
-                    {(drawerSearch || drawerSectionFilter || drawerDifficultyFilter) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDrawerSearch('');
-                          setDrawerSectionFilter('');
-                          setDrawerDifficultyFilter('');
-                        }}
-                        style={{
-                          padding: '5px 8px',
-                          fontSize: '11px',
-                          backgroundColor: '#F1F5F9',
-                          border: '1px solid #E2E8F0',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Clear
-                      </button>
-                    )}
                   </div>
 
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
                     <thead>
-                      <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '40px' }}>#</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569' }}>Prompt</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '110px' }}>Section</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '80px' }}>Difficulty</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '50px' }}>Marks</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '70px' }}>Status</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 700, color: '#475569', width: '190px', textAlign: 'right' }}>Action</th>
+                      <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}` }}>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary, width: '40px' }}>#</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary }}>Question</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary }}>Section</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary }}>Difficulty</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary }}>Marks</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary }}>Status</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'right' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(managingPool.items || []).filter((item) => {
-                        if (drawerSearch.trim()) {
-                          const s = drawerSearch.toLowerCase();
-                          const matchPrompt = (item.question_prompt || '').toLowerCase().includes(s);
-                          const matchCat = (item.question_category || '').toLowerCase().includes(s);
-                          if (!matchPrompt && !matchCat) return false;
-                        }
-                        if (drawerSectionFilter) {
-                          const f = drawerSectionFilter.toUpperCase();
-                          if ((item.question_section || '').toUpperCase() !== f) return false;
-                        }
-                        if (drawerDifficultyFilter) {
-                          if ((item.question_difficulty || '').toUpperCase() !== drawerDifficultyFilter.toUpperCase()) return false;
-                        }
-                        return true;
-                      }).map((item, idx) => (
-                        <tr key={item.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                          <td style={{ padding: '10px 12px', color: '#94A3B8', fontWeight: 600 }}>{idx + 1}</td>
-                          <td style={{ padding: '10px 12px', color: '#0F172A', fontWeight: 500, maxWidth: '280px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {(item.has_programming_details || item.question_section === 'CODING' || item.question_assessment_type === 'CODING') && (
-                                <span style={{ backgroundColor: '#EDE9FE', color: '#7C3AED', padding: '1px 5px', borderRadius: '4px', fontSize: '10px', fontWeight: 800 }}>
-                                  CODING
+                      {(managingPool.items || [])
+                        .filter((item) => {
+                          if (drawerSearch.trim()) {
+                            const s = drawerSearch.toLowerCase();
+                            if (
+                              !(item.question_prompt || '').toLowerCase().includes(s) &&
+                              !(item.question_category || '').toLowerCase().includes(s)
+                            ) {
+                              return false;
+                            }
+                          }
+                          if (drawerSectionFilter && (item.question_section || '').toUpperCase() !== drawerSectionFilter.toUpperCase()) {
+                            return false;
+                          }
+                          if (drawerDifficultyFilter && (item.question_difficulty || '').toUpperCase() !== drawerDifficultyFilter.toUpperCase()) {
+                            return false;
+                          }
+                          return true;
+                        })
+                        .map((item, idx) => (
+                          <tr key={item.id} style={{ borderBottom: `1px solid ${tokens.border}` }}>
+                            <td style={{ padding: '10px 12px', color: tokens.textMuted, fontWeight: 600 }}>{idx + 1}</td>
+                            <td style={{ padding: '10px 12px', maxWidth: '300px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {(item.question_type === 'CODING' || item.has_programming_details) && (
+                                  <span style={{ backgroundColor: tokens.codingBg, color: tokens.codingText, padding: '1px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: 700 }}>
+                                    CODING
+                                  </span>
+                                )}
+                                <span style={{ fontWeight: 600, color: tokens.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {item.question_prompt}
                                 </span>
-                              )}
-                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {item.question_prompt}
-                              </span>
-                            </div>
-                            {item.question_category && (
-                              <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>
-                                Cat: {item.question_category}
                               </div>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span style={{ backgroundColor: '#F1F5F9', color: '#334155', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
-                              {item.question_section}
-                            </span>
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                color: item.question_difficulty === 'HARD' ? '#DC2626' : item.question_difficulty === 'MEDIUM' ? '#D97706' : '#16A34A',
-                              }}
-                            >
+                            </td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <span style={{ backgroundColor: tokens.surfaceElevated, color: tokens.textSecondary, padding: '2px 7px', borderRadius: '5px', fontSize: '11px', fontWeight: 600 }}>
+                                {item.question_section}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 12px', fontSize: '11.5px', fontWeight: 700 }}>
                               {item.question_difficulty}
-                            </span>
-                          </td>
-                          <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0B2E6F' }}>
-                            {item.question_marks}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                color: item.question_is_archived ? '#94A3B8' : '#16A34A',
-                              }}
-                            >
+                            </td>
+                            <td style={{ padding: '10px 12px', fontWeight: 700 }}>{item.question_marks}</td>
+                            <td style={{ padding: '10px 12px', fontSize: '11.5px', fontWeight: 700, color: item.question_is_archived ? tokens.textMuted : tokens.successText }}>
                               {item.question_is_archived ? 'Archived' : 'Active'}
-                            </span>
-                          </td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                              <button
-                                type="button"
-                                onClick={() => handleEditQuestionInPool(item.question)}
-                                title="Edit question details"
-                                style={{
-                                  padding: '3px 8px',
-                                  backgroundColor: '#EFF6FF',
-                                  border: '1px solid #BFDBFE',
-                                  color: '#1D4ED8',
-                                  borderRadius: '4px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleArchiveQuestionInPool(item.question)}
-                                title={item.question_is_archived ? "Unarchive question" : "Archive question"}
-                                style={{
-                                  padding: '3px 8px',
-                                  backgroundColor: item.question_is_archived ? '#FEF3C7' : '#F1F5F9',
-                                  border: '1px solid #CBD5E1',
-                                  color: item.question_is_archived ? '#92400E' : '#475569',
-                                  borderRadius: '4px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                {item.question_is_archived ? 'Unarchive' : 'Archive'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveQuestionFromPool(item.question)}
-                                title="Remove question from pool (retains in Question Bank)"
-                                style={{
-                                  padding: '3px 8px',
-                                  backgroundColor: '#FEF2F2',
-                                  border: '1px solid #FECACA',
-                                  color: '#DC2626',
-                                  borderRadius: '4px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditQuestionInPool(item.question)}
+                                  style={{ padding: '4px 8px', backgroundColor: tokens.cslBlueSoftBg, border: `1px solid ${tokens.cslBlueSoftBorder}`, color: tokens.cslBlueSoftText, borderRadius: '5px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleArchiveQuestionInPool(item.question)}
+                                  style={{ padding: '4px 8px', backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.borderStrong}`, color: tokens.textSecondary, borderRadius: '5px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  {item.question_is_archived ? 'Unarchive' : 'Archive'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveQuestionFromPool(item.question)}
+                                  style={{ padding: '4px 8px', backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, color: tokens.dangerText, borderRadius: '5px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </>
               )}
             </div>
 
-            {/* Modal Footer */}
             <div
               style={{
-                padding: '12px 20px',
-                borderTop: '1px solid #E2E8F0',
+                padding: '12px 22px',
+                borderTop: `1px solid ${tokens.border}`,
                 display: 'flex',
                 justifyContent: 'flex-end',
-                backgroundColor: '#F8FAFC',
+                backgroundColor: tokens.surfaceElevated,
               }}
             >
               <button
@@ -1800,9 +2066,10 @@ export function AdminQuestionPoolsView({
                 onClick={() => setManagingPool(null)}
                 style={{
                   padding: '8px 18px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '6px',
+                  backgroundColor: tokens.surfaceCard,
+                  color: tokens.textPrimary,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  borderRadius: '8px',
                   fontSize: '13px',
                   fontWeight: 600,
                   cursor: 'pointer',
@@ -1815,13 +2082,13 @@ export function AdminQuestionPoolsView({
         </div>
       )}
 
-      {/* ─── ADD QUESTIONS FROM BANK PICKER MODAL ─── */}
-      {showAddQuestionsModal && (
+      {/* ─── ADD COMPATIBLE QUESTIONS FROM BANK PICKER MODAL ────────── */}
+      {showAddQuestionsModal && managingPool && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.6)',
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1830,56 +2097,62 @@ export function AdminQuestionPoolsView({
           }}
         >
           <div
+            data-testid="add-from-bank-modal"
             style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '12px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderStrong}`,
+              borderRadius: '14px',
               width: '100%',
-              maxWidth: '850px',
+              maxWidth: '840px',
               maxHeight: '85vh',
               display: 'flex',
               flexDirection: 'column',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              boxShadow: tokens.modalShadow,
               overflow: 'hidden',
             }}
           >
-            {/* Header */}
             <div
               style={{
                 padding: '16px 20px',
-                borderBottom: '1px solid #E2E8F0',
+                borderBottom: `1px solid ${tokens.border}`,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                backgroundColor: '#F8FAFC',
+                backgroundColor: tokens.surfaceElevated,
               }}
             >
               <div>
-                <h4 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-                  Add Questions to "{managingPool?.name}"
+                <h4 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>
+                  Add Compatible {managingPool.question_type} Questions to "{managingPool.name}"
                 </h4>
-                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                  Select questions from the independent Question Bank to add to this pool.
+                <div style={{ fontSize: '12px', color: tokens.textSecondary, marginTop: '2px' }}>
+                  Only {managingPool.question_type} questions are eligible for this pool.
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowAddQuestionsModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: tokens.textSecondary }}
               >
                 ✕
               </button>
             </div>
 
-            {/* Filter controls */}
+            {bankModalError && (
+              <div style={{ margin: '12px 20px 0', padding: '10px 14px', borderRadius: '8px', backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, color: tokens.dangerText, fontSize: '12.5px', fontWeight: 600 }}>
+                {bankModalError}
+              </div>
+            )}
+
             <div
               style={{
                 padding: '12px 20px',
-                borderBottom: '1px solid #E2E8F0',
+                borderBottom: `1px solid ${tokens.border}`,
                 display: 'flex',
                 gap: '10px',
                 flexWrap: 'wrap',
                 alignItems: 'center',
-                backgroundColor: '#FFFFFF',
               }}
             >
               <input
@@ -1887,27 +2160,12 @@ export function AdminQuestionPoolsView({
                 placeholder="Search question prompt..."
                 value={bankSearch}
                 onChange={(e) => setBankSearch(e.target.value)}
-                style={{
-                  flex: 1,
-                  minWidth: '200px',
-                  padding: '7px 10px',
-                  fontSize: '12px',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '6px',
-                  outline: 'none',
-                }}
+                style={{ ...inputStyle, flex: 1, minWidth: '180px', fontSize: '12.5px' }}
               />
               <select
                 value={bankSectionFilter}
                 onChange={(e) => setBankSectionFilter(e.target.value)}
-                style={{
-                  padding: '7px 10px',
-                  fontSize: '12px',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '6px',
-                  outline: 'none',
-                  backgroundColor: '#FFFFFF',
-                }}
+                style={{ ...inputStyle, fontSize: '12.5px' }}
               >
                 <option value="">All Curriculum Sections</option>
                 {sections.map((s) => (
@@ -1916,51 +2174,61 @@ export function AdminQuestionPoolsView({
                   </option>
                 ))}
               </select>
-
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: tokens.textSecondary, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showIncompatibleBank}
+                  onChange={(e) => setShowIncompatibleBank(e.target.checked)}
+                />
+                <span>Show locked incompatible</span>
+              </label>
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedBankQuestionIds.length === filteredBankQuestions.length) {
+                  if (selectedBankQuestionIds.length === compatibleFilteredIds.length && compatibleFilteredIds.length > 0) {
                     setSelectedBankQuestionIds([]);
                   } else {
-                    setSelectedBankQuestionIds(filteredBankQuestions.map((q) => q.id));
+                    setSelectedBankQuestionIds(compatibleFilteredIds);
                   }
                 }}
                 style={{
                   padding: '7px 12px',
-                  backgroundColor: '#F1F5F9',
-                  border: '1px solid #CBD5E1',
-                  borderRadius: '6px',
+                  backgroundColor: tokens.surfaceElevated,
+                  border: `1px solid ${tokens.borderStrong}`,
+                  borderRadius: '7px',
                   fontSize: '12px',
                   fontWeight: 600,
                   cursor: 'pointer',
-                  color: '#334155',
+                  color: tokens.textPrimary,
                 }}
               >
-                {selectedBankQuestionIds.length === filteredBankQuestions.length && filteredBankQuestions.length > 0
+                {selectedBankQuestionIds.length === compatibleFilteredIds.length && compatibleFilteredIds.length > 0
                   ? 'Deselect All'
-                  : 'Select All Filtered'}
+                  : 'Select Compatible'}
               </button>
             </div>
 
-            {/* Questions list */}
             <div style={{ padding: '12px 20px', overflowY: 'auto', flex: 1 }}>
               {bankLoading ? (
-                <div style={{ padding: '30px', textAlign: 'center', color: '#64748B' }}>
+                <div style={{ padding: '30px', textAlign: 'center', color: tokens.textSecondary }}>
                   Loading available questions...
                 </div>
               ) : filteredBankQuestions.length === 0 ? (
-                <div style={{ padding: '30px', textAlign: 'center', color: '#64748B' }}>
-                  No available questions found matching your filter.
+                <div style={{ padding: '30px', textAlign: 'center', color: tokens.textSecondary }}>
+                  No compatible {managingPool.question_type} questions found matching your filter.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {filteredBankQuestions.map((q) => {
+                    const qIsCoding = isCodingQuestion(q);
+                    const compatible =
+                      managingPool.question_type === 'CODING' ? qIsCoding : !qIsCoding;
                     const isChecked = selectedBankQuestionIds.includes(q.id);
                     return (
                       <div
                         key={q.id}
                         onClick={() => {
+                          if (!compatible) return;
                           if (isChecked) {
                             setSelectedBankQuestionIds(selectedBankQuestionIds.filter((id) => id !== q.id));
                           } else {
@@ -1972,33 +2240,40 @@ export function AdminQuestionPoolsView({
                           alignItems: 'flex-start',
                           gap: '12px',
                           padding: '10px 12px',
-                          borderRadius: '6px',
-                          border: isChecked ? '1.5px solid #1455B8' : '1px solid #E2E8F0',
-                          backgroundColor: isChecked ? '#EFF6FF' : '#FFFFFF',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease',
+                          borderRadius: '8px',
+                          border: isChecked ? `1.5px solid ${tokens.cslBlue}` : `1px solid ${tokens.border}`,
+                          backgroundColor: !compatible
+                            ? tokens.surfaceMuted
+                            : isChecked
+                            ? tokens.cslBlueSoftBg
+                            : tokens.surfaceCard,
+                          opacity: compatible ? 1 : 0.6,
+                          cursor: compatible ? 'pointer' : 'not-allowed',
                         }}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => {}} // handled by parent div
+                          disabled={!compatible}
+                          onChange={() => {}}
                           style={{ marginTop: '3px' }}
                         />
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#0F172A', marginBottom: '4px' }}>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary, marginBottom: '4px' }}>
                             {q.prompt}
                           </div>
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <span style={{ fontSize: '11px', fontWeight: 600, backgroundColor: '#F1F5F9', color: '#475569', padding: '1px 6px', borderRadius: '4px' }}>
-                              {q.section_name || q.section_type}
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '10.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', backgroundColor: qIsCoding ? tokens.codingBg : tokens.cslBlueSoftBg, color: qIsCoding ? tokens.codingText : tokens.cslBlueSoftText }}>
+                              {qIsCoding ? 'CODING' : 'MCQ'}
                             </span>
-                            <span style={{ fontSize: '11px', color: '#64748B' }}>
-                              {q.marks || 1} mark(s)
+                            <span style={{ fontSize: '11px', color: tokens.textSecondary }}>
+                              {q.section_name || q.section_type} • {q.marks || 1} mark(s) • {q.difficulty}
                             </span>
-                            <span style={{ fontSize: '11px', color: q.difficulty === 'HARD' ? '#DC2626' : '#16A34A', fontWeight: 600 }}>
-                              {q.difficulty}
-                            </span>
+                            {!compatible && (
+                              <span style={{ fontSize: '11px', color: tokens.dangerText, fontWeight: 600 }}>
+                                Incompatible with {managingPool.question_type} pool
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2008,18 +2283,17 @@ export function AdminQuestionPoolsView({
               )}
             </div>
 
-            {/* Footer */}
             <div
               style={{
                 padding: '12px 20px',
-                borderTop: '1px solid #E2E8F0',
+                borderTop: `1px solid ${tokens.border}`,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                backgroundColor: '#F8FAFC',
+                backgroundColor: tokens.surfaceElevated,
               }}
             >
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600 }}>
                 {selectedBankQuestionIds.length} question(s) selected
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
@@ -2028,9 +2302,10 @@ export function AdminQuestionPoolsView({
                   onClick={() => setShowAddQuestionsModal(false)}
                   style={{
                     padding: '8px 16px',
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
+                    backgroundColor: tokens.surfaceCard,
+                    color: tokens.textPrimary,
+                    border: `1px solid ${tokens.borderStrong}`,
+                    borderRadius: '7px',
                     fontSize: '13px',
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -2040,14 +2315,15 @@ export function AdminQuestionPoolsView({
                 </button>
                 <button
                   type="button"
+                  data-testid="confirm-add-bank-questions-btn"
                   onClick={handleAddSelectedQuestionsToPool}
                   disabled={selectedBankQuestionIds.length === 0 || addingToPool}
                   style={{
                     padding: '8px 18px',
-                    backgroundColor: '#1455B8',
+                    backgroundColor: selectedBankQuestionIds.length === 0 || addingToPool ? tokens.borderStrong : tokens.cslBlue,
                     color: '#FFFFFF',
                     border: 'none',
-                    borderRadius: '6px',
+                    borderRadius: '7px',
                     fontSize: '13px',
                     fontWeight: 700,
                     cursor: selectedBankQuestionIds.length === 0 || addingToPool ? 'not-allowed' : 'pointer',
@@ -2060,7 +2336,8 @@ export function AdminQuestionPoolsView({
           </div>
         </div>
       )}
-      {/* Dedicated MCQ & Coding Modals for Question Pools */}
+
+      {/* Pool-Scoped MCQ / Coding Editors */}
       {showPoolQuestionModal && poolQuestionType === 'CODING' && (
         <AdminCodingQuestionModal
           question={editingQuestionInPool}
@@ -2073,6 +2350,7 @@ export function AdminQuestionPoolsView({
           saving={savingPoolQuestion}
           sections={sections}
           isPoolScoped={true}
+          targetPool={managingPool}
         />
       )}
       {showPoolQuestionModal && poolQuestionType === 'MCQ' && (
@@ -2086,16 +2364,52 @@ export function AdminQuestionPoolsView({
           onSave={handleSaveQuestionInPool}
           saving={savingPoolQuestion}
           sections={sections}
+          targetPool={managingPool}
         />
       )}
 
-      {/* Pool-Scoped CSV Import Modal */}
+      {/* Standalone Bank Creation Editors (when rendered without parent callbacks) */}
+      <AdminQuestionEditorModal
+        question={null}
+        isOpen={standaloneQuestionModal === 'MCQ'}
+        onClose={() => setStandaloneQuestionModal(null)}
+        onSave={handleSaveStandaloneQuestion}
+        saving={savingStandaloneQuestion}
+        sections={sections}
+      />
+      <AdminCodingQuestionModal
+        question={null}
+        isOpen={standaloneQuestionModal === 'CODING'}
+        onClose={() => setStandaloneQuestionModal(null)}
+        onSave={handleSaveStandaloneQuestion}
+        saving={savingStandaloneQuestion}
+        sections={sections}
+      />
+
+      {/* Coding Pool JSON Importer */}
+      {codingImportPool && (
+        <ImportCodingJsonModal
+          targetPool={codingImportPool}
+          poolId={codingImportPool.id}
+          pools={pools}
+          onClose={() => setCodingImportPool(null)}
+          onSuccess={async () => {
+            await loadPools();
+            if (managingPool && managingPool.id === codingImportPool.id) {
+              const detail = await getAdminQuestionPoolDetail(codingImportPool.id);
+              setManagingPool(detail);
+            }
+          }}
+        />
+      )}
+
+      {/* Pool-Scoped MCQ CSV Import Modal */}
       {showPoolCsvModal && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backgroundColor: 'rgba(15, 23, 42, 0.6)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2104,37 +2418,40 @@ export function AdminQuestionPoolsView({
           }}
         >
           <div
+            data-testid="pool-csv-import-modal"
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderStrong}`,
               borderRadius: '14px',
               width: '100%',
-              maxWidth: '680px',
+              maxWidth: '700px',
               maxHeight: '90vh',
               overflowY: 'auto',
               padding: '24px',
-              boxShadow: '0 24px 48px rgba(15, 23, 42, 0.25)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0B2E6F' }}>
-                  Import Questions CSV to Pool
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: tokens.textPrimary }}>
+                  Import MCQ Questions (CSV) to Pool
                 </h3>
-                <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#64748B' }}>
-                  Imported questions are scoped ONLY to the selected pool by default and do not clutter Global Question Bank unless opted in below.
+                <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: tokens.textSecondary }}>
+                  Scoped to the selected MCQ pool by default; optionally mirror into Global Question Bank below.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowPoolCsvModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#64748B', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', fontSize: '18px', color: tokens.textSecondary, cursor: 'pointer' }}
               >
                 ✕
               </button>
             </div>
 
             {poolCsvError && (
-              <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', fontSize: '12.5px', fontWeight: 600, marginBottom: '14px' }}>
+              <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, color: tokens.dangerText, fontSize: '12.5px', fontWeight: 600, marginBottom: '14px' }}>
                 {poolCsvError}
               </div>
             )}
@@ -2142,38 +2459,38 @@ export function AdminQuestionPoolsView({
             {poolCsvStep === 'UPLOAD' && (
               <form onSubmit={handlePreviewPoolCsv} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                    Target Question Pool *
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                    Target MCQ Pool *
                   </label>
                   <select
                     value={targetCsvPoolId}
                     onChange={(e) => setTargetCsvPoolId(e.target.value)}
                     required
-                    style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#F8FAFC' }}
+                    style={{ ...inputStyle, width: '100%' }}
                   >
-                    <option value="">-- Select Target Pool --</option>
-                    {pools.map((p) => (
+                    <option value="">-- Select MCQ Pool --</option>
+                    {mcqPoolsOnly.map((p) => (
                       <option key={p.id} value={p.id}>
-                        [{p.code}] {p.name} ({p.questions_count} existing questions)
+                        [{p.code}] {p.name} ({p.questions_count} Qs)
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                     Upload CSV File (.csv)
                   </label>
                   <input
                     type="file"
                     accept=".csv,text/csv"
                     onChange={(e) => setPoolCsvFile(e.target.files?.[0] || null)}
-                    style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px dashed #CBD5E1', backgroundColor: '#F8FAFC', fontSize: '13px' }}
+                    style={{ ...inputStyle, width: '100%', borderStyle: 'dashed' }}
                   />
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                     Or Paste CSV Content Directly
                   </label>
                   <textarea
@@ -2181,11 +2498,11 @@ export function AdminQuestionPoolsView({
                     value={poolCsvText}
                     onChange={(e) => setPoolCsvText(e.target.value)}
                     placeholder="prompt,section_type,difficulty,option_a,option_b,option_c,option_d,correct_option,marks"
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                    style={{ ...inputStyle, width: '100%', fontFamily: tokens.monoFamily, fontSize: '12px' }}
                   />
                 </div>
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.surfaceElevated, fontSize: '12.5px', fontWeight: 600, color: tokens.textPrimary, cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     checked={poolCsvAddToGlobal}
@@ -2199,14 +2516,14 @@ export function AdminQuestionPoolsView({
                   <button
                     type="button"
                     onClick={() => setShowPoolCsvModal(false)}
-                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#475569', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.surfaceCard, color: tokens.textPrimary, fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={poolCsvLoading}
-                    style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#0D52D6', color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: poolCsvLoading ? 'not-allowed' : 'pointer' }}
+                    style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: tokens.cslBlue, color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: poolCsvLoading ? 'not-allowed' : 'pointer' }}
                   >
                     {poolCsvLoading ? 'Analyzing CSV...' : 'Preview & Validate →'}
                   </button>
@@ -2216,7 +2533,7 @@ export function AdminQuestionPoolsView({
 
             {poolCsvStep === 'PREVIEW' && poolCsvPreview && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ padding: '12px 14px', borderRadius: '8px', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', fontSize: '13px', color: '#1E40AF' }}>
+                <div style={{ padding: '12px 14px', borderRadius: '8px', backgroundColor: tokens.cslBlueSoftBg, border: `1px solid ${tokens.cslBlueSoftBorder}`, fontSize: '13px', color: tokens.cslBlueSoftText }}>
                   <strong>{poolCsvPreview.valid_count ?? poolCsvPreview.total_rows}</strong> valid of{' '}
                   <strong>{poolCsvPreview.total_rows}</strong> row(s) • Detected Type:{' '}
                   <strong>{poolCsvPreview.detected_type || 'MCQ'}</strong> • Scope:{' '}
@@ -2224,7 +2541,7 @@ export function AdminQuestionPoolsView({
                 </div>
 
                 {poolCsvPreview.errors && poolCsvPreview.errors.length > 0 && (
-                  <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', fontSize: '12px', color: '#991B1B' }}>
+                  <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, fontSize: '12px', color: tokens.dangerText }}>
                     <strong>Row Warnings ({poolCsvPreview.error_count ?? poolCsvPreview.errors.length}):</strong>
                     <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
                       {poolCsvPreview.errors.map((err, i) => (
@@ -2243,7 +2560,7 @@ export function AdminQuestionPoolsView({
                     {poolCsvPreview.detected_sections.map((sec) => {
                       const rule = poolCsvSectionMapping[sec.code] || { action: 'create' };
                       return (
-                        <div key={sec.code} style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '10px 12px', backgroundColor: '#F8FAFC', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                        <div key={sec.code} style={{ border: `1px solid ${tokens.borderStrong}`, borderRadius: '8px', padding: '10px 12px', backgroundColor: tokens.surfaceElevated, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                           <div style={{ fontSize: '12.5px' }}>
                             <strong>[{sec.code}]</strong> {sec.detected_name || sec.raw_section} ({sec.row_count ?? sec.count} rows)
                           </div>
@@ -2262,7 +2579,7 @@ export function AdminQuestionPoolsView({
                                 },
                               }));
                             }}
-                            style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                            style={{ ...inputStyle, fontSize: '12px' }}
                           >
                             <option value="map">Map to Existing Section</option>
                             <option value="create">Create Section</option>
@@ -2274,7 +2591,7 @@ export function AdminQuestionPoolsView({
                   </div>
                 )}
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.surfaceElevated, fontSize: '12.5px', fontWeight: 600, color: tokens.textPrimary, cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     checked={poolCsvAddToGlobal}
@@ -2287,15 +2604,24 @@ export function AdminQuestionPoolsView({
                   <button
                     type="button"
                     onClick={() => setPoolCsvStep('UPLOAD')}
-                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.surfaceCard, color: tokens.textPrimary, fontSize: '13px', cursor: 'pointer' }}
                   >
                     ← Back
                   </button>
                   <button
                     type="button"
-                    disabled={poolCsvLoading}
+                    disabled={poolCsvLoading || (poolCsvPreview.valid_count ?? poolCsvPreview.total_rows ?? 0) === 0}
                     onClick={handleCommitPoolCsv}
-                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: poolCsvLoading ? 'not-allowed' : 'pointer' }}
+                    style={{
+                      padding: '8px 20px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      backgroundColor: '#16A34A',
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: poolCsvLoading ? 'not-allowed' : 'pointer',
+                    }}
                   >
                     {poolCsvLoading ? 'Importing...' : 'Confirm & Import to Pool'}
                   </button>
@@ -2305,15 +2631,13 @@ export function AdminQuestionPoolsView({
 
             {poolCsvStep === 'RESULT' && poolCsvResult && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ padding: '14px', borderRadius: '8px', backgroundColor: poolCsvResult.error_count > 0 ? '#FFFBEB' : '#F0FDF4', border: `1px solid ${poolCsvResult.error_count > 0 ? '#FDE68A' : '#BBF7D0'}`, fontSize: '13px', color: '#0F172A' }}>
-                  <strong>
-                    Imported {poolCsvResult.imported_count} question(s) into pool
-                  </strong>
-                  <div style={{ fontSize: '12px', color: '#475569', marginTop: '4px' }}>
+                <div style={{ padding: '14px', borderRadius: '8px', backgroundColor: poolCsvResult.error_count > 0 ? tokens.cslYellowSoftBg : tokens.successBg, border: `1px solid ${poolCsvResult.error_count > 0 ? tokens.cslYellow : tokens.successBorder}`, fontSize: '13px', color: tokens.textPrimary }}>
+                  <strong>Imported {poolCsvResult.imported_count} question(s) into pool</strong>
+                  <div style={{ fontSize: '12px', color: tokens.textSecondary, marginTop: '4px' }}>
                     Scope: {poolCsvResult.add_to_global_bank ? 'Pool + Global Question Bank' : 'Pool-Scoped Only (isolated from Global Question Bank)'}
                   </div>
                   {poolCsvResult.error_count > 0 && (
-                    <ul style={{ margin: '8px 0 0 16px', padding: 0, color: '#991B1B', fontSize: '12px' }}>
+                    <ul style={{ margin: '8px 0 0 16px', padding: 0, color: tokens.dangerText, fontSize: '12px' }}>
                       {poolCsvResult.errors.map((err, i) => (
                         <li key={i}>
                           {typeof err === 'string'
@@ -2328,7 +2652,7 @@ export function AdminQuestionPoolsView({
                   <button
                     type="button"
                     onClick={() => setShowPoolCsvModal(false)}
-                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#0B2E6F', color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: tokens.cslBlue, color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Done
                   </button>
