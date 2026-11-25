@@ -63,6 +63,17 @@ export function AssessmentExamPage() {
 
   // Active section tab for navigation filtering (dynamic section code)
   const [activeSectionTab, setActiveSectionTab] = useState<string>('');
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const isCompactExamLayout = viewportWidth < 1100;
 
   // Network & Disconnection Grace State
   const [isPaused, setIsPaused] = useState<boolean>(false);
@@ -1462,18 +1473,22 @@ export function AssessmentExamPage() {
           flex: 1,
           minHeight: 0,
           display: 'flex',
-          gap: '16px',
-          padding: '16px 24px',
-          overflow: 'hidden',
+          flexDirection: isCompactExamLayout ? 'column' : 'row',
+          gap: isCompactExamLayout ? '12px' : '16px',
+          padding: isCompactExamLayout ? '10px 12px' : '16px 24px',
+          overflowY: isCompactExamLayout ? 'auto' : 'hidden',
+          overflowX: 'hidden',
           boxSizing: 'border-box',
         }}
       >
-        {/* ─── COLUMN 1: LEFT SECTION & QUESTION LIST (w-[260px]) ──────── */}
+        {/* ─── COLUMN 1: LEFT SECTION & QUESTION LIST (responsive width) ─ */}
         <aside
           style={{
-            width: '260px',
-            minWidth: '260px',
-            maxWidth: '260px',
+            width: isCompactExamLayout ? '100%' : '228px',
+            minWidth: isCompactExamLayout ? 0 : '228px',
+            maxWidth: isCompactExamLayout ? '100%' : '228px',
+            maxHeight: isCompactExamLayout ? '148px' : undefined,
+            flexShrink: 0,
             backgroundColor: '#FFFFFF',
             borderRadius: '14px',
             border: '1px solid rgba(245, 184, 61, 0.28)',
@@ -1739,8 +1754,10 @@ export function AssessmentExamPage() {
         {/* ─── COLUMN 2: CENTER WORKSPACE (ACTIVE QUESTION) ─────────────── */}
         <main
           style={{
-            flex: 1,
+            flex: isCompactExamLayout ? '1 0 auto' : 1,
             minWidth: 0,
+            minHeight: isCompactExamLayout ? '620px' : 0,
+            width: isCompactExamLayout ? '100%' : undefined,
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
@@ -1758,7 +1775,7 @@ export function AssessmentExamPage() {
               boxShadow: '0 4px 16px -2px rgba(11, 46, 111, 0.05)',
               display: 'flex',
               flexDirection: 'column',
-              padding: '24px 28px',
+              padding: currentQ.programming_details ? '14px 18px' : '24px 28px',
               boxSizing: 'border-box',
               overflow: 'hidden',
             }}
@@ -1769,7 +1786,7 @@ export function AssessmentExamPage() {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                marginBottom: '16px',
+                marginBottom: currentQ.programming_details ? '10px' : '16px',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1834,70 +1851,78 @@ export function AssessmentExamPage() {
               </div>
             </div>
 
-            {/* Question Text / Problem Prompt */}
-            <div
-              style={{
-                fontSize: '18px',
-                fontWeight: 700,
-                color: '#111111',
-                lineHeight: 1.5,
-                marginBottom: '24px',
-                whiteSpace: 'pre-wrap',
-                userSelect: 'none',
-              }}
-            >
-              {currentQ.prompt}
-            </div>
-
-            {/* Coding Playground or MCQ Options */}
-            {currentQ.programming_details || (currentQ.section_type === 'CODING' && (!currentQ.options || currentQ.options.length === 0)) ? (
-              <div style={{ flex: 1, minHeight: '520px', display: 'flex', flexDirection: 'column' }}>
-                <CodingPlaygroundPane
-                  attemptId={attemptId || attempt.id}
-                  question={currentQ}
-                  proctoringSessionId={proctoringSession?.id}
-                  onAnswerSaved={(code) => {
-                    handleSelectOption(currentQ.question_order, code);
-                  }}
-                />
-              </div>
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
-                  paddingRight: '4px',
-                }}
-              >
-                {currentQ.options?.map((opt) => {
-                  const isSelected = answers[currentQ.question_order] === opt.key;
-                  return (
-                    <div
-                      key={opt.key}
-                      onClick={() => handleSelectOption(currentQ.question_order, opt.key)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '14px',
-                        padding: '13px 18px',
-                        borderRadius: '12px',
-                        border: isSelected
-                          ? '2px solid #1455B8'
-                          : '1.5px solid #E2E8F0',
-                        backgroundColor: isSelected ? '#EFF6FF' : '#FFFFFF',
-                        cursor: submitting ? 'not-allowed' : 'pointer',
-                        transition: 'all 0.12s ease',
-                        boxSizing: 'border-box',
+            {(() => {
+              const isCodingQ = Boolean(
+                currentQ.programming_details ||
+                  (currentQ.section_type === 'CODING' && (!currentQ.options || currentQ.options.length === 0))
+              );
+              if (isCodingQ) {
+                return (
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <CodingPlaygroundPane
+                      attemptId={attemptId || attempt.id}
+                      question={currentQ}
+                      proctoringSessionId={proctoringSession?.id}
+                      onAnswerSaved={() => {
+                        setAnswers((prev) => ({ ...prev, [currentQ.question_order]: 'SUBMITTED' }));
+                        setSaveStatus((prev) => ({ ...prev, [currentQ.question_order]: 'saved' }));
                       }}
-                    >
-                      {/* Radio Circle */}
-                      <div
-                        style={{
-                          width: '18px',
+                    />
+                  </div>
+                );
+              }
+              return (
+                <>
+                  {/* Question Text / Problem Prompt */}
+                  <div
+                    style={{
+                      fontSize: '18px',
+                      fontWeight: 700,
+                      color: '#111111',
+                      lineHeight: 1.5,
+                      marginBottom: '24px',
+                      whiteSpace: 'pre-wrap',
+                      userSelect: 'none',
+                    }}
+                  >
+                    {currentQ.prompt}
+                  </div>
+                  <div
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      overflowY: 'auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      paddingRight: '4px',
+                    }}
+                  >
+                    {currentQ.options?.map((opt) => {
+                      const isSelected = answers[currentQ.question_order] === opt.key;
+                      return (
+                        <div
+                          key={opt.key}
+                          onClick={() => handleSelectOption(currentQ.question_order, opt.key)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '14px',
+                            padding: '13px 18px',
+                            borderRadius: '12px',
+                            border: isSelected
+                              ? '2px solid #1455B8'
+                              : '1.5px solid #E2E8F0',
+                            backgroundColor: isSelected ? '#EFF6FF' : '#FFFFFF',
+                            cursor: submitting ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.12s ease',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          {/* Radio Circle */}
+                          <div
+                            style={{
+                              width: '18px',
                           height: '18px',
                           borderRadius: '50%',
                           border: isSelected ? '5px solid #1455B8' : '2px solid #94A3B8',
@@ -1940,8 +1965,10 @@ export function AssessmentExamPage() {
                     </div>
                   );
                 })}
-              </div>
-            )}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Actions Row Below Options (Mark for Later & Clear Answer) */}
             <div
@@ -1949,8 +1976,8 @@ export function AssessmentExamPage() {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                marginTop: '20px',
-                paddingTop: '14px',
+                marginTop: currentQ.programming_details ? '10px' : '20px',
+                paddingTop: currentQ.programming_details ? '10px' : '14px',
                 borderTop: '1px solid #FAF7F3',
               }}
             >
@@ -2093,16 +2120,17 @@ export function AssessmentExamPage() {
           </div>
         </main>
 
-        {/* ─── COLUMN 3: RIGHT PALETTE & OVERVIEW (w-[270px]) ──────────── */}
+        {/* ─── COLUMN 3: RIGHT PALETTE & OVERVIEW (responsive width) ──── */}
         <aside
           style={{
-            width: '270px',
-            minWidth: '270px',
-            maxWidth: '270px',
+            width: isCompactExamLayout ? '100%' : '236px',
+            minWidth: isCompactExamLayout ? 0 : '236px',
+            maxWidth: isCompactExamLayout ? '100%' : '236px',
+            flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
             gap: '14px',
-            overflow: 'hidden',
+            overflow: isCompactExamLayout ? 'visible' : 'hidden',
           }}
         >
           {/* Card 1: Question Palette */}

@@ -5,6 +5,7 @@ import {
   getAdminQuestionPools,
   type AdminQuestionPool,
   type CodingJsonImportResult,
+  type SectionMappingRule,
 } from '../../api/admin';
 import { formatApiError } from '../../utils/errorFormatter';
 import { useAdminTheme } from '../../utils/adminTheme';
@@ -37,6 +38,8 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
   const [jsonText, setJsonText] = useState('');
   const [duplicatePolicy, setDuplicatePolicy] = useState<'CREATE_NEW' | 'SKIP' | 'OVERWRITE'>('CREATE_NEW');
   const [previewResult, setPreviewResult] = useState<CodingJsonImportResult | null>(null);
+  const [sectionMapping, setSectionMapping] = useState<Record<string, SectionMappingRule>>({});
+  const [sectionSearchTerms, setSectionSearchTerms] = useState<Record<string, string>>({});
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -112,6 +115,21 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
         addToGlobalBank,
       });
       setPreviewResult(res);
+
+      // Initialize Section Directory resolution state: unmatched sections require explicit decision
+      const nextMapping: Record<string, SectionMappingRule> = {};
+      (res.detected_sections || []).forEach((sec) => {
+        const key = (sec.raw_section || sec.code || '').toUpperCase();
+        if (sec.matched && sec.matched_section_id) {
+          nextMapping[key] = {
+            action: 'map',
+            target_section_id: sec.matched_section_id,
+            target_section_code: sec.matched_section_code || sec.code,
+          };
+        }
+      });
+      setSectionMapping(nextMapping);
+      setSectionSearchTerms({});
     } catch (err: any) {
       setPreviewResult(null);
       setErrorMsg(formatApiError(err, 'Validation failed.'));
@@ -120,9 +138,26 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
     }
   };
 
+  const unmatchedSections = (previewResult?.detected_sections || []).filter((s) => !s.matched);
+  const allUnmatchedResolved = unmatchedSections.every((sec) => {
+    const key = (sec.raw_section || sec.code || '').toUpperCase();
+    const rule = sectionMapping[key];
+    if (!rule) return false;
+    if (rule.action === 'skip') return true;
+    if (rule.action === 'map') return Boolean(rule.target_section_id);
+    if (rule.action === 'create') {
+      return Boolean((rule.target_section_name || '').trim() && (rule.target_section_code || '').trim());
+    }
+    return false;
+  });
+
   const handleCommit = async () => {
     if (!previewResult || (previewResult.invalid_count || 0) > 0) {
       setErrorMsg('Run Validate & Preview cleanly with zero invalid questions before committing.');
+      return;
+    }
+    if (!allUnmatchedResolved) {
+      setErrorMsg('Resolve all unmatched sections (Map to Existing, Create New, or Skip) before importing.');
       return;
     }
     setErrorMsg('');
@@ -135,6 +170,7 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
         poolId: selectedPoolId || undefined,
         duplicatePolicy,
         addToGlobalBank,
+        sectionMapping,
       });
       setSuccessMsg(res.message || 'Coding questions imported successfully.');
       setTimeout(() => {
@@ -152,6 +188,7 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
     Boolean(previewResult) &&
     (previewResult?.invalid_count || 0) === 0 &&
     ((previewResult?.valid_count || 0) > 0 || (previewResult?.duplicate_count || 0) > 0) &&
+    allUnmatchedResolved &&
     !isProcessing;
 
   return (
@@ -540,7 +577,7 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
                     <div>
                       <strong style={{ color: tokens.textPrimary }}>#{item.index} {item.title}</strong>
                       <span style={{ marginLeft: '8px', color: tokens.textSecondary, fontSize: '11.5px' }}>
-                        {item.difficulty} • {item.marks} marks • {item.public_test_case_count} public, {item.hidden_test_case_count} hidden
+                        {item.section_type || 'CODING'} • {item.difficulty} • {item.marks} marks • {item.public_test_case_count} public, {item.hidden_test_case_count} hidden
                       </span>
                       {item.errors && item.errors.length > 0 && (
                         <div style={{ color: tokens.dangerText, marginTop: '3px', fontSize: '11.5px' }}>
@@ -573,6 +610,315 @@ export const ImportCodingJsonModal: React.FC<ImportCodingJsonModalProps> = ({
                   </div>
                 ))}
               </div>
+
+              {/* Section Directory Resolution Panel */}
+              {previewResult.detected_sections && previewResult.detected_sections.length > 0 && (
+                <div
+                  data-testid="coding-json-section-resolution"
+                  style={{
+                    marginTop: '14px',
+                    paddingTop: '12px',
+                    borderTop: `1px solid ${tokens.borderStrong}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                    <strong style={{ fontSize: '12.5px', color: tokens.textPrimary }}>
+                      Section Directory Resolution ({previewResult.detected_sections.length} section(s))
+                    </strong>
+                    {unmatchedSections.length > 0 && (
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '9999px',
+                          backgroundColor: tokens.cslYellowSoftBg,
+                          color: tokens.cslYellowSoftText,
+                        }}
+                      >
+                        {unmatchedSections.length} new / unmatched section(s) need approval
+                      </span>
+                    )}
+                  </div>
+
+                  {previewResult.duplicate_section_variants && previewResult.duplicate_section_variants.length > 0 && (
+                    <div style={{ padding: '8px 10px', borderRadius: '6px', backgroundColor: tokens.cslBlueSoftBg, color: tokens.cslBlueSoftText, fontSize: '11.5px' }}>
+                      Normalized aliases detected:{' '}
+                      {previewResult.duplicate_section_variants.map((v) => `${v.canonical_code} (${v.variants.join(', ')})`).join('; ')}
+                    </div>
+                  )}
+
+                  {previewResult.detected_sections.map((sec) => {
+                    const key = (sec.raw_section || sec.code || '').toUpperCase();
+                    const rule = sectionMapping[key];
+                    const searchQuery = (sectionSearchTerms[key] || '').trim().toLowerCase();
+                    const filteredAvailable = (previewResult.available_sections || []).filter(
+                      (a) =>
+                        !searchQuery ||
+                        a.name.toLowerCase().includes(searchQuery) ||
+                        a.code.toLowerCase().includes(searchQuery)
+                    );
+
+                    return (
+                      <div
+                        key={key}
+                        data-testid={`section-resolution-row-${key}`}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          border: `1px solid ${sec.matched ? tokens.border : tokens.cslYellow}`,
+                          backgroundColor: tokens.surfaceCard,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                          <div>
+                            <strong style={{ fontSize: '12.5px', color: tokens.textPrimary }}>
+                              {sec.raw_section || sec.detected_name}
+                            </strong>
+                            <span style={{ marginLeft: '8px', fontSize: '11px', color: tokens.textMuted }}>
+                              Code: {sec.code} • {sec.row_count} question(s)
+                            </span>
+                          </div>
+                          {sec.matched ? (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                                backgroundColor: tokens.successBg,
+                                color: tokens.successText,
+                              }}
+                            >
+                              ✓ Directory Match: {sec.matched_section_name} ({sec.matched_section_code || sec.code})
+                            </span>
+                          ) : (
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSectionMapping((prev) => ({
+                                    ...prev,
+                                    [key]: {
+                                      action: 'map',
+                                      target_section_id: previewResult.available_sections?.[0]?.id,
+                                      target_section_code: previewResult.available_sections?.[0]?.code,
+                                    },
+                                  }))
+                                }
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  border: `1px solid ${rule?.action === 'map' ? tokens.cslBlue : tokens.borderStrong}`,
+                                  backgroundColor: rule?.action === 'map' ? tokens.cslBlue : tokens.surfaceElevated,
+                                  color: rule?.action === 'map' ? '#FFFFFF' : tokens.textPrimary,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Map to Existing
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSectionMapping((prev) => ({
+                                    ...prev,
+                                    [key]: {
+                                      action: 'create',
+                                      target_section_name: sec.detected_name,
+                                      target_section_code: sec.code,
+                                      description: '',
+                                      display_order: (previewResult.available_sections?.length || 0) + 1,
+                                    },
+                                  }))
+                                }
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  border: `1px solid ${rule?.action === 'create' ? tokens.cslBlue : tokens.borderStrong}`,
+                                  backgroundColor: rule?.action === 'create' ? tokens.cslBlue : tokens.surfaceElevated,
+                                  color: rule?.action === 'create' ? '#FFFFFF' : tokens.textPrimary,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                + Create Directory Entry
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSectionMapping((prev) => ({
+                                    ...prev,
+                                    [key]: { action: 'skip' },
+                                  }))
+                                }
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  border: `1px solid ${rule?.action === 'skip' ? tokens.dangerText : tokens.borderStrong}`,
+                                  backgroundColor: rule?.action === 'skip' ? tokens.dangerBg : tokens.surfaceElevated,
+                                  color: rule?.action === 'skip' ? tokens.dangerText : tokens.textPrimary,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Skip Questions
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {!sec.matched && rule?.action === 'map' && (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '8px' }}>
+                            <input
+                              type="text"
+                              value={sectionSearchTerms[key] || ''}
+                              onChange={(e) =>
+                                setSectionSearchTerms((prev) => ({ ...prev, [key]: e.target.value }))
+                              }
+                              placeholder="Search directory sections..."
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            />
+                            <select
+                              value={rule.target_section_id || ''}
+                              onChange={(e) => {
+                                const chosenId = Number(e.target.value);
+                                const chosen = previewResult.available_sections?.find((a) => a.id === chosenId);
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [key]: {
+                                    action: 'map',
+                                    target_section_id: chosenId,
+                                    target_section_code: chosen?.code,
+                                  },
+                                }));
+                              }}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            >
+                              <option value="">-- Select existing section --</option>
+                              {filteredAvailable.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name} ({a.code})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {!sec.matched && rule?.action === 'create' && (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1.5fr 90px', gap: '8px' }}>
+                            <input
+                              type="text"
+                              value={rule.target_section_name || ''}
+                              onChange={(e) =>
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [key]: { ...rule, action: 'create', target_section_name: e.target.value },
+                                }))
+                              }
+                              placeholder="Section Name *"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            />
+                            <input
+                              type="text"
+                              value={rule.target_section_code || ''}
+                              onChange={(e) =>
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [key]: {
+                                    ...rule,
+                                    action: 'create',
+                                    target_section_code: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
+                                  },
+                                }))
+                              }
+                              placeholder="UNIQUE_CODE *"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            />
+                            <input
+                              type="text"
+                              value={rule.description || ''}
+                              onChange={(e) =>
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [key]: { ...rule, action: 'create', description: e.target.value },
+                                }))
+                              }
+                              placeholder="Description (optional)"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              value={rule.display_order ?? 0}
+                              onChange={(e) =>
+                                setSectionMapping((prev) => ({
+                                  ...prev,
+                                  [key]: { ...rule, action: 'create', display_order: Math.max(0, Number(e.target.value) || 0) },
+                                }))
+                              }
+                              title="Display Order"
+                              placeholder="Order"
+                              style={{
+                                padding: '6px 8px',
+                                borderRadius: '6px',
+                                border: `1px solid ${tokens.borderStrong}`,
+                                backgroundColor: tokens.inputBg,
+                                color: tokens.textPrimary,
+                                fontSize: '12px',
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

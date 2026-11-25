@@ -39,17 +39,11 @@ const EMPTY_SECTIONS: AdminSection[] = [];
 const SUPPORTED_CODING_LANGUAGES: { key: string; label: string }[] = [
   { key: 'python', label: 'Python 3' },
   { key: 'java', label: 'Java' },
-  { key: 'c', label: 'C' },
-  { key: 'cpp', label: 'C++' },
-  { key: 'javascript', label: 'JavaScript' },
 ];
 
 const DEFAULT_BOILERPLATES: Record<string, string> = {
-  python: "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
+  python: "# Write your Python 3 solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
   java: "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n    }\n}\n",
-  c: "#include <stdio.h>\n\nint main() {\n    return 0;\n}\n",
-  cpp: "#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n",
-  javascript: "const fs = require('fs');\nconst input = fs.readFileSync(0, 'utf-8').trim();\n",
 };
 
 function resolveDefaultCodingSection(sectionsList: AdminSection[], currentCode?: string): string {
@@ -131,10 +125,12 @@ export function AdminCodingQuestionModal({
     fallbackTitle: string
   ) => {
     if (!details) return null;
-    const langs =
+    const rawLangs =
       details.allowed_languages && details.allowed_languages.length > 0
         ? details.allowed_languages
         : ['python', 'java'];
+    const langs = rawLangs.filter((l) => l === 'python' || l === 'java');
+    const safeLangs = langs.length > 0 ? langs : ['python', 'java'];
     const stmt = details.problem_statement || fallbackTitle || '';
     const bp = { ...DEFAULT_BOILERPLATES, ...(details.boilerplate_code || {}) };
     const tcs = Array.isArray(details.test_cases) ? details.test_cases : [];
@@ -145,9 +141,9 @@ export function AdminCodingQuestionModal({
     setOutputFormat(details.output_format || '');
     setTimeLimit(Number(details.time_limit_seconds) || 2.0);
     setMemoryLimit(Number(details.memory_limit_mb) || 256);
-    setAllowedLanguages(langs);
-    setActiveBoilerplateLang(langs[0] || 'python');
-    setPreviewLang(langs[0] || 'python');
+    setAllowedLanguages(isEditMode ? rawLangs : safeLangs);
+    setActiveBoilerplateLang(rawLangs[0] || 'python');
+    setPreviewLang(safeLangs[0] || 'python');
     setBoilerplateCode(bp);
     setTestCases(tcs);
 
@@ -158,7 +154,7 @@ export function AdminCodingQuestionModal({
       outputFormat: details.output_format || '',
       timeLimit: Number(details.time_limit_seconds) || 2.0,
       memoryLimit: Number(details.memory_limit_mb) || 256,
-      allowedLanguages: langs,
+      allowedLanguages: isEditMode ? rawLangs : safeLangs,
       boilerplateCode: bp,
       testCases: tcs,
     };

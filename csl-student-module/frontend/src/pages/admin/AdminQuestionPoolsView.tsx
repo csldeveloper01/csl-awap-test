@@ -411,12 +411,6 @@ export function AdminQuestionPoolsView({
             target_section_id: sec.matched_section_id,
             target_section_name: sec.matched_section_name || label,
           };
-        } else {
-          initialMapping[sec.code] = {
-            action: 'create',
-            target_section_code: sec.code,
-            target_section_name: label,
-          };
         }
       });
       setPoolCsvSectionMapping(initialMapping);
@@ -428,10 +422,26 @@ export function AdminQuestionPoolsView({
     }
   };
 
+  const hasUnresolvedPoolCsvSections = Boolean(
+    poolCsvPreview?.detected_sections?.some((sec) => {
+      if (sec.matched_section_id) return false;
+      const rule = poolCsvSectionMapping[sec.code];
+      if (!rule) return true;
+      if (rule.action === 'skip') return false;
+      if (rule.action === 'map') return !rule.target_section_id;
+      if (rule.action === 'create') return !((rule.target_section_name || '').trim() && (rule.target_section_code || '').trim());
+      return true;
+    })
+  );
+
   const handleCommitPoolCsv = async () => {
     if (!targetCsvPoolId || !poolCsvPreview) return;
     if ((poolCsvPreview.valid_count ?? poolCsvPreview.total_rows ?? 0) === 0) {
       setPoolCsvError('No valid rows detected. Fix CSV errors before importing.');
+      return;
+    }
+    if (hasUnresolvedPoolCsvSections) {
+      setPoolCsvError('Please resolve every unmatched section (Map to Existing, Create New, or Skip) before committing.');
       return;
     }
     setPoolCsvLoading(true);
@@ -2558,33 +2568,125 @@ export function AdminQuestionPoolsView({
                 {poolCsvPreview.detected_sections && poolCsvPreview.detected_sections.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {poolCsvPreview.detected_sections.map((sec) => {
-                      const rule = poolCsvSectionMapping[sec.code] || { action: 'create' };
+                      const rule = poolCsvSectionMapping[sec.code];
+                      const availableList = poolCsvPreview.available_sections || sections;
                       return (
-                        <div key={sec.code} style={{ border: `1px solid ${tokens.borderStrong}`, borderRadius: '8px', padding: '10px 12px', backgroundColor: tokens.surfaceElevated, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                          <div style={{ fontSize: '12.5px' }}>
-                            <strong>[{sec.code}]</strong> {sec.detected_name || sec.raw_section} ({sec.row_count ?? sec.count} rows)
+                        <div key={sec.code} style={{ border: `1px solid ${sec.matched_section_id ? tokens.borderStrong : tokens.cslYellow}`, borderRadius: '8px', padding: '10px 12px', backgroundColor: tokens.surfaceElevated, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: '12.5px' }}>
+                              <strong>[{sec.code}]</strong> {sec.detected_name || sec.raw_section} ({sec.row_count ?? sec.count} rows)
+                              {sec.matched_section_id && (
+                                <span style={{ marginLeft: '8px', fontSize: '11px', color: tokens.successText, fontWeight: 700 }}>
+                                  ✓ Directory Match
+                                </span>
+                              )}
+                            </div>
+                            <select
+                              value={rule?.action || ''}
+                              onChange={(e) => {
+                                const action = e.target.value as '' | 'map' | 'create' | 'skip';
+                                if (!action) return;
+                                setPoolCsvSectionMapping((prev) => ({
+                                  ...prev,
+                                  [sec.code]: {
+                                    ...prev[sec.code],
+                                    action,
+                                    target_section_id: action === 'map' ? (sec.matched_section_id || availableList[0]?.id) : undefined,
+                                    target_section_code: action === 'create' ? sec.code : undefined,
+                                    target_section_name: action === 'create' ? (sec.detected_name || sec.raw_section || sec.code) : undefined,
+                                    description: action === 'create' ? '' : undefined,
+                                    display_order: action === 'create' ? (availableList.length + 1) : undefined,
+                                  },
+                                }));
+                              }}
+                              style={{ ...inputStyle, fontSize: '12px' }}
+                            >
+                              {!sec.matched_section_id && <option value="">-- Choose Resolution --</option>}
+                              <option value="map">Map to Existing Section</option>
+                              <option value="create">Create New Directory Entry</option>
+                              <option value="skip">Skip Rows</option>
+                            </select>
                           </div>
-                          <select
-                            value={rule.action}
-                            onChange={(e) => {
-                              const action = e.target.value as 'map' | 'create' | 'skip';
-                              setPoolCsvSectionMapping((prev) => ({
-                                ...prev,
-                                [sec.code]: {
-                                  ...prev[sec.code],
-                                  action,
-                                  target_section_id: action === 'map' ? sections[0]?.id : undefined,
-                                  target_section_code: action === 'create' ? sec.code : undefined,
-                                  target_section_name: action === 'create' ? (sec.detected_name || sec.raw_section || sec.code) : undefined,
-                                },
-                              }));
-                            }}
-                            style={{ ...inputStyle, fontSize: '12px' }}
-                          >
-                            <option value="map">Map to Existing Section</option>
-                            <option value="create">Create Section</option>
-                            <option value="skip">Skip Rows</option>
-                          </select>
+
+                          {rule?.action === 'map' && !sec.matched_section_id && (
+                            <select
+                              value={rule.target_section_id || ''}
+                              onChange={(e) => {
+                                const idVal = Number(e.target.value);
+                                const chosen = availableList.find((a) => a.id === idVal);
+                                setPoolCsvSectionMapping((prev) => ({
+                                  ...prev,
+                                  [sec.code]: {
+                                    action: 'map',
+                                    target_section_id: idVal,
+                                    target_section_code: chosen?.code,
+                                  },
+                                }));
+                              }}
+                              style={{ ...inputStyle, fontSize: '12px' }}
+                            >
+                              <option value="">-- Select target section --</option>
+                              {availableList.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name} ({a.code})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+
+                          {rule?.action === 'create' && (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1.3fr 80px', gap: '8px' }}>
+                              <input
+                                type="text"
+                                value={rule.target_section_name || ''}
+                                onChange={(e) =>
+                                  setPoolCsvSectionMapping((prev) => ({
+                                    ...prev,
+                                    [sec.code]: { ...rule, action: 'create', target_section_name: e.target.value },
+                                  }))
+                                }
+                                placeholder="Section Name *"
+                                style={{ ...inputStyle, fontSize: '12px' }}
+                              />
+                              <input
+                                type="text"
+                                value={rule.target_section_code || ''}
+                                onChange={(e) =>
+                                  setPoolCsvSectionMapping((prev) => ({
+                                    ...prev,
+                                    [sec.code]: { ...rule, action: 'create', target_section_code: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') },
+                                  }))
+                                }
+                                placeholder="UNIQUE_CODE *"
+                                style={{ ...inputStyle, fontSize: '12px' }}
+                              />
+                              <input
+                                type="text"
+                                value={rule.description || ''}
+                                onChange={(e) =>
+                                  setPoolCsvSectionMapping((prev) => ({
+                                    ...prev,
+                                    [sec.code]: { ...rule, action: 'create', description: e.target.value },
+                                  }))
+                                }
+                                placeholder="Description (optional)"
+                                style={{ ...inputStyle, fontSize: '12px' }}
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                value={rule.display_order ?? 0}
+                                onChange={(e) =>
+                                  setPoolCsvSectionMapping((prev) => ({
+                                    ...prev,
+                                    [sec.code]: { ...rule, action: 'create', display_order: Math.max(0, Number(e.target.value) || 0) },
+                                  }))
+                                }
+                                placeholder="Order"
+                                style={{ ...inputStyle, fontSize: '12px' }}
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2610,7 +2712,7 @@ export function AdminQuestionPoolsView({
                   </button>
                   <button
                     type="button"
-                    disabled={poolCsvLoading || (poolCsvPreview.valid_count ?? poolCsvPreview.total_rows ?? 0) === 0}
+                    disabled={poolCsvLoading || hasUnresolvedPoolCsvSections || (poolCsvPreview.valid_count ?? poolCsvPreview.total_rows ?? 0) === 0}
                     onClick={handleCommitPoolCsv}
                     style={{
                       padding: '8px 20px',

@@ -857,12 +857,14 @@ export async function archiveAdminQuestion(
 export interface CSVSectionPreview {
   code: string;
   raw_section?: string;
+  raw_variants?: string[];
   detected_name: string;
   row_count: number;
   count?: number;
   matched?: boolean;
   matched_section_id: number | null;
   matched_section_name: string | null;
+  matched_section_code?: string | null;
 }
 
 export interface CSVImportPreviewResponse {
@@ -875,6 +877,10 @@ export interface CSVImportPreviewResponse {
   error_count?: number;
   target_pool?: { id: string; name: string; code: string };
   detected_sections: CSVSectionPreview[];
+  unmatched_sections_count?: number;
+  requires_section_resolution?: boolean;
+  duplicate_section_variants?: Array<{ canonical_code: string; variants: string[] }>;
+  available_sections?: Array<{ id: number; name: string; code: string; description?: string; order?: number }>;
   sample_rows: Record<string, string | number>[];
   errors: Array<string | { row?: number; error?: string }>;
 }
@@ -913,6 +919,8 @@ export interface SectionMappingRule {
   target_section_id?: number;
   target_section_code?: string;
   target_section_name?: string;
+  description?: string;
+  display_order?: number;
 }
 
 export async function importAdminQuestionsCSV(
@@ -1003,7 +1011,10 @@ export async function importAdminPoolCSV(
   if (payload.file) {
     const formData = new FormData();
     formData.append('file', payload.file);
-    if (payload.sectionMapping) formData.append('section_mapping', JSON.stringify(payload.sectionMapping));
+    if (payload.sectionMapping) {
+      formData.append('section_mapping', JSON.stringify(payload.sectionMapping));
+      formData.append('require_section_resolution', 'true');
+    }
     formData.append('add_to_global_bank', String(Boolean(payload.addToGlobalBank)));
     const res = await adminApi.post(`/question-pools/${poolId}/import-csv/`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -1013,6 +1024,7 @@ export async function importAdminPoolCSV(
   const res = await adminApi.post(`/question-pools/${poolId}/import-csv/`, {
     csv_content: payload.csvContent,
     section_mapping: payload.sectionMapping,
+    require_section_resolution: Boolean(payload.sectionMapping),
     add_to_global_bank: Boolean(payload.addToGlobalBank),
   });
   return res.data;
@@ -1808,6 +1820,7 @@ export interface CodingJsonImportResult {
   success?: boolean;
   preview_mode?: boolean;
   message?: string;
+  detail?: string;
   imported_count?: number;
   updated_count?: number;
   skipped_count?: number;
@@ -1816,9 +1829,16 @@ export interface CodingJsonImportResult {
   duplicate_count?: number;
   total_questions?: number;
   target_pool?: string;
+  detected_sections?: CSVSectionPreview[];
+  unmatched_sections_count?: number;
+  duplicate_section_variants?: Array<{ canonical_code: string; variants: string[] }>;
+  requires_section_resolution?: boolean;
+  available_sections?: Array<{ id: number; name: string; code: string; description?: string; order?: number }>;
+  section_errors?: Record<string, string>;
   items?: Array<{
     index: number;
     title: string;
+    section_type?: string;
     difficulty: string;
     marks: number;
     test_case_count: number;
@@ -1831,7 +1851,13 @@ export interface CodingJsonImportResult {
 
 export const importCodingQuestionsJson = async (
   payload: any,
-  options?: { preview?: boolean; poolId?: string; duplicatePolicy?: string; addToGlobalBank?: boolean }
+  options?: {
+    preview?: boolean;
+    poolId?: string;
+    duplicatePolicy?: string;
+    addToGlobalBank?: boolean;
+    sectionMapping?: Record<string, SectionMappingRule>;
+  }
 ): Promise<CodingJsonImportResult> => {
   const params: Record<string, string> = {};
   if (options?.preview) params.preview = 'true';
@@ -1840,7 +1866,21 @@ export const importCodingQuestionsJson = async (
   if (options?.addToGlobalBank !== undefined) {
     params.add_to_global_bank = options.addToGlobalBank ? 'true' : 'false';
   }
-  const res = await adminApi.post<CodingJsonImportResult>('/questions/import-coding-json/', payload, { params });
+  let requestBody = payload;
+  if (options?.sectionMapping && Object.keys(options.sectionMapping).length > 0) {
+    if (Array.isArray(payload)) {
+      requestBody = {
+        questions: payload,
+        section_mapping: options.sectionMapping,
+      };
+    } else if (payload && typeof payload === 'object') {
+      requestBody = {
+        ...payload,
+        section_mapping: options.sectionMapping,
+      };
+    }
+  }
+  const res = await adminApi.post<CodingJsonImportResult>('/questions/import-coding-json/', requestBody, { params });
   return res.data;
 };
 
