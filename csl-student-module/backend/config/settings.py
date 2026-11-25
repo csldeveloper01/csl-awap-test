@@ -253,6 +253,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # Prevent DRF from rejecting ?format=xlsx or ?format=csv export endpoints with HTTP 404
+    'URL_FORMAT_OVERRIDE': None,
 }
 
 # ─── Production Security & Proxy Configuration ───────────────────────────────

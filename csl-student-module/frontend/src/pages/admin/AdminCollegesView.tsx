@@ -12,6 +12,7 @@ import {
   importAdminCollegeCandidates,
   getAdminCollegeDetail,
   importAdminCollegeDirectory,
+  exportAdvancedStudentData,
   type AdminCollege,
   type AdminCollegeDetail,
 } from '../../api/admin';
@@ -98,6 +99,23 @@ export function AdminCollegesView() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importCsvText, setImportCsvText] = useState('');
   const [importing, setImporting] = useState(false);
+  const [exportingCollegeId, setExportingCollegeId] = useState<number | null>(null);
+
+  const handleExportCollegeData = async (college: AdminCollege) => {
+    try {
+      setExportingCollegeId(college.id);
+      const safeCode = (college.code || 'college').replace(/[^a-zA-Z0-9_-]/g, '_');
+      await exportAdvancedStudentData({
+        format: 'xlsx',
+        college_id: college.id,
+        filename: `csl_${safeCode}_results.xlsx`,
+      });
+    } catch {
+      alert(`Failed to export Excel data for ${college.name}.`);
+    } finally {
+      setExportingCollegeId(null);
+    }
+  };
   const [importResult, setImportResult] = useState<{
     total_rows: number;
     created_count: number;
@@ -818,13 +836,30 @@ export function AdminCollegesView() {
                           color: '#1E293B',
                           border: '1px solid #94A3B8',
                           borderRadius: '16px',
-                          padding: '6px 18px',
+                          padding: '6px 14px',
                           fontSize: '12px',
                           fontWeight: 800,
                           cursor: 'pointer',
                         }}
                       >
-                        Export Data
+                        Import Students
+                      </button>
+                      <button
+                        onClick={() => handleExportCollegeData(col)}
+                        disabled={exportingCollegeId === col.id}
+                        style={{
+                          backgroundColor: '#FFFFFF',
+                          color: '#0B2E6F',
+                          border: '1px solid #94A3B8',
+                          borderRadius: '16px',
+                          padding: '6px 14px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          cursor: exportingCollegeId === col.id ? 'wait' : 'pointer',
+                        }}
+                        title="Download formatted Excel export for this college"
+                      >
+                        {exportingCollegeId === col.id ? 'Exporting...' : 'Export Data'}
                       </button>
                       <button
                         onClick={() => handleToggleStatus(col)}

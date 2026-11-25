@@ -61,6 +61,7 @@ from .tokens import (
     decode_candidate_token,
     get_authorized_candidate,
     verify_attempt_ownership,
+    is_simulation_or_admin_subject,
 )
 
 logger = logging.getLogger(__name__)
@@ -1533,6 +1534,19 @@ class RecordIntegrityEventView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+            if is_simulation_or_admin_subject(request, attempt):
+                return Response(
+                    {
+                        "status": "simulation_ignored",
+                        "event_type": ev_type,
+                        "tab_switches": attempt.tab_switch_count,
+                        "max_switches": attempt.snapshot_tab_switch_limit,
+                        "remaining_switches": attempt.snapshot_tab_switch_limit,
+                        "is_finalized": False,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             allowed = (
                 attempt.assessment.max_tab_switches_warning
                 if attempt.assessment
@@ -1681,7 +1695,7 @@ class AssessmentResultView(APIView):
 
     def get(self, request, attempt_id):
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
-        if not verify_attempt_ownership(request, attempt):
+        if not verify_attempt_ownership(request, attempt, allow_staff=True):
             return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
 
         if attempt.state in [AssessmentAttempt.State.CREATED, AssessmentAttempt.State.IN_PROGRESS]:
@@ -2274,6 +2288,24 @@ class CandidateCameraBypassStatusView(APIView):
         return Response({"bypass_granted": False})
 
 
+def _authorize_proctoring_attempt(request, attempt: AssessmentAttempt):
+    """
+    Shared security gate for all Sentinel & camera calibration endpoints:
+    1. Enforces strict candidate attempt ownership (never staff bypass).
+    2. Rejects admin sessions and Test Run simulations from candidate Sentinel recording.
+    """
+    if is_simulation_or_admin_subject(request, attempt):
+        return Response(
+            {
+                "detail": "Access forbidden: CSL Sentinel proctoring only records verified real candidate attempts (excluded for administrators and simulation runs)."
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not verify_attempt_ownership(request, attempt, allow_staff=False):
+        return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
 class CandidateAttemptCalibrationView(APIView):
     """
     Save camera calibration data (head movement verification results) to an attempt.
@@ -2283,8 +2315,9 @@ class CandidateAttemptCalibrationView(APIView):
 
     def post(self, request, attempt_id):
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
-        if not verify_attempt_ownership(request, attempt):
-            return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, attempt)
+        if auth_error is not None:
+            return auth_error
 
         calibrated = request.data.get("camera_calibrated", True)
         calibration_data = request.data.get("calibration_data", {})
@@ -2318,8 +2351,9 @@ class ProctoringSessionInitView(APIView):
             return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
-        if not verify_attempt_ownership(request, attempt):
-            return Response({"detail": "Access forbidden: you do not own this attempt."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, attempt)
+        if auth_error is not None:
+            return auth_error
 
         with transaction.atomic():
             session, created = ProctoringSession.objects.select_for_update().get_or_create(
@@ -2329,6 +2363,7 @@ class ProctoringSessionInitView(APIView):
                     "assessment": attempt.assessment,
                     "status": ProctoringSession.SessionStatus.INITIALIZING,
                     "browser_monitoring_status": ProctoringSession.BrowserMonitoringStatus.ACTIVE,
+                    "is_simulation": False,
                 },
             )
 
@@ -2368,8 +2403,9 @@ class ProctoringCameraStatusView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         new_status = request.data.get("status")
         valid_statuses = [c[0] for c in ProctoringSession.CameraStatus.choices]
@@ -2415,8 +2451,9 @@ class ProctoringCalibrationView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         if session.status not in [ProctoringSession.SessionStatus.INITIALIZING, ProctoringSession.SessionStatus.ACTIVE]:
             return Response({"detail": f"Proctoring session is {session.status.lower()} and cannot be calibrated."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2491,8 +2528,9 @@ class ProctoringScreenShareStatusView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         new_status = request.data.get("status")
         valid_statuses = [s[0] for s in ProctoringSession.ScreenShareStatus.choices]
@@ -2544,8 +2582,9 @@ class ProctoringEventIngestView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         serializer = ProctoringEventInputSerializer(data=request.data)
         if not serializer.is_valid():
@@ -2633,8 +2672,9 @@ class ProctoringEvidenceUploadView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         raw_bytes = None
         if "frame" in request.FILES:
@@ -2691,8 +2731,9 @@ class ProctoringSessionStatusView(APIView):
 
     def get(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         serializer = ProctoringSessionSerializer(session)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -2707,8 +2748,9 @@ class ProctoringSessionEndView(APIView):
 
     def post(self, request, session_id):
         session = get_object_or_404(ProctoringSession, id=session_id)
-        if not verify_attempt_ownership(request, session.assessment_session):
-            return Response({"detail": "Access forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
+        if auth_error is not None:
+            return auth_error
 
         session.status = ProctoringSession.SessionStatus.COMPLETED
         session.ended_at = timezone.now()

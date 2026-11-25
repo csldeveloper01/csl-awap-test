@@ -41,14 +41,25 @@ MCQ_ALIAS_MAP = {
 
 CODING_ALIAS_MAP = {
     "prompt": ["prompt", "title", "problem_statement", "problem statement", "question", "problem"],
-    "additional_instructions": ["additional_instructions", "instructions", "description", "constraints"],
+    "additional_instructions": ["additional_instructions", "instructions", "description", "problem_description"],
+    "constraints": ["constraints", "constraint"],
+    "input_format": ["input_format", "input format"],
+    "output_format": ["output_format", "output format"],
+    "section_type": ["section_type", "section", "section_code", "section code", "topic", "category", "domain"],
+    "difficulty": ["difficulty", "level"],
     "expected_output": ["expected_output", "expected output", "output"],
     "example_test_case_1": ["example_test_case_1", "example test case 1", "sample_input_1", "sample input 1", "sample 1"],
+    "example_output_1": ["example_output_1", "example output 1", "sample_output_1", "sample output 1"],
     "example_test_case_2": ["example_test_case_2", "example test case 2", "sample_input_2", "sample input 2", "sample 2"],
-    "hidden_test_case_1": ["hidden_test_case_1", "hidden test case 1", "test_case_1", "test case 1"],
-    "hidden_test_case_2": ["hidden_test_case_2", "hidden test case 2", "test_case_2", "test case 2"],
-    "hidden_test_case_3": ["hidden_test_case_3", "hidden test case 3", "test_case_3", "test case 3"],
-    "hidden_test_case_4": ["hidden_test_case_4", "hidden test case 4", "test_case_4", "test case 4"],
+    "example_output_2": ["example_output_2", "example output 2", "sample_output_2", "sample output 2"],
+    "hidden_test_case_1": ["hidden_test_case_1", "hidden test case 1", "hidden_input_1", "hidden input 1", "test_case_1", "test case 1"],
+    "hidden_output_1": ["hidden_output_1", "hidden output 1", "test_output_1", "test output 1"],
+    "hidden_test_case_2": ["hidden_test_case_2", "hidden test case 2", "hidden_input_2", "hidden input 2", "test_case_2", "test case 2"],
+    "hidden_output_2": ["hidden_output_2", "hidden output 2", "test_output_2", "test output 2"],
+    "hidden_test_case_3": ["hidden_test_case_3", "hidden test case 3", "hidden_input_3", "hidden input 3", "test_case_3", "test case 3"],
+    "hidden_output_3": ["hidden_output_3", "hidden output 3", "test_output_3", "test output 3"],
+    "hidden_test_case_4": ["hidden_test_case_4", "hidden test case 4", "hidden_input_4", "hidden input 4", "test_case_4", "test case 4"],
+    "hidden_output_4": ["hidden_output_4", "hidden output 4", "test_output_4", "test output 4"],
     "marks": ["marks", "mark", "score", "points"],
     "time_limit": ["time_limit", "time_limit_seconds", "time limit", "timeout"],
     "memory_limit": ["memory_limit", "memory_limit_mb", "memory limit", "memory"],
@@ -173,12 +184,83 @@ def map_headers(fieldnames: List[str]) -> Tuple[Dict[str, str], List[str], str]:
     return mapping, unmapped, "CODING" if is_coding else "MCQ"
 
 
+def _resolve_section_for_row(
+    sec_raw: str,
+    section_mapping: Optional[Dict[str, Any]],
+    existing_sections: Dict[str, AssessmentSection],
+    existing_names: Dict[str, AssessmentSection],
+    fallback_section: Optional[AssessmentSection],
+    commit: bool,
+) -> Tuple[Optional[AssessmentSection], bool]:
+    """
+    Resolve an AssessmentSection for a CSV row, honoring explicit admin section_mapping rules.
+    Returns (section_obj, should_skip_row).
+    """
+    sec_clean = (sec_raw or "").strip().upper()
+    sec_code = re.sub(r"[^A-Z0-9_]", "_", sec_clean).strip("_")[:50]
+    sec_name = sec_clean.replace("_", " ").title() if sec_clean else "General"
+
+    sec_obj = None
+    normalized_mapping = {
+        str(k).strip().upper(): v for k, v in (section_mapping or {}).items()
+    }
+    sec_mapping_rule = (
+        normalized_mapping.get(sec_clean)
+        or normalized_mapping.get(sec_code)
+    )
+    if isinstance(sec_mapping_rule, str):
+        sec_obj = (
+            existing_sections.get(sec_mapping_rule.strip().upper())
+            or AssessmentSection.objects.filter(code__iexact=sec_mapping_rule.strip()).first()
+        )
+    elif isinstance(sec_mapping_rule, dict):
+        action = sec_mapping_rule.get("action")
+        if action == "skip":
+            return None, True
+        elif action == "map":
+            target_id = sec_mapping_rule.get("target_section_id") or sec_mapping_rule.get("section_id")
+            if target_id:
+                sec_obj = AssessmentSection.objects.filter(id=target_id).first()
+        elif action == "create":
+            created_name = sec_mapping_rule.get("target_section_name") or sec_mapping_rule.get("name") or sec_name
+            if commit and sec_code:
+                sec_obj, _ = AssessmentSection.objects.get_or_create(
+                    code=sec_code,
+                    defaults={"name": created_name, "is_active": True},
+                )
+                existing_sections[sec_code] = sec_obj
+
+    if not sec_obj:
+        sec_obj = existing_sections.get(sec_code) or existing_names.get(sec_clean.lower())
+        if not sec_obj and commit and sec_code:
+            sec_obj, _ = AssessmentSection.objects.get_or_create(
+                code=sec_code,
+                defaults={"name": sec_name, "is_active": True},
+            )
+            existing_sections[sec_code] = sec_obj
+        elif not sec_obj:
+            sec_obj = fallback_section
+
+    return sec_obj, False
+
+
+def _parse_allowed_languages(raw_val: str) -> List[str]:
+    """Normalize comma/pipe/semicolon separated programming language names."""
+    if not raw_val:
+        return ["python", "java"]
+    tokens = [t.strip().lower() for t in re.split(r"[,;|]+", raw_val) if t.strip()]
+    valid = [t for t in tokens if t in ("python", "java", "c", "cpp", "javascript", "js")]
+    normalized = ["javascript" if t == "js" else t for t in valid]
+    return list(dict.fromkeys(normalized)) or ["python", "java"]
+
+
 def parse_and_validate_csv(
     csv_text: str,
     target_assessment: Optional[Assessment] = None,
     target_pools: Optional[List[QuestionPool]] = None,
     section_mapping: Optional[Dict[str, Any]] = None,
     commit: bool = False,
+    is_global: bool = True,
 ) -> Dict[str, Any]:
     """
     Robust CSV parser and validator:
@@ -186,6 +268,7 @@ def parse_and_validate_csv(
     - Maps headers
     - Validates each row
     - If commit=True, persists inside transaction.atomic()
+    - is_global controls whether created questions belong to central Global Question Bank
     """
     cleaned_text = sanitize_csv_text(csv_text)
     if not cleaned_text.strip():
@@ -226,7 +309,6 @@ def parse_and_validate_csv(
             "errors": [],
         }
 
-    rows_data = []
     error_rows = []
     valid_rows = []
 
@@ -244,7 +326,6 @@ def parse_and_validate_csv(
             continue
 
         if detected_type == "CODING":
-            # Validate coding question
             marks_raw = row_clean.get(header_mapping.get("marks", ""), "10")
             try:
                 marks = int(float(marks_raw)) if marks_raw else 10
@@ -269,32 +350,48 @@ def parse_and_validate_csv(
             except ValueError:
                 memory_limit = 256
 
+            diff_raw = row_clean.get(header_mapping.get("difficulty", ""), "MEDIUM").upper()
+            if diff_raw not in ["EASY", "MEDIUM", "HARD"]:
+                diff_raw = "MEDIUM"
+
+            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "CODING").strip().upper()
+            sec_obj, should_skip = _resolve_section_for_row(
+                sec_raw=sec_raw,
+                section_mapping=section_mapping,
+                existing_sections=existing_sections,
+                existing_names=existing_names,
+                fallback_section=default_coding_sec,
+                commit=commit,
+            )
+            if should_skip:
+                continue
+
             expected_output = row_clean.get(header_mapping.get("expected_output", ""), "")
             instructions = row_clean.get(header_mapping.get("additional_instructions", ""), "")
-
-            # Test cases
-            ex1 = row_clean.get(header_mapping.get("example_test_case_1", ""), "")
-            ex2 = row_clean.get(header_mapping.get("example_test_case_2", ""), "")
-            hid1 = row_clean.get(header_mapping.get("hidden_test_case_1", ""), "")
-            hid2 = row_clean.get(header_mapping.get("hidden_test_case_2", ""), "")
-            hid3 = row_clean.get(header_mapping.get("hidden_test_case_3", ""), "")
-            hid4 = row_clean.get(header_mapping.get("hidden_test_case_4", ""), "")
+            constraints = row_clean.get(header_mapping.get("constraints", ""), "")
+            input_format = row_clean.get(header_mapping.get("input_format", ""), "")
+            output_format = row_clean.get(header_mapping.get("output_format", ""), "")
+            allowed_langs = _parse_allowed_languages(row_clean.get(header_mapping.get("allowed_languages", ""), ""))
 
             test_cases = []
-            if ex1:
-                test_cases.append({"input_text": ex1, "expected_output": expected_output or "Output", "is_public": True, "weightage": 1.0})
-            if ex2:
-                test_cases.append({"input_text": ex2, "expected_output": expected_output or "Output", "is_public": True, "weightage": 1.0})
-            if hid1:
-                test_cases.append({"input_text": hid1, "expected_output": expected_output or "Output", "is_public": False, "weightage": 2.0})
-            if hid2:
-                test_cases.append({"input_text": hid2, "expected_output": expected_output or "Output", "is_public": False, "weightage": 2.0})
-            if hid3:
-                test_cases.append({"input_text": hid3, "expected_output": expected_output or "Output", "is_public": False, "weightage": 2.0})
-            if hid4:
-                test_cases.append({"input_text": hid4, "expected_output": expected_output or "Output", "is_public": False, "weightage": 2.0})
+            for idx_num in (1, 2):
+                inp = row_clean.get(header_mapping.get(f"example_test_case_{idx_num}", ""), "")
+                out = row_clean.get(header_mapping.get(f"example_output_{idx_num}", ""), "") or expected_output
+                if inp or out:
+                    if "::" in inp and not row_clean.get(header_mapping.get(f"example_output_{idx_num}", ""), ""):
+                        parts = inp.split("::", 1)
+                        inp, out = parts[0].strip(), parts[1].strip()
+                    test_cases.append({"input_text": inp, "expected_output": out or "Output", "is_public": True, "weightage": 1.0})
 
-            # If no test cases explicitly extracted, create default sample test case
+            for idx_num in (1, 2, 3, 4):
+                inp = row_clean.get(header_mapping.get(f"hidden_test_case_{idx_num}", ""), "")
+                out = row_clean.get(header_mapping.get(f"hidden_output_{idx_num}", ""), "") or expected_output
+                if inp:
+                    if "::" in inp and not row_clean.get(header_mapping.get(f"hidden_output_{idx_num}", ""), ""):
+                        parts = inp.split("::", 1)
+                        inp, out = parts[0].strip(), parts[1].strip()
+                    test_cases.append({"input_text": inp, "expected_output": out or "Output", "is_public": False, "weightage": 2.0})
+
             if not test_cases and expected_output:
                 test_cases.append({"input_text": "", "expected_output": expected_output, "is_public": True, "weightage": 1.0})
 
@@ -303,16 +400,21 @@ def parse_and_validate_csv(
                 "row_number": row_idx,
                 "prompt": prompt_val,
                 "marks": marks,
+                "difficulty": diff_raw,
                 "time_limit": time_limit,
                 "memory_limit": memory_limit,
                 "instructions": instructions,
+                "constraints": constraints,
+                "input_format": input_format,
+                "output_format": output_format,
+                "allowed_languages": allowed_langs,
                 "test_cases": test_cases,
-                "section_obj": default_coding_sec,
-                "section": default_coding_sec.name if default_coding_sec else "Coding",
+                "section_obj": sec_obj,
+                "section": sec_obj.name if sec_obj else "Coding",
+                "section_type": sec_raw,
             })
 
         else:
-            # Validate MCQ question
             opt_a = row_clean.get(header_mapping.get("option_a", ""), "")
             opt_b = row_clean.get(header_mapping.get("option_b", ""), "")
             opt_c = row_clean.get(header_mapping.get("option_c", ""), "")
@@ -324,7 +426,6 @@ def parse_and_validate_csv(
                 continue
 
             if corr not in ["A", "B", "C", "D"]:
-                # Try to match option text to key
                 if corr == opt_a.upper():
                     corr = "A"
                 elif corr == opt_b.upper():
@@ -349,38 +450,17 @@ def parse_and_validate_csv(
             if diff_raw not in ["EASY", "MEDIUM", "HARD"]:
                 diff_raw = "MEDIUM"
 
-            sec_raw = row_clean.get(header_mapping.get("section_type", ""), "APTITUDE").strip().upper()
-            sec_code = re.sub(r"[^A-Z0-9_]", "_", sec_raw).strip("_")[:50]
-            sec_name = sec_raw.replace("_", " ").title()
-
-            sec_obj = None
-            sec_mapping_rule = (section_mapping or {}).get(sec_raw) or (section_mapping or {}).get(sec_code)
-            if sec_mapping_rule:
-                action = sec_mapping_rule.get("action")
-                if action == "skip":
-                    continue
-                elif action == "map":
-                    target_id = sec_mapping_rule.get("target_section_id") or sec_mapping_rule.get("section_id")
-                    if target_id:
-                        sec_obj = AssessmentSection.objects.filter(id=target_id).first()
-                elif action == "create":
-                    created_name = sec_mapping_rule.get("target_section_name") or sec_mapping_rule.get("name") or sec_name
-                    if commit:
-                        sec_obj, _ = AssessmentSection.objects.get_or_create(
-                            code=sec_code,
-                            defaults={"name": created_name, "is_active": True}
-                        )
-                        existing_sections[sec_code] = sec_obj
-
-            if not sec_obj:
-                if commit:
-                    sec_obj, _ = AssessmentSection.objects.get_or_create(
-                        code=sec_code,
-                        defaults={"name": sec_name, "is_active": True}
-                    )
-                    existing_sections[sec_code] = sec_obj
-                else:
-                    sec_obj = existing_sections.get(sec_code) or existing_names.get(sec_raw.lower()) or default_mcq_sec
+            sec_raw = (row_clean.get(header_mapping.get("section_type", ""), "") or "APTITUDE").strip().upper()
+            sec_obj, should_skip = _resolve_section_for_row(
+                sec_raw=sec_raw,
+                section_mapping=section_mapping,
+                existing_sections=existing_sections,
+                existing_names=existing_names,
+                fallback_section=default_mcq_sec,
+                commit=commit,
+            )
+            if should_skip:
+                continue
 
             valid_rows.append({
                 "type": "MCQ",
@@ -401,10 +481,15 @@ def parse_and_validate_csv(
 
     total_rows = len(valid_rows) + len(error_rows)
 
+    section_counts = {}
+    for r in valid_rows:
+        st = r.get("section_type") or ("CODING" if r.get("type") == "CODING" else "APTITUDE")
+        section_counts[st] = section_counts.get(st, 0) + 1
+
     if not commit:
-        preview = [{k: v for k, v in r.items() if k != "section_obj"} for r in valid_rows[:5]]
+        preview = [{k: v for k, v in r.items() if k != "section_obj"} for r in valid_rows[:10]]
         return {
-            "success": True,
+            "success": len(valid_rows) > 0 or len(error_rows) == 0,
             "detected_type": detected_type,
             "delimiter": delimiter,
             "total_rows": total_rows,
@@ -413,9 +498,24 @@ def parse_and_validate_csv(
             "errors": error_rows[:50],
             "unmapped_headers": unmapped_headers,
             "preview_samples": preview,
+            "section_counts": section_counts,
         }
 
-    # Commit execution
+    if total_rows > 0 and len(valid_rows) == 0:
+        return {
+            "success": False,
+            "detail": "No valid rows could be imported from CSV. Please review row validation errors.",
+            "total_rows": total_rows,
+            "imported_count": 0,
+            "success_count": 0,
+            "valid_count": 0,
+            "error_count": len(error_rows),
+            "errors": error_rows[:50],
+            "detected_type": detected_type,
+            "unmapped_headers": unmapped_headers,
+        }
+
+    # Commit execution inside transaction
     created_questions = []
     with transaction.atomic():
         for item in valid_rows:
@@ -423,22 +523,28 @@ def parse_and_validate_csv(
             if item["type"] == "CODING":
                 q = QuestionBank.objects.create(
                     prompt=item["prompt"],
-                    section_type=QuestionBank.SectionType.CODING,
+                    section_type=sec_to_assign.code if sec_to_assign else item.get("section_type", QuestionBank.SectionType.CODING),
                     section=sec_to_assign,
+                    assessment_type="CODING",
+                    difficulty=item.get("difficulty", QuestionBank.Difficulty.MEDIUM),
                     marks=item["marks"],
-                    option_a="N/A",
-                    option_b="N/A",
-                    option_c="N/A",
-                    option_d="N/A",
+                    option_a="N/A (Coding Question)",
+                    option_b="N/A (Coding Question)",
+                    option_c="N/A (Coding Question)",
+                    option_d="N/A (Coding Question)",
                     correct_option="A",
                     is_active=True,
+                    is_global=bool(is_global),
                 )
                 prog = ProgrammingQuestion.objects.create(
                     question=q,
                     problem_statement=item.get("instructions") or item["prompt"],
+                    constraints=item.get("constraints", ""),
+                    input_format=item.get("input_format", ""),
+                    output_format=item.get("output_format", ""),
                     time_limit_seconds=item["time_limit"],
                     memory_limit_mb=item["memory_limit"],
-                    allowed_languages=["python", "java"],
+                    allowed_languages=item.get("allowed_languages") or ["python", "java"],
                 )
                 for idx, tc in enumerate(item.get("test_cases", []), start=1):
                     ProgrammingTestCase.objects.create(
@@ -453,7 +559,7 @@ def parse_and_validate_csv(
             else:
                 q = QuestionBank.objects.create(
                     prompt=item["prompt"],
-                    section_type=item["section_type"],
+                    section_type=sec_to_assign.code if sec_to_assign else item["section_type"],
                     section=sec_to_assign,
                     option_a=item["option_a"],
                     option_b=item["option_b"],
@@ -464,16 +570,20 @@ def parse_and_validate_csv(
                     difficulty=item["difficulty"],
                     explanation=item.get("explanation", ""),
                     is_active=True,
+                    is_global=bool(is_global),
                 )
 
-            # Link to assessment if provided
             if target_assessment:
                 target_assessment.questions.add(q)
 
-            # Link to question pools if provided
             if target_pools:
                 for pool in target_pools:
-                    QuestionPoolItem.objects.get_or_create(pool=pool, question=q)
+                    if not QuestionPoolItem.objects.filter(pool=pool, question=q).exists():
+                        QuestionPoolItem.objects.create(
+                            pool=pool,
+                            question=q,
+                            order=pool.items.count() + 1,
+                        )
 
             created_questions.append(q)
 
@@ -487,4 +597,5 @@ def parse_and_validate_csv(
         "errors": error_rows[:50],
         "detected_type": detected_type,
         "unmapped_headers": unmapped_headers,
+        "is_global": bool(is_global),
     }

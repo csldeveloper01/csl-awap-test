@@ -220,7 +220,7 @@ def get_assessment_available_questions_qs(assessment: Assessment):
     NEVER silently falls back to the unassigned QuestionBank for an assessment.
     """
     if not assessment or not assessment.pk:
-        return QuestionBank.objects.filter(is_active=True)
+        return QuestionBank.objects.filter(is_active=True, is_global=True)
 
     if not hasattr(assessment, "_cached_available_q_ids"):
         direct_ids = set(assessment.questions.filter(is_active=True).values_list("id", flat=True))
@@ -235,7 +235,7 @@ def get_assessment_available_questions_qs(assessment: Assessment):
 
     combined_ids = assessment._cached_available_q_ids
     if not combined_ids:
-        return QuestionBank.objects.filter(is_active=True)
+        return QuestionBank.objects.filter(is_active=True, is_global=True)
     return QuestionBank.objects.filter(id__in=combined_ids, is_active=True)
 
 
@@ -250,7 +250,7 @@ def validate_question_bank_sufficiency(aptitude_count: int = None, coding_count:
         has_assessment_questions = available_qs.exists()
         scope_name = f"question pool for '{assessment.title}' ({assessment.code})"
     else:
-        available_qs = QuestionBank.objects.filter(is_active=True)
+        available_qs = QuestionBank.objects.filter(is_active=True, is_global=True)
         has_assessment_questions = False
         scope_name = "bank"
 
@@ -377,7 +377,7 @@ def select_balanced_questions(
     if assessment and assessment.pk:
         base_qs = get_assessment_available_questions_qs(assessment).select_related("programming_details").prefetch_related("programming_details__test_cases")
     else:
-        base_qs = QuestionBank.objects.filter(is_active=True).select_related("programming_details").prefetch_related("programming_details__test_cases")
+        base_qs = QuestionBank.objects.filter(is_active=True, is_global=True).select_related("programming_details").prefetch_related("programming_details__test_cases")
 
     query = base_qs.filter(q_filter, is_active=True)
     if exclude_question_ids:

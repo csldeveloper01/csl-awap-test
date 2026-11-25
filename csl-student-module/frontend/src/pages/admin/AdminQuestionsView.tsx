@@ -16,8 +16,6 @@ import {
   assignAdminAssessmentQuestions,
   getAdminQuestionPools,
   bulkAssignQuestionsToPool,
-  saveAdminQuestionCoding,
-  saveAdminProgrammingTestCase,
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
@@ -197,7 +195,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   const [importResult, setImportResult] = useState<{
     success_count: number;
     error_count: number;
-    errors: string[];
+    errors: Array<string | { row?: number; error?: string }>;
   } | null>(null);
   const [importing, setImporting] = useState(false);
 
@@ -562,24 +560,13 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     setShowEditorModal(true);
   };
 
-  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any }) => {
+  const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any; question_type?: 'MCQ' | 'CODING' }) => {
     try {
       setSavingQuestion(true);
-      let targetQId = editingQuestion?.id;
       if (editingQuestion) {
         await updateAdminQuestion(editingQuestion.id, formData);
       } else {
-        const created = await createAdminQuestion(formData);
-        targetQId = created.id;
-      }
-
-      if (formData.section_type === 'CODING' && formData.coding_details && targetQId) {
-        await saveAdminQuestionCoding(targetQId, formData.coding_details);
-        if (Array.isArray(formData.coding_details.test_cases)) {
-          for (const tc of formData.coding_details.test_cases) {
-            await saveAdminProgrammingTestCase(targetQId, tc);
-          }
-        }
+        await createAdminQuestion(formData);
       }
 
       alert(editingQuestion ? 'Question updated successfully.' : 'New question created successfully.');
@@ -616,17 +603,18 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       // Initialize default mappings for detected sections
       const initialMapping: Record<string, SectionMappingRule> = {};
       preview.detected_sections.forEach((sec) => {
+        const detectedLabel = sec.detected_name || sec.raw_section || sec.code;
         if (sec.matched_section_id) {
           initialMapping[sec.code] = {
             action: 'map',
             target_section_id: sec.matched_section_id,
-            target_section_name: sec.matched_section_name || sec.code,
+            target_section_name: sec.matched_section_name || detectedLabel,
           };
         } else {
           initialMapping[sec.code] = {
             action: 'create',
             target_section_code: sec.code,
-            target_section_name: sec.detected_name || sec.code,
+            target_section_name: detectedLabel,
           };
         }
       });
@@ -2393,7 +2381,11 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                     <strong>Warnings detected in CSV preview:</strong>
                     <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
                       {importPreview.errors.map((err, i) => (
-                        <li key={i}>{err}</li>
+                        <li key={i}>
+                          {typeof err === 'string'
+                            ? err
+                            : `Row ${err?.row ?? '?'}: ${err?.error ?? JSON.stringify(err)}`}
+                        </li>
                       ))}
                     </ul>
                   </div>
@@ -2593,7 +2585,11 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       Errors ({importResult.error_count}):
                       <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '12px' }}>
                         {importResult.errors.map((err, i) => (
-                          <li key={i}>{err}</li>
+                          <li key={i}>
+                            {typeof err === 'string'
+                              ? err
+                              : `Row ${err?.row ?? '?'}: ${err?.error ?? JSON.stringify(err)}`}
+                          </li>
                         ))}
                       </ul>
                     </div>

@@ -9,6 +9,7 @@ import {
   grantAdminAttemptRecovery,
   reassignAdminCandidateAttempt,
   exportAdminCandidatesCSV,
+  exportAdvancedStudentData,
   type AdminCandidate,
   type AdminCollege,
 } from '../../api/admin';
@@ -25,6 +26,23 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
   const [loading, setLoading] = useState(true);
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null);
   const [exportingCSV, setExportingCSV] = useState(false);
+  const [exportingXLSX, setExportingXLSX] = useState(false);
+
+  const handleExportXLSX = async () => {
+    try {
+      setExportingXLSX(true);
+      await exportAdvancedStudentData({
+        format: 'xlsx',
+        search: search.trim() || undefined,
+        college_id: selectedCollegeId ? Number(selectedCollegeId) : undefined,
+        filename: `csl-candidates-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+    } catch {
+      alert('Failed to export candidate records to XLSX.');
+    } finally {
+      setExportingXLSX(false);
+    }
+  };
   // Admin Recovery & Reassignment Dialog States (Phase 2.1)
   const [showGrantRecoveryModal, setShowGrantRecoveryModal] = useState(false);
   const [targetAttemptId, setTargetAttemptId] = useState('');
@@ -367,6 +385,28 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
               Clear
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleExportXLSX}
+            disabled={exportingXLSX}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: '#16A34A',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: exportingXLSX ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+            title="Download candidate details & results as styled Excel workbook"
+          >
+            {exportingXLSX ? 'Exporting XLSX...' : 'Export XLSX'}
+          </button>
 
           <button
             type="button"

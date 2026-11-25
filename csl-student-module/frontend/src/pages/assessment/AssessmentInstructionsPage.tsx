@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   startAssessment,
@@ -33,31 +33,20 @@ export function AssessmentInstructionsPage() {
   const [candidateRegNo, setCandidateRegNo] = useState<string>('');
   const [loadingMetadata, setLoadingMetadata] = useState<boolean>(true);
 
-  // 4-Slide Slideshow State
-  const [currentSlide, setCurrentSlide] = useState<1 | 2 | 3 | 4>(1);
+  // 2-Slide Preparation Stepper State (leads directly into the single CSL Sentinel Gate)
+  const [currentSlide, setCurrentSlide] = useState<1 | 2>(1);
 
   // Slide 1: External Devices Acknowledgment
   const [devicesAcknowledged, setDevicesAcknowledged] = useState<boolean>(false);
 
-  // Slide 2: Hardware Permissions & Integrity Check
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [cameraGranted, setCameraGranted] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string>('');
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const [screenGranted, setScreenGranted] = useState<boolean>(false);
-  const [screenError, setScreenError] = useState<string>('');
-  const [screenEndedAlert, setScreenEndedAlert] = useState<boolean>(false);
+  // Slide 2: System Readiness, Rules & Integrity Policy
   const [fullscreenVerified] = useState<boolean>(Boolean(document.fullscreenEnabled));
   const [downloadingSeb, setDownloadingSeb] = useState<boolean>(false);
-
-  // Slide 3: Rules & Passing Criteria Acknowledgment
   const [rulesAcknowledged, setRulesAcknowledged] = useState<boolean>(false);
 
-  // Slide 4: Camera Calibration & Admin Bypass
+  // Admin Camera Calibration Bypass Status
   const [bypassGranted, setBypassGranted] = useState<boolean>(false);
   const [bypassReason, setBypassReason] = useState<string>('');
-
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   // Device eligibility state
   const [eligibility, setEligibility] = useState<DeviceEligibilityResult>(() =>
@@ -117,6 +106,8 @@ export function AssessmentInstructionsPage() {
 
   // Check camera bypass status when assessment is available
   useEffect(() => {
+    setBypassGranted(false);
+    setBypassReason('');
     if (!selectedAssessment?.id) return;
     checkCameraBypassStatus(selectedAssessment.id)
       .then((res) => {
@@ -130,57 +121,11 @@ export function AssessmentInstructionsPage() {
       });
   }, [selectedAssessment?.id]);
 
-  // Attach camera stream to video preview elements
-  useEffect(() => {
-    if (cameraStream && videoRef.current) {
-      videoRef.current.srcObject = cameraStream;
-    }
-  }, [cameraStream, currentSlide]);
-
   const handleAssessmentChange = (assessmentId: string) => {
     const chosen = eligibleAssessments.find((a) => a.id === assessmentId);
     if (chosen) {
       setSelectedAssessment(chosen);
       sessionStorage.setItem('csl_assessment_id', chosen.id);
-    }
-  };
-
-  // Hardware permission request handlers
-  const requestCameraPermission = async () => {
-    setCameraError('');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      setCameraStream(stream);
-      setCameraGranted(true);
-    } catch (err: any) {
-      setCameraError(err.message || 'Camera permission denied or camera not found.');
-      setCameraGranted(false);
-    }
-  };
-
-  const requestScreenSharePermission = async () => {
-    setScreenError('');
-    setScreenEndedAlert(false);
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.onended = () => {
-          setScreenGranted(false);
-          setScreenEndedAlert(true);
-        };
-      }
-      setScreenStream(stream);
-      setScreenGranted(true);
-    } catch (err: any) {
-      setScreenError(err.message || 'Screen sharing cancelled or denied.');
-      setScreenGranted(false);
     }
   };
 
@@ -207,16 +152,6 @@ export function AssessmentInstructionsPage() {
   const handleStart = async () => {
     if (loading) return;
     setError('');
-
-    // Stop any instruction-level preview tracks so ProctoringInitializer has clean, exclusive hardware access
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
-      setCameraStream(null);
-    }
-    if (screenStream) {
-      screenStream.getTracks().forEach((t) => t.stop());
-      setScreenStream(null);
-    }
 
     // Re-verify device and viewport eligibility
     const currentCheck = checkDeviceEligibility();
@@ -705,14 +640,13 @@ export function AssessmentInstructionsPage() {
           </div>
         )}
 
-        {/* ─── 4-SLIDE SLIDESHOW PROGRESS BAR ─── */}
+        {/* ─── 2-SLIDE PREPARATION PROGRESS BAR (+ SENTINEL GATE) ─── */}
         <div style={{ marginBottom: '28px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '8px' }}>
             {[
               { num: 1, label: '1. External Devices' },
-              { num: 2, label: '2. Permissions' },
-              { num: 3, label: '3. Rules & Scoring' },
-              { num: 4, label: '4. Sentinel Verification' },
+              { num: 2, label: '2. System Readiness & Rules' },
+              { num: 3, label: '3. Sentinel Verification' },
             ].map((s) => (
               <div
                 key={s.num}
@@ -726,10 +660,9 @@ export function AssessmentInstructionsPage() {
             ))}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#64748B' }}>
-            <span style={{ color: currentSlide === 1 ? '#0D52D6' : undefined }}>External Devices</span>
-            <span style={{ color: currentSlide === 2 ? '#0D52D6' : undefined }}>Permissions</span>
-            <span style={{ color: currentSlide === 3 ? '#0D52D6' : undefined }}>Rules & Scoring</span>
-            <span style={{ color: currentSlide === 4 ? '#0D52D6' : undefined }}>Sentinel Gate</span>
+            <span style={{ color: currentSlide === 1 ? '#0D52D6' : undefined }}>1. External Devices</span>
+            <span style={{ color: currentSlide === 2 ? '#0D52D6' : undefined }}>2. System Readiness & Rules</span>
+            <span>3. Sentinel Gate (Camera, Calibration & Screen Share)</span>
           </div>
         </div>
 
@@ -869,256 +802,21 @@ export function AssessmentInstructionsPage() {
                   cursor: devicesAcknowledged ? 'pointer' : 'not-allowed',
                 }}
               >
-                Next: Hardware & Permissions →
+                Next: System Readiness & Rules →
               </button>
             </div>
           </div>
         )}
 
-        {/* ─── SLIDE 2: PERMISSIONS ──────────────────────────────────── */}
+        {/* ─── SLIDE 2: SYSTEM READINESS, RULES & INTEGRITY POLICY ─────── */}
         {currentSlide === 2 && (
           <div>
             <div style={{ marginBottom: '20px' }}>
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
-                Hardware & System Permissions
+                System Readiness, Assessment Rules & Integrity Policy
               </h2>
               <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
-                The exam platform requires webcam access, screen sharing, and fullscreen capability to ensure exam integrity.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
-              {/* Webcam Verification */}
-              <div
-                style={{
-                  padding: '16px',
-                  borderRadius: '12px',
-                  border: `1.5px solid ${cameraGranted ? '#86EFAC' : '#E2E8F0'}`,
-                  backgroundColor: cameraGranted ? '#F0FDF4' : '#F8FAFC',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '16px',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '18px' }}>📷</span>
-                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Web Camera Access</strong>
-                    {cameraGranted && (
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
-                        Connected ✓
-                      </span>
-                    )}
-                  </div>
-                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
-                    Webcam is used for identity verification and continuous automated head pose monitoring.
-                  </p>
-                  {cameraError && (
-                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px' }}>{cameraError}</div>
-                  )}
-                </div>
-
-                {cameraGranted ? (
-                  <div style={{ width: '80px', height: '60px', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#000' }}>
-                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={requestCameraPermission}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#0D52D6',
-                      color: '#FFFFFF',
-                      borderRadius: '8px',
-                      border: 'none',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Grant Camera Access
-                  </button>
-                )}
-              </div>
-
-              {/* Screen Share Verification */}
-              <div
-                style={{
-                  padding: '16px',
-                  borderRadius: '12px',
-                  border: `1.5px solid ${screenGranted ? '#86EFAC' : screenEndedAlert ? '#FCA5A5' : '#E2E8F0'}`,
-                  backgroundColor: screenGranted ? '#F0FDF4' : screenEndedAlert ? '#FEF2F2' : '#F8FAFC',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '16px',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '18px' }}>🖥️</span>
-                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Entire Screen Share</strong>
-                    {screenGranted && (
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
-                        Screen Shared ✓
-                      </span>
-                    )}
-                  </div>
-                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
-                    Share your entire desktop screen (not a single tab). The track automatically detects if sharing is ended.
-                  </p>
-                  {screenEndedAlert && (
-                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px', fontWeight: 600 }}>
-                      ⚠️ Screen share was ended! You must share your entire screen again to proceed.
-                    </div>
-                  )}
-                  {screenError && (
-                    <div style={{ color: '#B91C1C', fontSize: '12px', marginTop: '4px' }}>{screenError}</div>
-                  )}
-                </div>
-
-                {!screenGranted && (
-                  <button
-                    type="button"
-                    onClick={requestScreenSharePermission}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#0D52D6',
-                      color: '#FFFFFF',
-                      borderRadius: '8px',
-                      border: 'none',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Share Entire Screen
-                  </button>
-                )}
-              </div>
-
-              {/* Browser Fullscreen Verification */}
-              <div
-                style={{
-                  padding: '16px',
-                  borderRadius: '12px',
-                  border: '1.5px solid #86EFAC',
-                  backgroundColor: '#F0FDF4',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '18px' }}>⛶</span>
-                    <strong style={{ fontSize: '14px', color: '#0F172A' }}>Fullscreen API Support</strong>
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '4px' }}>
-                      Ready ✓
-                    </span>
-                  </div>
-                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
-                    Your browser supports the Fullscreen API. The exam will launch into fullscreen mode upon start.
-                  </p>
-                </div>
-              </div>
-
-              {/* Safe Exam Browser (SEB) Mandatory Notice if enabled */}
-              {isSebRequired && (
-                <div
-                  style={{
-                    padding: '16px',
-                    borderRadius: '12px',
-                    border: '1.5px solid #FCD34D',
-                    backgroundColor: '#FFFBEB',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '16px',
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '18px' }}>🛡️</span>
-                      <strong style={{ fontSize: '14px', color: '#92400E' }}>Safe Exam Browser (SEB) Required</strong>
-                    </div>
-                    <p style={{ fontSize: '12px', color: '#B45309', margin: '4px 0 0 0' }}>
-                      This assessment is protected with Safe Exam Browser. Download the pre-configured `.seb` file to take the test.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDownloadSeb}
-                    disabled={downloadingSeb}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#D97706',
-                      color: '#FFFFFF',
-                      borderRadius: '8px',
-                      border: 'none',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: downloadingSeb ? 'wait' : 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {downloadingSeb ? 'Downloading...' : 'Download .seb Config'}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button
-                type="button"
-                onClick={() => setCurrentSlide(1)}
-                style={{
-                  backgroundColor: '#F1F5F9',
-                  color: '#475569',
-                  padding: '12px 20px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentSlide(3)}
-                disabled={(!cameraGranted && !bypassGranted) || !screenGranted || !fullscreenVerified}
-                style={{
-                  backgroundColor: ((cameraGranted || bypassGranted) && screenGranted && fullscreenVerified) ? '#0D52D6' : '#94A3B8',
-                  color: '#FFFFFF',
-                  padding: '12px 24px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  cursor: ((cameraGranted || bypassGranted) && screenGranted && fullscreenVerified) ? 'pointer' : 'not-allowed',
-                }}
-              >
-                Next: Rules & Scoring →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ─── SLIDE 3: RULES & PASSING CRITERIA ──────────────────────── */}
-        {currentSlide === 3 && (
-          <div>
-            <div style={{ marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
-                Assessment Rules, Scoring & Integrity Policy
-              </h2>
-              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
-                Review the structural parameters, qualifying cutoff, and integrity deterrents for this examination.
+                Review the exam structure and system checks below. Live camera calibration and screen sharing will execute once in CSL Sentinel when you proceed.
               </p>
             </div>
 
@@ -1159,7 +857,7 @@ export function AssessmentInstructionsPage() {
             </div>
 
             {/* Structure Details */}
-            <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px', marginBottom: '20px' }}>
+            <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
               <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', marginBottom: '8px' }}>
                 Section Structure & Scoring Rules:
               </strong>
@@ -1180,10 +878,109 @@ export function AssessmentInstructionsPage() {
             </div>
 
             {selectedAssessment?.instructions && (
-              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '12px', padding: '14px', marginBottom: '20px', fontSize: '13px', color: '#1E40AF' }}>
+              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '12px', padding: '14px', marginBottom: '16px', fontSize: '13px', color: '#1E40AF' }}>
                 <strong>Additional Instructions:</strong> {selectedAssessment.instructions}
               </div>
             )}
+
+            {/* System Readiness & Optional SEB / Bypass Summary */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+              <div
+                style={{
+                  padding: '14px 16px',
+                  borderRadius: '12px',
+                  border: `1.5px solid ${fullscreenVerified ? '#86EFAC' : '#FCA5A5'}`,
+                  backgroundColor: fullscreenVerified ? '#F0FDF4' : '#FEF2F2',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '16px' }}>⛶</span>
+                    <strong style={{ fontSize: '13px', color: '#0F172A' }}>Browser Fullscreen &amp; Sentinel Readiness</strong>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: fullscreenVerified ? '#15803D' : '#B91C1C',
+                        backgroundColor: fullscreenVerified ? '#DCFCE7' : '#FEE2E2',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                      }}
+                    >
+                      {fullscreenVerified ? 'Ready ✓' : 'Unavailable'}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#64748B', margin: '4px 0 0 0' }}>
+                    Clicking below starts your attempt, enters fullscreen, and launches the single CSL Sentinel verification gate ({bypassGranted ? 'screen share' : 'camera calibration & screen share'}).
+                  </p>
+                </div>
+              </div>
+
+              {bypassGranted && (
+                <div
+                  style={{
+                    backgroundColor: '#F0FDF4',
+                    border: '1.5px solid #86EFAC',
+                    borderRadius: '12px',
+                    padding: '14px 16px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '16px' }}>🛡️</span>
+                    <strong style={{ fontSize: '13px', color: '#15803D' }}>Admin Camera Bypass Granted</strong>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#166534', margin: 0, lineHeight: 1.5 }}>
+                    An administrator authorized a camera calibration waiver ({bypassReason}). Sentinel will proceed directly to entire-screen sharing without requesting webcam calibration.
+                  </p>
+                </div>
+              )}
+
+              {isSebRequired && (
+                <div
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '12px',
+                    border: '1.5px solid #FCD34D',
+                    backgroundColor: '#FFFBEB',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '16px',
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '16px' }}>🛡️</span>
+                      <strong style={{ fontSize: '13px', color: '#92400E' }}>Safe Exam Browser (SEB) Required</strong>
+                    </div>
+                    <p style={{ fontSize: '12px', color: '#B45309', margin: '4px 0 0 0' }}>
+                      Download the pre-configured `.seb` file if your institution mandates Safe Exam Browser.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSeb}
+                    disabled={downloadingSeb}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#D97706',
+                      color: '#FFFFFF',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: downloadingSeb ? 'wait' : 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {downloadingSeb ? 'Downloading...' : 'Download .seb Config'}
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div
               style={{
@@ -1210,129 +1007,7 @@ export function AssessmentInstructionsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={() => setCurrentSlide(2)}
-                style={{
-                  backgroundColor: '#F1F5F9',
-                  color: '#475569',
-                  padding: '12px 20px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentSlide(4)}
-                disabled={!rulesAcknowledged}
-                style={{
-                  backgroundColor: rulesAcknowledged ? '#0D52D6' : '#94A3B8',
-                  color: '#FFFFFF',
-                  padding: '12px 24px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  cursor: rulesAcknowledged ? 'pointer' : 'not-allowed',
-                }}
-              >
-                Next: Sentinel Verification →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ─── SLIDE 4: SENTINEL VERIFICATION & LAUNCH ──────────────────── */}
-        {currentSlide === 4 && (
-          <div>
-            <div style={{ marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
-                CSL Sentinel Integrity System Verification Gate
-              </h2>
-              <p style={{ fontSize: '13px', color: '#64748B', margin: 0, lineHeight: 1.5 }}>
-                Review the automated proctoring verification pipeline before launching your assessment.
-              </p>
-            </div>
-
-            {/* Admin Camera Bypass Granted Alert */}
-            {bypassGranted ? (
-              <div
-                style={{
-                  backgroundColor: '#F0FDF4',
-                  border: '1.5px solid #86EFAC',
-                  borderRadius: '14px',
-                  padding: '24px',
-                  marginBottom: '24px',
-                  textAlign: 'center',
-                }}
-              >
-                <div style={{ fontSize: '32px', marginBottom: '8px' }}>🛡️</div>
-                <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#15803D', margin: '0 0 6px 0' }}>
-                  Admin Camera Bypass Granted
-                </h3>
-                <p style={{ fontSize: '13px', color: '#166534', margin: 0, lineHeight: 1.5 }}>
-                  An administrator has authorized an official camera calibration bypass for your account ({bypassReason}). Camera calibration is waived. You may start the assessment directly.
-                </p>
-              </div>
-            ) : (
-              <div style={{ backgroundColor: '#F8FAFC', borderRadius: '14px', border: '1px solid #E2E8F0', padding: '24px', marginBottom: '24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', backgroundColor: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
-                    🤖
-                  </div>
-                  <div>
-                    <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
-                      Mandatory 7-Step CSL Sentinel Verification Gate
-                    </h3>
-                    <p style={{ fontSize: '12px', color: '#64748B', margin: '2px 0 0 0' }}>
-                      Once you click &quot;Start Assessment&quot;, the CSL Sentinel gate will automatically execute real hardware and AI checks:
-                    </p>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
-                  {[
-                    { num: '1', title: 'Camera Stream Check', desc: 'Hardware verification via browser MediaDevices API' },
-                    { num: '2', title: 'MediaPipe Face Mesh', desc: 'Initializes real-time facial feature tracking' },
-                    { num: '3', title: 'Head Pose Calibration', desc: 'Interactive head turn calibration & baseline calculation' },
-                    { num: '4', title: 'Screen Share Lock', desc: 'Validates entire desktop capture & monitors track closure' },
-                    { num: '5', title: 'Anti-Cheat Inspection', desc: 'Verifies fullscreen mode and prevents developer shortcuts' },
-                    { num: '6', title: 'Session Handshake', desc: 'Cryptographically registers proctoring session on server' },
-                    { num: '7', title: 'Continuous Stream Handoff', desc: 'Transfers active tracks to exam room with zero re-prompting' },
-                  ].map((step) => (
-                    <div
-                      key={step.num}
-                      style={{
-                        padding: '10px 14px',
-                        backgroundColor: '#FFFFFF',
-                        borderRadius: '8px',
-                        border: '1px solid #E2E8F0',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '10px',
-                      }}
-                    >
-                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#0D52D6', backgroundColor: '#EFF6FF', padding: '2px 7px', borderRadius: '4px' }}>
-                        {step.num}
-                      </span>
-                      <div>
-                        <strong style={{ fontSize: '12px', color: '#0F172A', display: 'block' }}>{step.title}</strong>
-                        <span style={{ fontSize: '11px', color: '#64748B' }}>{step.desc}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Launch Assessment Button */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
-              <button
-                type="button"
-                onClick={() => setCurrentSlide(3)}
+                onClick={() => setCurrentSlide(1)}
                 disabled={loading}
                 style={{
                   backgroundColor: '#F1F5F9',
@@ -1351,20 +1026,20 @@ export function AssessmentInstructionsPage() {
               <button
                 type="button"
                 onClick={handleStart}
-                disabled={loading}
+                disabled={loading || !rulesAcknowledged || !fullscreenVerified}
                 style={{
-                  backgroundColor: !loading ? '#0D52D6' : '#94A3B8',
+                  backgroundColor: !loading && rulesAcknowledged && fullscreenVerified ? '#0D52D6' : '#94A3B8',
                   color: '#FFFFFF',
-                  padding: '14px 32px',
+                  padding: '14px 28px',
                   borderRadius: '10px',
                   border: 'none',
-                  fontSize: '15px',
+                  fontSize: '14px',
                   fontWeight: 800,
-                  cursor: !loading ? 'pointer' : 'not-allowed',
-                  boxShadow: !loading ? '0 4px 14px rgba(13,82,214,0.3)' : 'none',
+                  cursor: !loading && rulesAcknowledged && fullscreenVerified ? 'pointer' : 'not-allowed',
+                  boxShadow: !loading && rulesAcknowledged && fullscreenVerified ? '0 4px 14px rgba(13,82,214,0.3)' : 'none',
                 }}
               >
-                {loading ? 'Entering Fullscreen & Initializing Gate...' : 'Start Assessment →'}
+                {loading ? 'Initializing Fullscreen & Gate...' : 'Continue to Sentinel Verification & Launch →'}
               </button>
             </div>
           </div>

@@ -12,7 +12,15 @@ import {
   clearAdminSystemCache,
   type AdminAssessmentConfig,
   type AdminSection,
+  type ExportScoreThreshold,
 } from '../../api/admin';
+
+const DEFAULT_EXPORT_THRESHOLDS: ExportScoreThreshold[] = [
+  { min: 80, max: 100, color: '#D4EDDA', label: 'Distinction' },
+  { min: 60, max: 79.99, color: '#FFF3CD', label: 'First Class' },
+  { min: 40, max: 59.99, color: '#FFE5D0', label: 'Pass' },
+  { min: 0, max: 39.99, color: '#F8D7DA', label: 'Fail / Action Required' },
+];
 
 export function AdminConfigView() {
   const [config, setConfig] = useState<AdminAssessmentConfig | null>(null);
@@ -111,6 +119,35 @@ export function AdminConfigView() {
       setError('');
       setMessage('');
     }
+  };
+
+  const handleThresholdChange = (index: number, field: keyof ExportScoreThreshold, rawValue: string | number) => {
+    if (!config) return;
+    const baseBands =
+      config.export_score_thresholds && config.export_score_thresholds.length > 0
+        ? config.export_score_thresholds
+        : DEFAULT_EXPORT_THRESHOLDS;
+    const updated = baseBands.map((band, idx) => {
+      if (idx !== index) return band;
+      if (field === 'min' || field === 'max') {
+        const parsed = Number(rawValue);
+        return { ...band, [field]: Number.isFinite(parsed) ? parsed : 0 };
+      }
+      return { ...band, [field]: String(rawValue) };
+    });
+    setConfig({ ...config, export_score_thresholds: updated });
+  };
+
+  const handleResetExportPalette = () => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      export_header_bg_color: '#1E293B',
+      export_header_text_color: '#FFFFFF',
+      export_alt_row_color: '#F8FAFC',
+      enable_alt_row_styling: true,
+      export_score_thresholds: DEFAULT_EXPORT_THRESHOLDS.map((b) => ({ ...b })),
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -820,6 +857,234 @@ export function AdminConfigView() {
                 When enabled, the student portal immediately halts testing, collects answered responses, and submits the attempt on the 3rd tab switch without manual intervention.
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Section 3: Global XLSX Export Appearance Formatting */}
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '14px',
+            border: '1px solid #E2E8F0',
+            padding: '24px',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+                3. Export Spreadsheet Appearance (Excel / XLSX Only)
+              </h3>
+              <p style={{ fontSize: '12px', color: '#64748B', margin: 0 }}>
+                Colors apply exclusively to formatted Excel (.xlsx) exports. CSV downloads remain plain standards-compliant unstyled text.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetExportPalette}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '8px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#F8FAFC',
+                color: '#334155',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Reset Default Palette
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))', gap: '16px', marginBottom: '18px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                Header Fill Color
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="color"
+                  value={config.export_header_bg_color || '#1E293B'}
+                  onChange={(e) => setConfig({ ...config, export_header_bg_color: e.target.value.toUpperCase() })}
+                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                />
+                <input
+                  type="text"
+                  name="export_header_bg_color"
+                  value={config.export_header_bg_color || '#1E293B'}
+                  onChange={handleChange}
+                  maxLength={7}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                Header Text Color
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="color"
+                  value={config.export_header_text_color || '#FFFFFF'}
+                  onChange={(e) => setConfig({ ...config, export_header_text_color: e.target.value.toUpperCase() })}
+                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                />
+                <input
+                  type="text"
+                  name="export_header_text_color"
+                  value={config.export_header_text_color || '#FFFFFF'}
+                  onChange={handleChange}
+                  maxLength={7}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                Alternating Row Shade
+              </label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={config.enable_alt_row_styling ?? true}
+                  onChange={(e) => setConfig({ ...config, enable_alt_row_styling: e.target.checked })}
+                  style={{ width: '18px', height: '18px', accentColor: '#1455B8' }}
+                />
+                <input
+                  type="color"
+                  value={config.export_alt_row_color || '#F8FAFC'}
+                  onChange={(e) => setConfig({ ...config, export_alt_row_color: e.target.value.toUpperCase() })}
+                  disabled={config.enable_alt_row_styling === false}
+                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                />
+                <input
+                  type="text"
+                  name="export_alt_row_color"
+                  value={config.export_alt_row_color || '#F8FAFC'}
+                  onChange={handleChange}
+                  disabled={config.enable_alt_row_styling === false}
+                  maxLength={7}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Score / Status Highlight Bands */}
+          <div style={{ marginBottom: '18px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: '#0B2E6F', marginBottom: '8px' }}>
+              Score Percentage & Status Highlight Rules (XLSX)
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {((config.export_score_thresholds && config.export_score_thresholds.length > 0)
+                ? config.export_score_thresholds
+                : DEFAULT_EXPORT_THRESHOLDS
+              ).map((band, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1.3fr 90px 90px 140px',
+                    gap: '10px',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={band.label}
+                    onChange={(e) => handleThresholdChange(idx, 'label', e.target.value)}
+                    placeholder="Band Label"
+                    style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px', fontWeight: 600 }}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={band.min}
+                    onChange={(e) => handleThresholdChange(idx, 'min', e.target.value)}
+                    title="Min %"
+                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px' }}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={band.max}
+                    onChange={(e) => handleThresholdChange(idx, 'max', e.target.value)}
+                    title="Max %"
+                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px' }}
+                  />
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <input
+                      type="color"
+                      value={band.color.startsWith('#') ? band.color : `#${band.color}`}
+                      onChange={(e) => handleThresholdChange(idx, 'color', e.target.value.toUpperCase())}
+                      style={{ width: '34px', height: '30px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer' }}
+                    />
+                    <input
+                      type="text"
+                      value={band.color}
+                      onChange={(e) => handleThresholdChange(idx, 'color', e.target.value.toUpperCase())}
+                      maxLength={7}
+                      style={{ width: '82px', padding: '5px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '12px' }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Live XLSX Style Preview Swatch */}
+          <div style={{ border: '1px solid #CBD5E1', borderRadius: '10px', overflow: 'hidden' }}>
+            <div style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, color: '#64748B', backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+              Live XLSX Workbook Preview (Sample Rows)
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <thead>
+                <tr
+                  style={{
+                    backgroundColor: config.export_header_bg_color || '#1E293B',
+                    color: config.export_header_text_color || '#FFFFFF',
+                  }}
+                >
+                  <th style={{ padding: '8px 12px', textAlign: 'left' }}>Student Name</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'left' }}>College</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'right' }}>Percentage</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'center' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { name: 'Ananya S', college: 'Anna University', pct: '88.0%', status: 'SUBMITTED', bandIdx: 0 },
+                  { name: 'Karthik R', college: 'PSG Tech', pct: '64.5%', status: 'SUBMITTED', bandIdx: 1 },
+                ].map((sample, rowIdx) => {
+                  const bands = (config.export_score_thresholds && config.export_score_thresholds.length > 0)
+                    ? config.export_score_thresholds
+                    : DEFAULT_EXPORT_THRESHOLDS;
+                  const bandColor = bands[sample.bandIdx]?.color || '#FFFFFF';
+                  const rowBg = (config.enable_alt_row_styling ?? true) && rowIdx % 2 === 1
+                    ? (config.export_alt_row_color || '#F8FAFC')
+                    : '#FFFFFF';
+                  return (
+                    <tr key={rowIdx} style={{ backgroundColor: rowBg, borderTop: '1px solid #E2E8F0' }}>
+                      <td style={{ padding: '7px 12px', fontWeight: 600 }}>{sample.name}</td>
+                      <td style={{ padding: '7px 12px', color: '#475569' }}>{sample.college}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'right', backgroundColor: bandColor, fontWeight: 700 }}>{sample.pct}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'center', backgroundColor: bandColor, fontWeight: 700 }}>{sample.status}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       </form>

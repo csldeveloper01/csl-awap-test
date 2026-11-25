@@ -25,6 +25,10 @@ from .models import (
     ProctoringCalibration,
     ProctoringEvent,
     ProctoringEvidence,
+    ProgrammingQuestion,
+    ProgrammingTestCase,
+    normalize_hex_color,
+    default_export_score_thresholds,
 )
 
 
@@ -1067,6 +1071,14 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     section_name = serializers.CharField(source="section.name", read_only=True)
     pool_memberships = serializers.SerializerMethodField()
     is_unassigned = serializers.SerializerMethodField()
+    question_type = serializers.CharField(required=False, allow_blank=True)
+    has_programming_details = serializers.SerializerMethodField()
+    programming_details = serializers.SerializerMethodField()
+    option_a = serializers.CharField(required=False, allow_blank=True, default="")
+    option_b = serializers.CharField(required=False, allow_blank=True, default="")
+    option_c = serializers.CharField(required=False, allow_blank=True, default="")
+    option_d = serializers.CharField(required=False, allow_blank=True, default="")
+    correct_option = serializers.CharField(required=False, allow_blank=True, default="A")
 
     class Meta:
         model = QuestionBank
@@ -1080,6 +1092,9 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             "difficulty",
             "marks",
             "assessment_type",
+            "question_type",
+            "has_programming_details",
+            "programming_details",
             "option_a",
             "option_b",
             "option_c",
@@ -1088,6 +1103,7 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
             "explanation",
             "is_active",
             "is_archived",
+            "is_global",
             "can_be_deleted",
             "created_at",
             "updated_at",
@@ -1129,6 +1145,55 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
     def get_is_unassigned(self, obj):
         return len(self.get_pool_memberships(obj)) == 0
 
+    def get_has_programming_details(self, obj):
+        try:
+            return hasattr(obj, "programming_details") and obj.programming_details is not None
+        except Exception:
+            return False
+
+    def get_programming_details(self, obj):
+        if not self.get_has_programming_details(obj):
+            return None
+        prog = obj.programming_details
+        test_cases = [
+            {
+                "id": str(tc.id),
+                "is_public": tc.is_public,
+                "input_text": tc.input_text,
+                "expected_output": tc.expected_output,
+                "marks_weightage": tc.marks_weightage,
+                "explanation": tc.explanation,
+                "order": tc.order,
+            }
+            for tc in prog.test_cases.all().order_by("order", "created_at")
+            if getattr(tc, "is_active", True)
+        ]
+        return {
+            "id": str(prog.id),
+            "question_id": obj.id,
+            "problem_statement": prog.problem_statement or obj.prompt,
+            "constraints": prog.constraints,
+            "input_format": prog.input_format,
+            "output_format": prog.output_format,
+            "allowed_languages": prog.allowed_languages or ["python"],
+            "boilerplate_code": prog.boilerplate_code or {},
+            "time_limit_seconds": prog.time_limit_seconds,
+            "memory_limit_mb": prog.memory_limit_mb,
+            "test_cases": test_cases,
+        }
+
+    def _resolve_canonical_question_type(self, obj):
+        if self.get_has_programming_details(obj):
+            return "CODING"
+        if (obj.assessment_type or "").upper() == "CODING" or (obj.section_type or "").upper() == "CODING":
+            return "CODING"
+        return "MCQ"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["question_type"] = self._resolve_canonical_question_type(instance)
+        return data
+
     def validate_prompt(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError("Question prompt cannot be empty.")
@@ -1140,10 +1205,42 @@ class AdminQuestionSerializer(serializers.ModelSerializer):
         return value.strip() if value else ""
 
     def validate_correct_option(self, value):
-        val = value.strip().upper()
+        val = (value or "A").strip().upper()
         if val not in ["A", "B", "C", "D"]:
             raise serializers.ValidationError("Correct option must be A, B, C, or D.")
         return val
+
+    def validate(self, attrs):
+        raw_qtype = (
+            attrs.get("question_type")
+            or attrs.get("assessment_type")
+            or (self.instance and self._resolve_canonical_question_type(self.instance))
+            or ""
+        )
+        sec_type = attrs.get("section_type", getattr(self.instance, "section_type", ""))
+        is_coding = str(raw_qtype).strip().upper() == "CODING" or str(sec_type).strip().upper() == "CODING"
+
+        if is_coding:
+            attrs["assessment_type"] = "CODING"
+            for opt in ("option_a", "option_b", "option_c", "option_d"):
+                if not attrs.get(opt) and (not self.instance or not getattr(self.instance, opt, None)):
+                    attrs[opt] = "N/A (Coding Question)"
+            if not attrs.get("correct_option"):
+                attrs["correct_option"] = "A"
+            if not attrs.get("section_type") and not self.instance:
+                attrs["section_type"] = "CODING"
+        else:
+            if raw_qtype:
+                qtype_upper = str(raw_qtype).strip().upper()
+                if qtype_upper == "MCQ" and attrs.get("assessment_type", "").upper() == "CODING":
+                    attrs["assessment_type"] = "INITIAL_DIAGNOSTIC"
+            if not self.partial or any(k in attrs for k in ("option_a", "option_b", "option_c", "option_d")):
+                for opt in ("option_a", "option_b", "option_c", "option_d"):
+                    val = attrs.get(opt, getattr(self.instance, opt, "") if self.instance else "")
+                    if not val or not str(val).strip():
+                        raise serializers.ValidationError({opt: "All four MCQ options (A, B, C, D) are required."})
+        attrs.pop("question_type", None)
+        return attrs
 
     def create(self, validated_data):
         sec_type = validated_data.get("section_type", "")
@@ -1178,6 +1275,11 @@ class AdminAssessmentConfigSerializer(serializers.ModelSerializer):
             "max_attempts",
             "max_tab_switches_warning",
             "auto_submit_on_tab_limit",
+            "export_header_bg_color",
+            "export_header_text_color",
+            "export_alt_row_color",
+            "enable_alt_row_styling",
+            "export_score_thresholds",
             "is_active",
             "created_at",
             "updated_at",
@@ -1192,6 +1294,38 @@ class AdminAssessmentConfigSerializer(serializers.ModelSerializer):
             errors["max_attempts"] = "Max attempts must be at least 1."
         if max_tab_switches < 1:
             errors["max_tab_switches_warning"] = "Permitted tab-switch warnings must be at least 1."
+
+        for color_field in ("export_header_bg_color", "export_header_text_color", "export_alt_row_color"):
+            if color_field in data:
+                try:
+                    data[color_field] = normalize_hex_color(data[color_field])
+                except Exception as exc:
+                    errors[color_field] = str(exc)
+
+        if "export_score_thresholds" in data:
+            raw_bands = data["export_score_thresholds"]
+            if not isinstance(raw_bands, list) or len(raw_bands) == 0:
+                data["export_score_thresholds"] = default_export_score_thresholds()
+            else:
+                cleaned_bands = []
+                for idx, band in enumerate(raw_bands):
+                    if not isinstance(band, dict):
+                        errors["export_score_thresholds"] = f"Score band #{idx + 1} must be an object."
+                        break
+                    try:
+                        b_min = float(band.get("min", 0))
+                        b_max = float(band.get("max", 100))
+                        b_color = normalize_hex_color(band.get("color", "#FFFFFF"))
+                        b_label = str(band.get("label", "")).strip() or f"Band {idx + 1}"
+                        if b_min < 0 or b_max > 100 or b_min > b_max:
+                            errors["export_score_thresholds"] = f"Band '{b_label}' min/max must be within 0..100 with min <= max."
+                            break
+                        cleaned_bands.append({"min": b_min, "max": b_max, "color": b_color, "label": b_label})
+                    except Exception as exc:
+                        errors["export_score_thresholds"] = f"Invalid score band #{idx + 1}: {exc}"
+                        break
+                if not errors:
+                    data["export_score_thresholds"] = cleaned_bands
 
         if errors:
             raise serializers.ValidationError(errors)
@@ -1676,8 +1810,10 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
     question_category = serializers.CharField(source="question.category", read_only=True)
     question_is_archived = serializers.BooleanField(source="question.is_archived", read_only=True)
     question_is_active = serializers.BooleanField(source="question.is_active", read_only=True)
+    question_is_global = serializers.BooleanField(source="question.is_global", read_only=True)
     question_assessment_type = serializers.CharField(source="question.assessment_type", read_only=True)
     has_programming_details = serializers.SerializerMethodField()
+    question_type = serializers.SerializerMethodField()
 
     class Meta:
         model = QuestionPoolItem
@@ -1694,8 +1830,10 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
             "question_category",
             "question_is_archived",
             "question_is_active",
+            "question_is_global",
             "question_assessment_type",
             "has_programming_details",
+            "question_type",
         ]
 
     def get_has_programming_details(self, obj):
@@ -1703,6 +1841,13 @@ class AdminQuestionPoolItemSerializer(serializers.ModelSerializer):
             return hasattr(obj.question, "programming_details") and obj.question.programming_details is not None
         except Exception:
             return False
+
+    def get_question_type(self, obj):
+        if self.get_has_programming_details(obj):
+            return "CODING"
+        if (obj.question.assessment_type or "").upper() == "CODING" or (obj.question.section_type or "").upper() == "CODING":
+            return "CODING"
+        return "MCQ"
 
 
 class AdminQuestionPoolDetailSerializer(AdminQuestionPoolSerializer):

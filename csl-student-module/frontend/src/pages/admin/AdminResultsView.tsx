@@ -3,6 +3,7 @@ import {
   getAdminResults,
   deleteAdminAttempt,
   bulkDeleteAdminAttempts,
+  exportAdvancedStudentData,
   type AdminResult,
 } from '../../api/admin';
 
@@ -14,6 +15,22 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
   const [results, setResults] = useState<AdminResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [exportingFormat, setExportingFormat] = useState<'xlsx' | 'csv' | null>(null);
+
+  const handleExportResults = async (format: 'xlsx' | 'csv') => {
+    try {
+      setExportingFormat(format);
+      await exportAdvancedStudentData({
+        format,
+        search: search.trim() || undefined,
+        filename: `csl_results_export_${new Date().toISOString().split('T')[0]}.${format}`,
+      });
+    } catch {
+      alert(`Failed to export results to ${format.toUpperCase()}.`);
+    } finally {
+      setExportingFormat(null);
+    }
+  };
 
   // Bulk and Selection state
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<string[]>([]);
@@ -181,6 +198,44 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
               Clear
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={() => handleExportResults('xlsx')}
+            disabled={exportingFormat !== null}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: '#16A34A',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: exportingFormat !== null ? 'not-allowed' : 'pointer',
+            }}
+            title="Download styled Excel workbook using Global Export Appearance settings"
+          >
+            {exportingFormat === 'xlsx' ? 'Exporting XLSX...' : 'Export XLSX'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleExportResults('csv')}
+            disabled={exportingFormat !== null}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: '#F8FAFC',
+              color: '#0B2E6F',
+              border: '1px solid #CBD5E1',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: exportingFormat !== null ? 'not-allowed' : 'pointer',
+            }}
+            title="Download plain standards-compliant CSV"
+          >
+            {exportingFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}
+          </button>
         </form>
       </div>
 

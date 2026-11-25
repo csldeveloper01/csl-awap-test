@@ -266,6 +266,10 @@ export interface AdminQuestion {
   category?: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
   marks?: number;
+  question_type?: 'MCQ' | 'CODING';
+  has_programming_details?: boolean;
+  programming_details?: AdminProgrammingDetails | null;
+  is_global?: boolean;
   option_a: string;
   option_b: string;
   option_c: string;
@@ -284,6 +288,13 @@ export interface AdminQuestion {
   created_at?: string;
 }
 
+export interface ExportScoreThreshold {
+  min: number;
+  max: number;
+  color: string;
+  label: string;
+}
+
 export interface AdminAssessmentConfig {
   id: number;
   title: string;
@@ -295,6 +306,11 @@ export interface AdminAssessmentConfig {
   max_attempts: number;
   max_tab_switches_warning: number;
   auto_submit_on_tab_limit: boolean;
+  export_header_bg_color: string;
+  export_header_text_color: string;
+  export_alt_row_color: string;
+  enable_alt_row_styling: boolean;
+  export_score_thresholds: ExportScoreThreshold[];
   is_active: boolean;
   updated_at: string;
 }
@@ -769,21 +785,28 @@ export async function getAdminQuestions(params?: {
   search?: string;
   assessment_id?: string;
   assessment_type?: string;
+  question_type?: 'MCQ' | 'CODING';
   unassigned?: boolean;
   pool_id?: string;
+  include_pool_only?: boolean;
 }): Promise<AdminQuestion[]> {
   const res = await adminApi.get<AdminQuestion[]>('/questions/', { params });
   return res.data;
 }
 
-export async function createAdminQuestion(data: Partial<AdminQuestion> & { assessment_id?: string }): Promise<AdminQuestion> {
+export async function getAdminQuestion(id: number): Promise<AdminQuestion> {
+  const res = await adminApi.get<AdminQuestion>(`/questions/${id}/`);
+  return res.data;
+}
+
+export async function createAdminQuestion(data: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any }): Promise<AdminQuestion> {
   const res = await adminApi.post<AdminQuestion>('/questions/', data);
   return res.data;
 }
 
 export async function updateAdminQuestion(
   id: number,
-  data: Partial<AdminQuestion> & { assessment_id?: string }
+  data: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any }
 ): Promise<AdminQuestion> {
   const res = await adminApi.put<AdminQuestion>(`/questions/${id}/`, data);
   return res.data;
@@ -833,26 +856,45 @@ export async function archiveAdminQuestion(
 
 export interface CSVSectionPreview {
   code: string;
+  raw_section?: string;
   detected_name: string;
   row_count: number;
+  count?: number;
+  matched?: boolean;
   matched_section_id: number | null;
   matched_section_name: string | null;
 }
 
 export interface CSVImportPreviewResponse {
+  success?: boolean;
+  detected_type?: 'MCQ' | 'CODING';
+  detected_encoding?: string;
+  delimiter?: string;
   total_rows: number;
+  valid_count?: number;
+  error_count?: number;
+  target_pool?: { id: string; name: string; code: string };
   detected_sections: CSVSectionPreview[];
-  sample_rows: Record<string, string>[];
-  errors: string[];
+  sample_rows: Record<string, string | number>[];
+  errors: Array<string | { row?: number; error?: string }>;
+}
+
+export interface CSVImportCommitOptions {
+  destination_mode?: 'GLOBAL_ONLY' | 'EXISTING_POOLS' | 'NEW_POOL' | 'POOL_ONLY' | 'GLOBAL_AND_POOLS';
+  pool_ids?: string[];
+  new_pool_name?: string;
+  add_to_global_bank?: boolean;
 }
 
 export async function previewAdminQuestionsCSV(
   file?: File,
-  csvContent?: string
+  csvContent?: string,
+  poolId?: string
 ): Promise<CSVImportPreviewResponse> {
   if (file) {
     const formData = new FormData();
     formData.append('file', file);
+    if (poolId) formData.append('pool_id', poolId);
     const res = await adminApi.post<CSVImportPreviewResponse>('/questions/import-preview/', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -860,6 +902,7 @@ export async function previewAdminQuestionsCSV(
   } else {
     const res = await adminApi.post<CSVImportPreviewResponse>('/questions/import-preview/', {
       csv_content: csvContent,
+      pool_id: poolId || undefined,
     });
     return res.data;
   }
@@ -876,20 +919,34 @@ export async function importAdminQuestionsCSV(
   assessmentId?: string,
   file?: File,
   csvContent?: string,
-  sectionMapping?: Record<string, SectionMappingRule>
+  sectionMapping?: Record<string, SectionMappingRule>,
+  options?: CSVImportCommitOptions
 ): Promise<{
+  success?: boolean;
   success_count: number;
+  imported_count?: number;
+  skipped_count?: number;
   error_count: number;
-  errors: string[];
+  errors: Array<string | { row?: number; error?: string }>;
   assessment_id?: string;
   assessment_title?: string;
   total_pool_count?: number;
+  assigned_pools?: { id: string; name: string; questions_count?: number }[];
+  add_to_global_bank?: boolean;
 }> {
   if (file) {
     const formData = new FormData();
     formData.append('file', file);
     if (assessmentId) formData.append('assessment_id', assessmentId);
     if (sectionMapping) formData.append('section_mapping', JSON.stringify(sectionMapping));
+    if (options?.destination_mode) formData.append('destination_mode', options.destination_mode);
+    if (options?.pool_ids && options.pool_ids.length > 0) {
+      formData.append('pool_ids', JSON.stringify(options.pool_ids));
+    }
+    if (options?.new_pool_name) formData.append('new_pool_name', options.new_pool_name);
+    if (options?.add_to_global_bank !== undefined) {
+      formData.append('add_to_global_bank', String(options.add_to_global_bank));
+    }
     const res = await adminApi.post('/questions/import-csv/', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -899,9 +956,66 @@ export async function importAdminQuestionsCSV(
       assessment_id: assessmentId || undefined,
       csv_content: csvContent,
       section_mapping: sectionMapping,
+      ...options,
     });
     return res.data;
   }
+}
+
+export async function previewAdminPoolCSV(
+  poolId: string,
+  file?: File,
+  csvContent?: string
+): Promise<CSVImportPreviewResponse> {
+  if (file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await adminApi.post<CSVImportPreviewResponse>(`/question-pools/${poolId}/import-preview/`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  }
+  const res = await adminApi.post<CSVImportPreviewResponse>(`/question-pools/${poolId}/import-preview/`, {
+    csv_content: csvContent,
+  });
+  return res.data;
+}
+
+export async function importAdminPoolCSV(
+  poolId: string,
+  payload: {
+    file?: File;
+    csvContent?: string;
+    sectionMapping?: Record<string, SectionMappingRule>;
+    addToGlobalBank?: boolean;
+  }
+): Promise<{
+  success: boolean;
+  imported_count: number;
+  success_count: number;
+  error_count: number;
+  errors: Array<string | { row?: number; error?: string }>;
+  assigned_pools: { id: string; name: string; questions_count?: number }[];
+  add_to_global_bank: boolean;
+  detected_type?: string;
+  detected_encoding?: string;
+}> {
+  if (payload.file) {
+    const formData = new FormData();
+    formData.append('file', payload.file);
+    if (payload.sectionMapping) formData.append('section_mapping', JSON.stringify(payload.sectionMapping));
+    formData.append('add_to_global_bank', String(Boolean(payload.addToGlobalBank)));
+    const res = await adminApi.post(`/question-pools/${poolId}/import-csv/`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  }
+  const res = await adminApi.post(`/question-pools/${poolId}/import-csv/`, {
+    csv_content: payload.csvContent,
+    section_mapping: payload.sectionMapping,
+    add_to_global_bank: Boolean(payload.addToGlobalBank),
+  });
+  return res.data;
 }
 
 // ─── CONFIGURATION MODULE ───────────────────────────────────────────────────
@@ -971,7 +1085,9 @@ export interface AdminQuestionPool {
     question_category?: string;
     question_is_archived?: boolean;
     question_is_active?: boolean;
+    question_is_global?: boolean;
     question_assessment_type?: string;
+    question_type?: 'MCQ' | 'CODING';
     has_programming_details?: boolean;
   }[];
   linked_assessments?: {
@@ -1748,20 +1864,23 @@ export async function exportAdvancedStudentData(params?: {
   college_id?: number;
   drive_id?: string;
   assessment_id?: string;
+  state?: string;
   search?: string;
   thresholds?: string;
+  filename?: string;
 }): Promise<void> {
+  const { filename, ...queryParams } = params || {};
   const res = await adminApi.get('/candidates/export-advanced/', {
-    params,
+    params: queryParams,
     responseType: 'blob',
   });
   const ext = params?.format === 'csv' ? 'csv' : 'xlsx';
-  const mimeType = ext === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const mimeType = ext === 'csv' ? 'text/csv;charset=utf-8' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const blob = new Blob([res.data], { type: mimeType });
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `csl_student_advanced_export.${ext}`;
+  a.download = filename || `csl_student_advanced_export_${new Date().toISOString().split('T')[0]}.${ext}`;
   document.body.appendChild(a);
   a.click();
   window.URL.revokeObjectURL(url);

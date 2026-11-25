@@ -19,7 +19,6 @@ import {
   fetchAttemptPdfBlob,
   initProctoringSession,
   endProctoringSession,
-  updateProctoringScreenShareStatus,
   type AttemptDetailResponse,
   type QuestionSnapshot,
   type ProctoringSessionResponse,
@@ -36,13 +35,17 @@ export function AssessmentExamPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
+  const isSimulationMode = searchParams.get('simulation') === 'true';
+
   useEffect(() => {
     const urlToken = searchParams.get('token');
     if (urlToken) {
       sessionStorage.setItem('csl_assessment_token', urlToken);
-      localStorage.setItem('csl_assessment_token', urlToken);
+      if (!isSimulationMode) {
+        localStorage.setItem('csl_assessment_token', urlToken);
+      }
     }
-  }, [searchParams]);
+  }, [searchParams, isSimulationMode]);
 
   const [attempt, setAttempt] = useState<AttemptDetailResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -109,51 +112,36 @@ export function AssessmentExamPage() {
   const [pdfLoading, setPdfLoading] = useState<boolean>(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
-  // CSL Sentinel Proctoring Session State
+  // CSL Sentinel Proctoring Session State (managed cleanly inside ProctoringStatusPanel)
   const [proctoringSession, setProctoringSession] = useState<ProctoringSessionResponse | null>(null);
   const [proctoringCamStream, setProctoringCamStream] = useState<MediaStream | null>(null);
   const [proctoringScStream, setProctoringScStream] = useState<MediaStream | null>(null);
-  const [showScreenRecovery, setShowScreenRecovery] = useState<boolean>(false);
-  const [recoveringScreen, setRecoveringScreen] = useState<boolean>(false);
 
-  const handleUserGestureRecoverScreen = async () => {
-    try {
-      setRecoveringScreen(true);
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        throw new Error('Screen sharing API is not supported in this browser.');
-      }
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'monitor' } as any,
-        audio: false,
-      });
-      const tracks = stream.getVideoTracks();
-      if (!tracks || tracks.length === 0 || tracks[0].readyState !== 'live') {
-        throw new Error('No live display video track returned.');
-      }
-      tracks[0].onended = () => {
-        setProctoringScStream(null);
-        setShowScreenRecovery(true);
-        if (proctoringSession) {
-          updateProctoringScreenShareStatus(proctoringSession.id, 'INTERRUPTED').catch(console.error);
-        }
-      };
-      setProctoringScStream(stream);
-      updateCachedScreenStream(stream);
-      setShowScreenRecovery(false);
-      if (proctoringSession) {
-        updateProctoringScreenShareStatus(proctoringSession.id, 'ACTIVE').catch(console.error);
-      }
-    } catch (err: any) {
-      console.warn('Screen share recovery error:', err);
-      alert(err.name === 'NotAllowedError' ? 'Screen sharing was cancelled or denied.' : 'Failed to capture screen.');
-    } finally {
-      setRecoveringScreen(false);
-    }
-  };
+  const [cameraBypassed, setCameraBypassed] = useState<boolean>(false);
+
+  // Stop cached Sentinel media tracks cleanly if the browser tab is closed/navigated away
+  useEffect(() => {
+    const handlePageHide = () => {
+      clearProctoringStreams();
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, []);
 
   useEffect(() => {
     if (!attemptId) return;
+    if (isSimulationMode) {
+      clearProctoringStreams();
+      setProctoringSession(null);
+      setProctoringCamStream(null);
+      setProctoringScStream(null);
+      setCameraBypassed(false);
+      return;
+    }
+
     const cached = getProctoringStreams();
+    const cameWithBypassOnly = Boolean(cached.session && !cached.cameraStream);
+
     if (cached.session) {
       setProctoringSession(cached.session);
     } else {
@@ -161,26 +149,42 @@ export function AssessmentExamPage() {
         .then((sess) => {
           setProctoringSession(sess);
           sessionStorage.setItem('csl_proctoring_session_id', sess.id);
+          if (sess.face_calibration_status === 'SKIPPED_BY_ADMIN') {
+            setCameraBypassed(true);
+          }
         })
         .catch(console.warn);
     }
 
     if (cached.cameraStream && cached.cameraStream.getVideoTracks().some((t) => t.readyState === 'live')) {
       setProctoringCamStream(cached.cameraStream);
-    } else {
-      navigator.mediaDevices?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
-        .then((cStream) => setProctoringCamStream(cStream))
+      setCameraBypassed(false);
+    } else if (cameWithBypassOnly || cached.session?.face_calibration_status === 'SKIPPED_BY_ADMIN') {
+      setProctoringCamStream(null);
+      setCameraBypassed(true);
+    } else if (!cached.session) {
+      // On direct reload, defer fallback camera request until initProctoringSession reports bypass status
+      initProctoringSession(attemptId)
+        .then((sess) => {
+          if (sess.face_calibration_status === 'SKIPPED_BY_ADMIN') {
+            setProctoringCamStream(null);
+            setCameraBypassed(true);
+          } else {
+            navigator.mediaDevices
+              ?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
+              .then((cStream) => setProctoringCamStream(cStream))
+              .catch(console.warn);
+          }
+        })
         .catch(console.warn);
     }
 
     if (cached.screenStream && cached.screenStream.getVideoTracks().some((t) => t.readyState === 'live')) {
       setProctoringScStream(cached.screenStream);
-      setShowScreenRecovery(false);
     } else {
-      // Prompt student with interactive screen recovery dialog (transient gesture required by browsers)
-      setShowScreenRecovery(true);
+      setProctoringScStream(null);
     }
-  }, [attemptId]);
+  }, [attemptId, isSimulationMode]);
 
   const isPageHiddenRef = useRef<boolean>(false);
 
@@ -533,9 +537,9 @@ export function AssessmentExamPage() {
     return () => clearInterval(timer);
   }, [targetEndTimeMs, submitting, isPaused, handleAutoSubmitOnTimeout]);
 
-  // 3. Tab switch enforcement (two switches permitted with warning, third auto-submits)
+  // 3. Tab switch enforcement (two switches permitted with warning, third auto-submits; skipped in admin simulation)
   useEffect(() => {
-    if (!attemptId || submitting) return;
+    if (!attemptId || submitting || isSimulationMode) return;
 
     const handleVisibilityChange = async () => {
       if (document.hidden) {
@@ -879,6 +883,25 @@ export function AssessmentExamPage() {
         boxSizing: 'border-box',
       }}
     >
+      {isSimulationMode && (
+        <div
+          style={{
+            backgroundColor: '#FEF3C7',
+            borderBottom: '1px solid #F59E0B',
+            color: '#92400E',
+            padding: '8px 24px',
+            fontSize: '13px',
+            fontWeight: 700,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>🧪 ADMIN SIMULATION / TEST RUN MODE — Proctoring, Sentinel telemetry, and fullscreen enforcement are bypassed.</span>
+          <span style={{ fontSize: '12px', fontWeight: 600 }}>Isolated Sandbox Attempt</span>
+        </div>
+      )}
+
       {/* ─── 1. TOP HEADER (BRAND ALIGNED WITH MOCKUP) ─────────────────── */}
       <header
         style={{
@@ -2462,7 +2485,7 @@ export function AssessmentExamPage() {
       )}
 
       {/* ─── 5. FULL-SCREEN ENFORCEMENT MODAL ───────────────────────── */}
-      {!isFullscreen && !submitting && !terminalNotice && !loading && (
+      {!isFullscreen && !submitting && !terminalNotice && !loading && !isSimulationMode && (
         <div
           style={{
             position: 'fixed',
@@ -2539,73 +2562,18 @@ export function AssessmentExamPage() {
         </div>
       )}
 
-      {/* CSL Sentinel Live Proctoring Status Widget */}
-      {proctoringSession && proctoringCamStream && (
+      {/* CSL Sentinel Live Proctoring Status Widget (never mounted in admin simulation mode) */}
+      {!isSimulationMode && proctoringSession && (
         <ProctoringStatusPanel
           session={proctoringSession}
           cameraStream={proctoringCamStream}
-          screenStream={proctoringScStream || proctoringCamStream}
+          screenStream={proctoringScStream}
+          cameraBypassed={cameraBypassed}
           onScreenShareReconnected={(newStream) => {
             setProctoringScStream(newStream);
             updateCachedScreenStream(newStream);
-            setShowScreenRecovery(false);
           }}
         />
-      )}
-
-      {/* Screen Sharing Recovery Gesture Modal */}
-      {showScreenRecovery && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.85)',
-            backdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 99999,
-            fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '16px',
-              padding: '32px',
-              maxWidth: '460px',
-              width: '90%',
-              textAlign: 'center',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🖥️</div>
-            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', margin: '0 0 8px 0' }}>
-              Screen Sharing Required
-            </h2>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 24px 0', lineHeight: 1.5 }}>
-              Continuous screen sharing is mandatory to maintain exam integrity. Your browser requires you to click below to select and share your entire desktop screen.
-            </p>
-            <button
-              type="button"
-              onClick={handleUserGestureRecoverScreen}
-              disabled={recoveringScreen}
-              style={{
-                backgroundColor: '#0D52D6',
-                color: '#FFFFFF',
-                padding: '14px 28px',
-                borderRadius: '10px',
-                border: 'none',
-                fontSize: '14px',
-                fontWeight: 700,
-                cursor: recoveringScreen ? 'wait' : 'pointer',
-                boxShadow: '0 4px 14px rgba(13, 82, 214, 0.3)',
-              }}
-            >
-              {recoveringScreen ? 'Initializing Screen Share...' : 'Share Entire Screen →'}
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );

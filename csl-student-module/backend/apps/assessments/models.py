@@ -20,6 +20,26 @@ def normalize_college_name(name: str) -> str:
     return " ".join(cleaned.split())
 
 
+def normalize_hex_color(value: str) -> str:
+    """Validate and normalize a 6-digit hex color string (#RRGGBB)."""
+    raw = str(value or "").strip()
+    if not raw.startswith("#"):
+        raw = f"#{raw}"
+    if not re.match(r"^#[0-9A-Fa-f]{6}$", raw):
+        raise ValidationError("Must be a valid 6-digit hex color (e.g. #1E293B).")
+    return raw.upper()
+
+
+def default_export_score_thresholds():
+    """Default XLSX score percentage color bands for global export formatting."""
+    return [
+        {"min": 80.0, "max": 100.0, "color": "#D4EDDA", "label": "Distinction"},
+        {"min": 60.0, "max": 79.99, "color": "#FFF3CD", "label": "First Class"},
+        {"min": 40.0, "max": 59.99, "color": "#FFE5D0", "label": "Pass"},
+        {"min": 0.0, "max": 39.99, "color": "#F8D7DA", "label": "Fail / Action Required"},
+    ]
+
+
 class AssessmentSection(models.Model):
     """
     Reusable library of assessment sections (e.g. Aptitude, Coding Fundamentals, Reasoning, etc.)
@@ -102,6 +122,7 @@ class QuestionBank(models.Model):
     explanation = models.TextField(blank=True, default="", help_text="Optional explanation for admin review")
     marks = models.PositiveIntegerField(default=1, help_text="Default marks awarded for this question")
     is_archived = models.BooleanField(default=False, db_index=True, help_text="Soft-archived from active selection pools")
+    is_global = models.BooleanField(default=True, db_index=True, help_text="Whether question appears in central Global Question Bank")
     
     is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -114,6 +135,7 @@ class QuestionBank(models.Model):
             models.Index(fields=["section_type", "difficulty", "is_active"]),
             models.Index(fields=["section", "is_active"]),
             models.Index(fields=["section", "difficulty", "is_active"]),
+            models.Index(fields=["is_global", "is_active"]),
         ]
 
     @property
@@ -201,6 +223,32 @@ class AssessmentConfig(models.Model):
         default=True,
         help_text="Automatically submit and flag attempt when tab switch limit is exceeded",
     )
+
+    # Global XLSX Export Formatting Appearance Settings
+    export_header_bg_color = models.CharField(
+        max_length=7,
+        default="#1E293B",
+        help_text="Hex fill color for XLSX export header row",
+    )
+    export_header_text_color = models.CharField(
+        max_length=7,
+        default="#FFFFFF",
+        help_text="Hex font color for XLSX export header row",
+    )
+    export_alt_row_color = models.CharField(
+        max_length=7,
+        default="#F8FAFC",
+        help_text="Hex fill color for alternating rows in XLSX export",
+    )
+    enable_alt_row_styling = models.BooleanField(
+        default=True,
+        help_text="Apply alternating row shading in generated XLSX exports",
+    )
+    export_score_thresholds = models.JSONField(
+        default=default_export_score_thresholds,
+        blank=True,
+        help_text="Score percentage highlight bands for XLSX exports",
+    )
     
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -222,6 +270,13 @@ class AssessmentConfig(models.Model):
             errors["max_attempts"] = "Max attempts must be at least 1."
         if self.max_tab_switches_warning < 1:
             errors["max_tab_switches_warning"] = "Tab switch limit must be at least 1."
+
+        for color_field in ("export_header_bg_color", "export_header_text_color", "export_alt_row_color"):
+            try:
+                setattr(self, color_field, normalize_hex_color(getattr(self, color_field)))
+            except ValidationError as exc:
+                errors[color_field] = exc.message if hasattr(exc, "message") else str(exc)
+
         if errors:
             raise ValidationError(errors)
 
@@ -1762,6 +1817,11 @@ class ProctoringSession(models.Model):
         related_name="reviewed_proctoring_sessions",
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    is_simulation = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Isolation guard mirroring attempt/candidate simulation flag",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

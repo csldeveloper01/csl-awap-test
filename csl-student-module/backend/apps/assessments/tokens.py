@@ -99,18 +99,50 @@ def get_authorized_candidate(request):
     return getattr(request, "candidate", None)
 
 
-def verify_attempt_ownership(request, attempt: AssessmentAttempt):
+def verify_attempt_ownership(request, attempt: AssessmentAttempt, allow_staff: bool = False):
     """
     Verifies that the request's authenticated candidate owns the given attempt.
-    Also verifies against staff / admin credentials.
+    Staff bypass is disabled by default so admins are never silently treated as candidate
+    subjects on active exam or Sentinel proctoring endpoints. Read-only admin views that
+    intentionally share a candidate route must pass allow_staff=True explicitly.
     """
-    user = getattr(request, "user", None)
-    if user and getattr(user, "is_authenticated", False) and getattr(user, "is_staff", False):
+    candidate = get_authorized_candidate(request)
+    if candidate:
+        return str(attempt.candidate_id) == str(candidate.id)
+
+    if allow_staff:
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False) and getattr(user, "is_staff", False):
+            return True
+
+    return False
+
+
+def is_simulation_or_admin_subject(request, attempt: AssessmentAttempt = None) -> bool:
+    """
+    Returns True if the caller is acting as an administrative user without a real candidate
+    subject OR if the request/attempt/candidate belongs to a Test Run simulation.
+    Used to enforce strict isolation of CSL Sentinel candidate recording.
+    """
+    if getattr(request, "is_simulation", False):
         return True
 
     candidate = get_authorized_candidate(request)
-    if not candidate:
-        return False
+    if candidate and getattr(candidate, "is_simulation", False):
+        return True
 
-    return str(attempt.candidate_id) == str(candidate.id)
+    if attempt is not None:
+        if getattr(attempt, "is_simulation", False):
+            return True
+        attempt_candidate = getattr(attempt, "candidate", None)
+        if attempt_candidate and getattr(attempt_candidate, "is_simulation", False):
+            return True
+
+    if not candidate:
+        raw_req = getattr(request, "_request", request)
+        raw_user = getattr(raw_req, "user", None)
+        if raw_user and getattr(raw_user, "is_authenticated", False) and getattr(raw_user, "is_staff", False):
+            return True
+
+    return False
 

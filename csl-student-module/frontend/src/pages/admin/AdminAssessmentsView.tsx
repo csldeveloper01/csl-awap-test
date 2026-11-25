@@ -44,6 +44,8 @@ import {
   type AdminQuestionPool,
   type AdminAssessmentPoolSource,
   fetchAdminDrives,
+  createAdminDrive,
+  archiveAdminDrive,
   type AdminDrive,
 } from '../../api/admin';
 import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
@@ -121,6 +123,33 @@ export function AdminAssessmentsView({
   const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
   const [editIsStandalone, setEditIsStandalone] = useState<boolean>(true);
   const [editEligibleCollegeIds, setEditEligibleCollegeIds] = useState<number[]>([]);
+
+  // Inline Drive Creation Modal State (Phase 5)
+  const [showInlineDriveModal, setShowInlineDriveModal] = useState(false);
+  const [inlineDriveTarget, setInlineDriveTarget] = useState<'create' | 'edit'>('create');
+  const [inlineDriveSaving, setInlineDriveSaving] = useState(false);
+  const [inlineDriveError, setInlineDriveError] = useState('');
+  const [inlineDriveUseCustomCode, setInlineDriveUseCustomCode] = useState(false);
+  const [wizardCreatedDriveIds, setWizardCreatedDriveIds] = useState<string[]>([]);
+  const [inlineDriveForm, setInlineDriveForm] = useState<{
+    name: string;
+    code: string;
+    description: string;
+    visibility: 'PUBLIC' | 'INVITE_ONLY';
+    status: 'ACTIVE' | 'DRAFT';
+    start_date: string;
+    end_date: string;
+    eligible_college_ids: number[];
+  }>({
+    name: '',
+    code: '',
+    description: '',
+    visibility: 'PUBLIC',
+    status: 'ACTIVE',
+    start_date: '',
+    end_date: '',
+    eligible_college_ids: [],
+  });
 
   // Close Assessment policy selection
   const [closePolicy, setClosePolicy] = useState<'ALLOW_FINISH' | 'STRICT_CUTOFF'>('ALLOW_FINISH');
@@ -206,10 +235,7 @@ export function AdminAssessmentsView({
     try {
       setRunningTestSimulation(assessmentId);
       const res = await startAdminTestRun(assessmentId);
-      if (res.token) {
-        sessionStorage.setItem('csl_assessment_token', res.token);
-        localStorage.setItem('csl_assessment_token', res.token);
-      }
+      // Pass simulation token solely via URL query param to child simulation window so shared origin storage is not overwritten
       window.open(`/assessment/exam/${res.attempt_id}?simulation=true&token=${encodeURIComponent(res.token || '')}`, '_blank');
     } catch (err: any) {
       alert(formatApiError(err, 'Failed to launch isolated test run simulation.'));
@@ -313,18 +339,23 @@ export function AdminAssessmentsView({
       if (targetPoolId) {
         const res = await createAdminQuestionInPool(targetPoolId, {
           ...data,
-          question_type: wizardQuestionType,
+          question_type: data.question_type || wizardQuestionType,
         });
         createdQ = res.question;
       } else {
         createdQ = await createAdminQuestion({
           ...data,
-          question_type: wizardQuestionType,
+          question_type: data.question_type || wizardQuestionType,
         });
       }
 
-      if (createdQ && createdQ.section) {
-        const matchSec = availableSections.find((s) => s.id === createdQ.section);
+      const secId = createdQ?.section_id ?? createdQ?.section;
+      if (createdQ && (secId || createdQ.section_type)) {
+        const freshSecs = await getAdminSections().catch(() => availableSections);
+        setAvailableSections(freshSecs);
+        const matchSec =
+          freshSecs.find((s) => s.id === secId) ||
+          freshSecs.find((s) => s.code.toUpperCase() === String(createdQ.section_type || '').toUpperCase());
         if (matchSec) {
           setCreateSections((prev) => {
             if (prev.some((s) => s.section_id === matchSec.id)) return prev;
@@ -335,18 +366,15 @@ export function AdminAssessmentsView({
                 name: matchSec.name,
                 code: matchSec.code,
                 question_count: 5,
-                marks_per_question: createdQ.marks || 1,
+                marks_per_question: createdQ.marks || (wizardQuestionType === 'CODING' ? 10 : 1),
               },
             ];
           });
         }
       }
 
-      await fetchSections();
       await fetchQuestionPools();
       setShowWizardQuestionModal(false);
-    } catch (err: any) {
-      alert(formatApiError(err, 'Failed to create question for wizard.'));
     } finally {
       setWizardSavingQuestion(false);
     }
@@ -829,6 +857,7 @@ export function AdminAssessmentsView({
     }
 
     setCreateSections([]);
+    setWizardCreatedDriveIds([]);
     setWizardStep(1);
     setIsCreatingWizard(true);
     setShowCreateModal(false);
@@ -980,6 +1009,7 @@ export function AdminAssessmentsView({
         code: created.code || createForm.code,
         is_seb_required: Boolean(created.is_seb_required ?? createForm.is_seb_required),
       });
+      setWizardCreatedDriveIds([]);
       setWizardStep(6);
       fetchAssessments();
       setActionMessage({ text: `Assessment "${createForm.title}" created successfully in DRAFT state.`, type: 'success' });
@@ -1314,6 +1344,285 @@ export function AdminAssessmentsView({
     );
   };
 
+  const handleOpenInlineDriveModal = (target: 'create' | 'edit') => {
+    setInlineDriveTarget(target);
+    setInlineDriveError('');
+    setInlineDriveUseCustomCode(false);
+    setInlineDriveForm({
+      name: '',
+      code: '',
+      description: '',
+      visibility: 'PUBLIC',
+      status: 'ACTIVE',
+      start_date: '',
+      end_date: '',
+      eligible_college_ids: [],
+    });
+    setShowInlineDriveModal(true);
+  };
+
+  const handleInlineDriveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inlineDriveSaving) return;
+    if (!inlineDriveForm.name.trim() || !inlineDriveForm.code.trim()) {
+      setInlineDriveError('Drive name and unique code are required.');
+      return;
+    }
+
+    setInlineDriveSaving(true);
+    setInlineDriveError('');
+    try {
+      const created = await createAdminDrive({
+        name: inlineDriveForm.name.trim(),
+        code: inlineDriveForm.code.trim().toUpperCase(),
+        description: inlineDriveForm.description.trim(),
+        visibility: inlineDriveForm.visibility,
+        status: inlineDriveForm.status,
+        start_date: inlineDriveForm.start_date ? new Date(inlineDriveForm.start_date).toISOString() : null,
+        end_date: inlineDriveForm.end_date ? new Date(inlineDriveForm.end_date).toISOString() : null,
+        eligible_college_ids: inlineDriveForm.eligible_college_ids,
+      });
+
+      const refreshedDrives = await fetchAdminDrives();
+      setAvailableDrives(refreshedDrives);
+
+      if (created?.id) {
+        if (inlineDriveTarget === 'create') {
+          setCreateIsStandalone(false);
+          setCreateSelectedDriveIds((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]));
+          setWizardCreatedDriveIds((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]));
+        } else {
+          setEditIsStandalone(false);
+          setEditSelectedDriveIds((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]));
+        }
+      }
+      setShowInlineDriveModal(false);
+    } catch (err: any) {
+      setInlineDriveError(formatApiError(err, 'Failed to create recruitment drive.'));
+    } finally {
+      setInlineDriveSaving(false);
+    }
+  };
+
+  const handleCancelWizard = async () => {
+    if (wizardStep < 6 && wizardCreatedDriveIds.length > 0) {
+      const removeOrphans = window.confirm(
+        `You created ${wizardCreatedDriveIds.length} new Drive(s) inline while configuring this assessment.\n\nClick OK to discard those unlinked Drives, or Cancel to keep them in Drives Management.`
+      );
+      if (removeOrphans) {
+        for (const driveId of wizardCreatedDriveIds) {
+          try {
+            await archiveAdminDrive(driveId);
+          } catch {
+            // ignore if already removed or linked
+          }
+        }
+        fetchAdminDrives().then(setAvailableDrives).catch(() => {});
+      }
+    }
+    setWizardCreatedDriveIds([]);
+    setIsCreatingWizard(false);
+    setSearchParams({ tab: 'assessments' });
+  };
+
+  const renderInlineDriveModal = () => {
+    if (!showInlineDriveModal) return null;
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.55)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1200,
+          padding: '16px',
+        }}
+      >
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '14px',
+            padding: '24px',
+            width: '520px',
+            maxWidth: '94vw',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            boxShadow: '0 24px 48px rgba(15, 23, 42, 0.25)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0B2E6F' }}>
+                + Create New Recruitment Drive
+              </h3>
+              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748B' }}>
+                Drive will be auto-selected in your assessment without discarding any entered assessment details.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowInlineDriveModal(false)}
+              style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {inlineDriveError && (
+            <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', padding: '10px 12px', borderRadius: '8px', fontSize: '12px', marginBottom: '14px', fontWeight: 600 }}>
+              {inlineDriveError}
+            </div>
+          )}
+
+          <form onSubmit={handleInlineDriveSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Drive Name *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Campus Recruitment Drive 2026"
+                value={inlineDriveForm.name}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setInlineDriveForm((prev) => ({
+                    ...prev,
+                    name: val,
+                    code: inlineDriveUseCustomCode ? prev.code : generateCodeFromTitle(val, 24),
+                  }));
+                }}
+                style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Drive Code *</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0052CC', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={inlineDriveUseCustomCode}
+                      onChange={(e) => setInlineDriveUseCustomCode(e.target.checked)}
+                    />
+                    Custom
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder="CAMPUS-2026"
+                  value={inlineDriveForm.code}
+                  onChange={(e) =>
+                    setInlineDriveForm((prev) => ({
+                      ...prev,
+                      code: e.target.value.toUpperCase().replace(/\s+/g, '-'),
+                    }))
+                  }
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Visibility *
+                </label>
+                <select
+                  value={inlineDriveForm.visibility}
+                  onChange={(e) =>
+                    setInlineDriveForm((prev) => ({ ...prev, visibility: e.target.value as 'PUBLIC' | 'INVITE_ONLY' }))
+                  }
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#FFFFFF' }}
+                >
+                  <option value="PUBLIC">Public (Open College Registration)</option>
+                  <option value="INVITE_ONLY">Invite Only (8-Digit Access Code)</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Description
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Optional drive summary or eligibility notes..."
+                value={inlineDriveForm.description}
+                onChange={(e) => setInlineDriveForm((prev) => ({ ...prev, description: e.target.value }))}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {colleges.length > 0 && (
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Eligible Colleges (Optional — {inlineDriveForm.eligible_college_ids.length} selected)
+                </label>
+                <div style={{ maxHeight: '110px', overflowY: 'auto', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', backgroundColor: '#F8FAFC' }}>
+                  {colleges.map((c) => {
+                    const checked = inlineDriveForm.eligible_college_ids.includes(c.id);
+                    return (
+                      <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '12px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) =>
+                            setInlineDriveForm((prev) => ({
+                              ...prev,
+                              eligible_college_ids: e.target.checked
+                                ? [...prev.eligible_college_ids, c.id]
+                                : prev.eligible_college_ids.filter((id) => id !== c.id),
+                            }))
+                          }
+                        />
+                        <span>[{c.code}] {c.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setShowInlineDriveModal(false)}
+                style={{ backgroundColor: '#F1F5F9', color: '#475569', border: 'none', borderRadius: '8px', padding: '9px 14px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={inlineDriveSaving}
+                style={{ backgroundColor: '#0D52D6', color: '#FFFFFF', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: 700, cursor: inlineDriveSaving ? 'not-allowed' : 'pointer' }}
+              >
+                {inlineDriveSaving ? 'Creating Drive...' : 'Create & Select Drive'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  const renderWizardQuestionModal = () => {
+    if (!showWizardQuestionModal) return null;
+    return (
+      <AdminQuestionEditorModal
+        question={null}
+        isOpen={showWizardQuestionModal}
+        onClose={() => setShowWizardQuestionModal(false)}
+        onSave={handleSaveWizardQuestion}
+        saving={wizardSavingQuestion}
+        sections={availableSections}
+        forcedType={wizardQuestionType}
+      />
+    );
+  };
+
   // Drive hierarchy filtered assessments (Phase 2.2.2)
   const displayedAssessments: AdminAssessment[] = useMemo(() => {
     return assessments.filter((a: AdminAssessment) => {
@@ -1389,10 +1698,7 @@ export function AdminAssessmentsView({
           <div>
             <button
               type="button"
-              onClick={() => {
-                setIsCreatingWizard(false);
-                setSearchParams({ tab: 'assessments' });
-              }}
+              onClick={handleCancelWizard}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1677,10 +1983,29 @@ export function AdminAssessmentsView({
 
             {/* Drive Association & Hierarchy */}
             <div style={{ marginBottom: '24px', padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-                Drive Association & Institutional Scope
-              </label>
-              <div style={{ display: 'flex', gap: '20px', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                  Drive Association & Institutional Scope
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleOpenInlineDriveModal('create')}
+                  data-testid="wizard-create-drive-btn"
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #0D52D6',
+                    backgroundColor: '#EFF6FF',
+                    color: '#0D52D6',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Create New Drive
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '20px', marginBottom: '12px', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
                   <input
                     type="radio"
@@ -1700,30 +2025,82 @@ export function AdminAssessmentsView({
                     checked={!createIsStandalone}
                     onChange={() => setCreateIsStandalone(false)}
                   />
-                  <span>Assign to Recruitment Drive</span>
+                  <span>Assign to Recruitment Drive(s)</span>
                 </label>
               </div>
 
               {!createIsStandalone && (
                 <div style={{ marginTop: '10px' }}>
+                  {createSelectedDriveIds.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                      {createSelectedDriveIds.map((dId) => {
+                        const dObj = availableDrives.find((item) => item.id === dId);
+                        if (!dObj) return null;
+                        return (
+                          <span
+                            key={dId}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '4px 10px',
+                              borderRadius: '999px',
+                              backgroundColor: '#DBEAFE',
+                              color: '#1E40AF',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                            }}
+                          >
+                            <span>[{dObj.code}] {dObj.name}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCreateSelectedDriveIds((prev) => prev.filter((id) => id !== dId))
+                              }
+                              style={{ background: 'none', border: 'none', color: '#1E3A8A', cursor: 'pointer', fontWeight: 900, padding: 0 }}
+                              title="Remove drive"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <label style={{ display: 'block', fontSize: '12px', color: '#64748B', marginBottom: '6px' }}>
-                    Select Participating Recruitment Drive:
+                    Select Participating Recruitment Drive(s):
                   </label>
                   {availableDrives.length === 0 ? (
-                    <p style={{ margin: 0, fontSize: '12px', color: '#94A3B8' }}>No active drives found. You can link this assessment to a drive later.</p>
+                    <p style={{ margin: 0, fontSize: '12px', color: '#64748B' }}>
+                      No active drives found. Click <strong>+ Create New Drive</strong> above to create one without leaving the wizard.
+                    </p>
                   ) : (
-                    <select
-                      value={createSelectedDriveIds[0] || ''}
-                      onChange={(e) => setCreateSelectedDriveIds(e.target.value ? [e.target.value] : [])}
-                      style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '14px', backgroundColor: '#FFFFFF' }}
-                    >
-                      <option value="">Select a drive...</option>
-                      {availableDrives.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          [{d.code}] {d.name} ({d.visibility})
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '8px', maxHeight: '140px', overflowY: 'auto', backgroundColor: '#FFFFFF', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {availableDrives.map((d) => {
+                        const isChecked = createSelectedDriveIds.includes(d.id);
+                        return (
+                          <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', fontSize: '12.5px', cursor: 'pointer', borderRadius: '6px', backgroundColor: isChecked ? '#EFF6FF' : 'transparent' }}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCreateSelectedDriveIds((prev) => (prev.includes(d.id) ? prev : [...prev, d.id]));
+                                } else {
+                                  setCreateSelectedDriveIds((prev) => prev.filter((id) => id !== d.id));
+                                }
+                              }}
+                            />
+                            <strong style={{ color: '#0052CC' }}>[{d.code}]</strong>
+                            <span style={{ color: '#0F172A', fontWeight: 600 }}>{d.name}</span>
+                            <span style={{ fontSize: '11px', color: '#64748B' }}>
+                              ({d.visibility}{d.drive_code ? ` • Code: ${d.drive_code}` : ''})
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               )}
@@ -2524,8 +2901,10 @@ export function AdminAssessmentsView({
             </div>
           </div>
         )}
-        {/* Inline Section Modal mounted inside wizard */}
+        {/* Inline Section, Drive, & Wizard Question Modals mounted inside wizard */}
         {renderInlineSectionModal()}
+        {renderInlineDriveModal()}
+        {renderWizardQuestionModal()}
       </div>
     );
   }
@@ -4688,9 +5067,27 @@ export function AdminAssessmentsView({
 
               {/* Drive Association & College Hierarchy in Edit Modal (Phase 2.2.4) */}
               <div style={{ marginBottom: '20px', padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-                  Drive Association & Eligibility Hierarchy
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                    Drive Association & Eligibility Hierarchy
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenInlineDriveModal('edit')}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #0D52D6',
+                      backgroundColor: '#EFF6FF',
+                      color: '#0D52D6',
+                      fontSize: '11.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + Create New Drive
+                  </button>
+                </div>
                 <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
                     <input
@@ -4801,8 +5198,9 @@ export function AdminAssessmentsView({
         </div>
       )}
 
-      {/* ─── INLINE CREATE SECTION MODAL ──────────────────────────────── */}
+      {/* ─── INLINE CREATE SECTION & DRIVE MODALS ──────────────────────────────── */}
       {renderInlineSectionModal()}
+      {renderInlineDriveModal()}
 
       {/* ─── CLOSE ASSESSMENT CONFIRMATION MODAL ─────────────────────── */}
       {showCloseModal && selectedAssessment && (
@@ -6966,18 +7364,8 @@ export function AdminAssessmentsView({
         </div>
       )}
 
-      {/* Wizard Question Authoring Modal (Phase 2) */}
-      {showWizardQuestionModal && (
-        <AdminQuestionEditorModal
-          question={null}
-          isOpen={showWizardQuestionModal}
-          onClose={() => setShowWizardQuestionModal(false)}
-          onSave={handleSaveWizardQuestion}
-          saving={wizardSavingQuestion}
-          sections={availableSections}
-          forcedType={wizardQuestionType}
-        />
-      )}
+      {/* Wizard Question Authoring Modal */}
+      {renderWizardQuestionModal()}
     </div>
   );
 }

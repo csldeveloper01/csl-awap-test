@@ -6,9 +6,15 @@ let cachedScreenStream: MediaStream | null = null;
 
 export function setProctoringStreams(
   session: ProctoringSessionResponse,
-  camera: MediaStream,
-  screen: MediaStream
+  camera: MediaStream | null,
+  screen: MediaStream | null
 ): void {
+  if (cachedCameraStream && cachedCameraStream !== camera) {
+    cachedCameraStream.getTracks().forEach((t) => t.stop());
+  }
+  if (cachedScreenStream && cachedScreenStream !== screen) {
+    cachedScreenStream.getTracks().forEach((t) => t.stop());
+  }
   cachedSession = session;
   cachedCameraStream = camera;
   cachedScreenStream = screen;
@@ -30,7 +36,10 @@ export function getProctoringStreams(): {
   };
 }
 
-export function updateCachedScreenStream(newStream: MediaStream): void {
+export function updateCachedScreenStream(newStream: MediaStream | null): void {
+  if (cachedScreenStream && cachedScreenStream !== newStream) {
+    cachedScreenStream.getTracks().forEach((t) => t.stop());
+  }
   cachedScreenStream = newStream;
 }
 

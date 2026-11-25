@@ -59,6 +59,8 @@ from .admin_views import (
     AdminQuestionPoolDetailView,
     AdminQuestionPoolItemsView,
     AdminQuestionPoolQuestionsView,
+    AdminQuestionPoolImportPreviewView,
+    AdminQuestionPoolImportCSVView,
     AdminAssessmentPoolSourcesView,
     AdminAccessGrantListView,
     AdminRecoveryEventsListView,
@@ -179,6 +181,8 @@ urlpatterns = [
     path("question-pools/<uuid:pk>/items/", AdminQuestionPoolItemsView.as_view(), name="admin-question-pool-items"),
     path("question-pools/<uuid:pk>/questions/", AdminQuestionPoolQuestionsView.as_view(), name="admin-question-pool-questions"),
     path("question-pools/<uuid:pk>/questions/<int:question_id>/", AdminQuestionPoolQuestionsView.as_view(), name="admin-question-pool-questions-detail"),
+    path("question-pools/<uuid:pk>/import-preview/", AdminQuestionPoolImportPreviewView.as_view(), name="admin-question-pool-import-preview"),
+    path("question-pools/<uuid:pk>/import-csv/", AdminQuestionPoolImportCSVView.as_view(), name="admin-question-pool-import-csv"),
     path("assessments/<uuid:pk>/pool-sources/", AdminAssessmentPoolSourcesView.as_view(), name="admin-assessment-pool-sources"),
 
     # Access Grants & Structured Recovery Auditing

@@ -3,6 +3,7 @@ import { AccessibleModal } from './AccessibleModal';
 import {
   reassessAdminStudentAccess,
   exportCandidateDataCsv,
+  exportAdvancedStudentData,
   type AdminCollege,
   type AdminAssessment,
   type AdminDrive,
@@ -304,6 +305,7 @@ export function ExportStudentDataModal({
   const [assessmentId, setAssessmentId] = useState('');
   const [driveId, setDriveId] = useState('');
   const [attemptState, setAttemptState] = useState('');
+  const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
   const [exporting, setExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -312,25 +314,34 @@ export function ExportStudentDataModal({
     setExporting(true);
     setErrorMsg(null);
     try {
-      const blob = await exportCandidateDataCsv({
-        college_id: collegeId || undefined,
-        assessment_id: assessmentId || undefined,
-        drive_id: driveId || undefined,
-        state: attemptState || undefined,
-      });
+      if (exportFormat === 'xlsx') {
+        await exportAdvancedStudentData({
+          format: 'xlsx',
+          college_id: collegeId ? Number(collegeId) : undefined,
+          assessment_id: assessmentId || undefined,
+          drive_id: driveId || undefined,
+          state: attemptState || undefined,
+        });
+      } else {
+        const blob = await exportCandidateDataCsv({
+          college_id: collegeId || undefined,
+          assessment_id: assessmentId || undefined,
+          drive_id: driveId || undefined,
+          state: attemptState || undefined,
+        });
 
-      // Trigger browser file download
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `csl_candidates_export_${new Date().toISOString().split('T')[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `csl_candidates_export_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }
       onClose();
-    } catch (err: any) {
-      setErrorMsg('Failed to export candidate CSV data.');
+    } catch {
+      setErrorMsg(`Failed to export candidate data as ${exportFormat.toUpperCase()}.`);
     } finally {
       setExporting(false);
     }
@@ -462,6 +473,28 @@ export function ExportStudentDataModal({
           </select>
         </div>
 
+        <div>
+          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+            Export File Format *
+          </label>
+          <select
+            value={exportFormat}
+            onChange={(e) => setExportFormat(e.target.value as 'xlsx' | 'csv')}
+            style={{
+              width: '100%',
+              padding: '10px 14px',
+              borderRadius: '10px',
+              border: '1px solid #CBD5E1',
+              fontSize: '14px',
+              backgroundColor: '#FFFFFF',
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="xlsx">Excel Workbook (.xlsx) — Styled via Global Export Settings</option>
+            <option value="csv">Comma-Separated Values (.csv) — Plain Unstyled Text</option>
+          </select>
+        </div>
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
           <button
             type="button"
@@ -493,7 +526,7 @@ export function ExportStudentDataModal({
               cursor: exporting ? 'not-allowed' : 'pointer',
             }}
           >
-            {exporting ? 'Generating CSV...' : 'Download CSV'}
+            {exporting ? `Generating ${exportFormat.toUpperCase()}...` : `Download ${exportFormat.toUpperCase()}`}
           </button>
         </div>
       </form>
@@ -520,8 +553,9 @@ export function ImportQuestionsCSVModal({
   const [destinationMode, setDestinationMode] = useState<'GLOBAL_ONLY' | 'EXISTING_POOLS' | 'NEW_POOL'>('GLOBAL_ONLY');
   const [selectedPoolIds, setSelectedPoolIds] = useState<string[]>([]);
   const [newPoolName, setNewPoolName] = useState('');
+  const [addToGlobalBank, setAddToGlobalBank] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ success_count: number; skipped_count: number; error_count: number; errors: string[] } | null>(null);
+  const [result, setResult] = useState<{ success_count: number; skipped_count: number; error_count: number; errors: Array<string | { row?: number; error?: string }> } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -536,26 +570,23 @@ export function ImportQuestionsCSVModal({
     setLoading(true);
     setResult(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('destination_mode', destinationMode);
-      if (destinationMode === 'EXISTING_POOLS') {
-        formData.append('pool_ids', JSON.stringify(selectedPoolIds));
-      } else if (destinationMode === 'NEW_POOL') {
-        formData.append('new_pool_name', newPoolName.trim());
-      }
+      const effectiveMode =
+        destinationMode === 'GLOBAL_ONLY'
+          ? 'GLOBAL_ONLY'
+          : addToGlobalBank
+          ? 'GLOBAL_AND_POOLS'
+          : destinationMode;
 
-      // We call the API endpoint with FormData
-      const res = await importAdminQuestionsCSV(undefined, undefined, undefined, {
-        file,
-        destination_mode: destinationMode,
-        pool_ids: selectedPoolIds,
-        new_pool_name: newPoolName.trim(),
-      } as any);
+      const res = await importAdminQuestionsCSV(undefined, file, undefined, undefined, {
+        destination_mode: effectiveMode,
+        pool_ids: destinationMode === 'EXISTING_POOLS' ? selectedPoolIds : undefined,
+        new_pool_name: destinationMode === 'NEW_POOL' ? newPoolName.trim() : undefined,
+        add_to_global_bank: destinationMode === 'GLOBAL_ONLY' ? true : addToGlobalBank,
+      });
 
       setResult({
         success_count: res.success_count || 0,
-        skipped_count: (res as any).skipped_count || 0,
+        skipped_count: res.skipped_count || 0,
         error_count: res.error_count || 0,
         errors: res.errors || [],
       });
@@ -602,7 +633,11 @@ export function ImportQuestionsCSVModal({
             {result.errors.length > 0 && (
               <ul style={{ margin: '4px 0 0', paddingLeft: '18px' }}>
                 {result.errors.slice(0, 5).map((err, i) => (
-                  <li key={i}>{err}</li>
+                  <li key={i}>
+                    {typeof err === 'string'
+                      ? err
+                      : `Row ${err?.row ?? '?'}: ${err?.error ?? JSON.stringify(err)}`}
+                  </li>
                 ))}
               </ul>
             )}
@@ -726,6 +761,17 @@ export function ImportQuestionsCSVModal({
               }}
             />
           </div>
+        )}
+
+        {destinationMode !== 'GLOBAL_ONLY' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={addToGlobalBank}
+              onChange={(e) => setAddToGlobalBank(e.target.checked)}
+            />
+            <span>Also add imported questions to the Global Question Bank</span>
+          </label>
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>

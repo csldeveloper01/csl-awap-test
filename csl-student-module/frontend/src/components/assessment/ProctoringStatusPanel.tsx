@@ -13,29 +13,35 @@ import {
 
 export interface ProctoringStatusPanelProps {
   session: ProctoringSessionResponse;
-  cameraStream: MediaStream;
-  screenStream: MediaStream;
+  cameraStream?: MediaStream | null;
+  screenStream?: MediaStream | null;
+  cameraBypassed?: boolean;
   onScreenShareReconnected?: (newStream: MediaStream) => void;
   onViolationThresholdExceeded?: (reason: string) => void;
 }
 
 export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
   session,
-  cameraStream,
-  screenStream,
+  cameraStream = null,
+  screenStream = null,
+  cameraBypassed = false,
   onScreenShareReconnected,
   onViolationThresholdExceeded,
 }) => {
-  const [cameraActive, setCameraActive] = useState<boolean>(true);
-  const [screenShareActive, setScreenShareActive] = useState<boolean>(true);
+  const hasLiveCamera = Boolean(cameraStream && cameraStream.getVideoTracks().some((t) => t.readyState === 'live'));
+  const hasLiveScreen = Boolean(screenStream && screenStream.getVideoTracks().some((t) => t.readyState === 'live'));
+
+  const [cameraActive, setCameraActive] = useState<boolean>(hasLiveCamera);
+  const [screenShareActive, setScreenShareActive] = useState<boolean>(hasLiveScreen);
   const [faceCount, setFaceCount] = useState<number>(1);
   const [poseDeviated, setPoseDeviated] = useState<boolean>(false);
   const [activeAlert, setActiveAlert] = useState<string>('');
   const [riskScore, setRiskScore] = useState<number>(session.risk_score || 0);
 
   // Recovery modal for screen share
-  const [showScreenRecovery, setShowScreenRecovery] = useState<boolean>(false);
+  const [showScreenRecovery, setShowScreenRecovery] = useState<boolean>(!hasLiveScreen);
   const [reconnectingScreen, setReconnectingScreen] = useState<boolean>(false);
+  const [recoveryError, setRecoveryError] = useState<string>('');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -65,38 +71,46 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
     }
   }, [cameraStream]);
 
-  // Monitor camera track lifecycle
+  // Monitor camera track lifecycle (skipped gracefully if admin bypassed webcam)
   useEffect(() => {
-    const videoTrack = cameraStream.getVideoTracks()[0];
-    if (videoTrack) {
-      const handleEnded = () => {
-        setCameraActive(false);
-        setActiveAlert('Camera stream was disconnected!');
-        updateProctoringCameraStatus(session.id, 'DISCONNECTED').catch(console.error);
-      };
-      videoTrack.addEventListener('ended', handleEnded);
-      return () => videoTrack.removeEventListener('ended', handleEnded);
+    const videoTrack = cameraStream?.getVideoTracks()[0];
+    if (!videoTrack || videoTrack.readyState !== 'live') {
+      setCameraActive(false);
+      return;
     }
+    setCameraActive(true);
+    const handleEnded = () => {
+      setCameraActive(false);
+      setActiveAlert('Camera stream was disconnected!');
+      updateProctoringCameraStatus(session.id, 'DISCONNECTED').catch(console.error);
+    };
+    videoTrack.addEventListener('ended', handleEnded);
+    return () => videoTrack.removeEventListener('ended', handleEnded);
   }, [cameraStream, session.id]);
 
   // Monitor screen share track lifecycle
   useEffect(() => {
-    const screenTrack = screenStream.getVideoTracks()[0];
-    if (screenTrack) {
-      const handleEnded = () => {
-        setScreenShareActive(false);
-        setShowScreenRecovery(true);
-        setActiveAlert('Screen sharing was interrupted! Please restore immediately.');
-        updateProctoringScreenShareStatus(session.id, 'INTERRUPTED').catch(console.error);
-      };
-      screenTrack.addEventListener('ended', handleEnded);
-      return () => screenTrack.removeEventListener('ended', handleEnded);
+    const screenTrack = screenStream?.getVideoTracks()[0];
+    if (!screenTrack || screenTrack.readyState !== 'live') {
+      setScreenShareActive(false);
+      setShowScreenRecovery(true);
+      return;
     }
+    setScreenShareActive(true);
+    setShowScreenRecovery(false);
+    const handleEnded = () => {
+      setScreenShareActive(false);
+      setShowScreenRecovery(true);
+      setActiveAlert('Screen sharing was interrupted! Please restore immediately.');
+      updateProctoringScreenShareStatus(session.id, 'INTERRUPTED').catch(console.error);
+    };
+    screenTrack.addEventListener('ended', handleEnded);
+    return () => screenTrack.removeEventListener('ended', handleEnded);
   }, [screenStream, session.id]);
 
   // Helper to capture a canvas snapshot frame and upload as evidence
   const captureAndUploadSnapshot = async (reason: string, eventId?: number) => {
-    if (!videoRef.current || videoRef.current.readyState < 2) return;
+    if (!cameraStream || !videoRef.current || videoRef.current.readyState < 2) return;
     try {
       const canvas = document.createElement('canvas');
       canvas.width = 320;
@@ -116,8 +130,11 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
     }
   };
 
-  // Background Face Detection & Pose Tracking Loop (throttled to ~750ms interval)
+  // Background Face Detection & Pose Tracking Loop (throttled to ~750ms interval; skipped if camera bypassed/absent)
   useEffect(() => {
+    if (!cameraStream || !cameraStream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      return;
+    }
     let isCancelled = false;
 
     const setupLandmarker = async () => {
@@ -239,7 +256,7 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
       isCancelled = true;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [session.id, screenShareActive]);
+  }, [session.id, screenShareActive, cameraStream]);
 
   // Browser Integrity Event Listeners
   useEffect(() => {
@@ -296,6 +313,7 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
   // Screen Share Reconnection Workflow
   const handleReconnectScreenShare = async () => {
     setReconnectingScreen(true);
+    setRecoveryError('');
     try {
       const newStream = await navigator.mediaDevices.getDisplayMedia({
         video: { displaySurface: 'monitor' } as any,
@@ -303,12 +321,13 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
       });
 
       const track = newStream.getVideoTracks()[0];
-      if (track) {
-        track.onended = () => {
-          setScreenShareActive(false);
-          setShowScreenRecovery(true);
-          updateProctoringScreenShareStatus(session.id, 'INTERRUPTED').catch(console.error);
-        };
+      if (!track || track.readyState !== 'live') {
+        newStream.getTracks().forEach((t) => t.stop());
+        throw new Error('No active screen video track was selected.');
+      }
+
+      if (screenStream && screenStream !== newStream) {
+        screenStream.getTracks().forEach((t) => t.stop());
       }
 
       setScreenShareActive(true);
@@ -324,8 +343,12 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
       if (onScreenShareReconnected) {
         onScreenShareReconnected(newStream);
       }
-    } catch (err) {
-      alert('Screen share reconnection failed. Please grant permission to share your screen.');
+    } catch (err: any) {
+      setRecoveryError(
+        err?.name === 'NotAllowedError'
+          ? 'Screen share permission was cancelled or denied. Please choose your entire screen to resume.'
+          : err?.message || 'Screen share reconnection failed. Please grant permission to share your screen.'
+      );
     } finally {
       setReconnectingScreen(false);
     }
@@ -349,87 +372,117 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
           fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
         }}
       >
-        {/* Webcam Live Thumbnail Preview */}
-        <div
-          style={{
-            position: 'relative',
-            width: '140px',
-            height: '105px',
-            borderRadius: '8px',
-            overflow: 'hidden',
-            backgroundColor: '#0F172A',
-            marginBottom: '8px',
-          }}
-        >
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              transform: 'scaleX(-1)',
-            }}
-          />
-
-          {/* Sentinel Status Badge overlay */}
+        {/* Webcam Live Thumbnail Preview (or Camera-Waived Sentinel Pill) */}
+        {hasLiveCamera ? (
           <div
             style={{
-              position: 'absolute',
-              top: '4px',
-              left: '4px',
-              backgroundColor: 'rgba(15, 23, 42, 0.8)',
-              padding: '2px 6px',
-              borderRadius: '4px',
-              fontSize: '9px',
-              fontWeight: 800,
-              color: '#38BDF8',
-              letterSpacing: '0.04em',
+              position: 'relative',
+              width: '140px',
+              height: '105px',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              backgroundColor: '#0F172A',
+              marginBottom: '8px',
             }}
           >
-            SENTINEL
-          </div>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                transform: 'scaleX(-1)',
+              }}
+            />
 
-          {/* Face count indicator */}
+            {/* Sentinel Status Badge overlay */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '4px',
+                left: '4px',
+                backgroundColor: 'rgba(15, 23, 42, 0.8)',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontSize: '9px',
+                fontWeight: 800,
+                color: '#38BDF8',
+                letterSpacing: '0.04em',
+              }}
+            >
+              SENTINEL
+            </div>
+
+            {/* Face count indicator */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '4px',
+                right: '4px',
+                backgroundColor: faceCount === 1 ? 'rgba(16, 185, 129, 0.9)' : 'rgba(239, 68, 68, 0.9)',
+                color: '#FFFFFF',
+                padding: '1px 5px',
+                borderRadius: '3px',
+                fontSize: '9px',
+                fontWeight: 700,
+              }}
+            >
+              {faceCount === 1 ? '1 Face' : faceCount === 0 ? 'No Face' : `${faceCount} Faces`}
+            </div>
+          </div>
+        ) : (
           <div
             style={{
-              position: 'absolute',
-              bottom: '4px',
-              right: '4px',
-              backgroundColor: faceCount === 1 ? 'rgba(16, 185, 129, 0.9)' : 'rgba(239, 68, 68, 0.9)',
-              color: '#FFFFFF',
-              padding: '1px 5px',
-              borderRadius: '3px',
-              fontSize: '9px',
-              fontWeight: 700,
+              padding: '8px 10px',
+              borderRadius: '8px',
+              backgroundColor: '#F0F9FF',
+              border: '1px solid #BAE6FD',
+              marginBottom: '8px',
+              textAlign: 'center',
             }}
           >
-            {faceCount === 1 ? '1 Face' : faceCount === 0 ? 'No Face' : `${faceCount} Faces`}
+            <div style={{ fontSize: '9px', fontWeight: 800, color: '#0369A1', letterSpacing: '0.04em' }}>
+              SENTINEL ACTIVE
+            </div>
+            <div style={{ fontSize: '10px', color: '#0C4A6E', fontWeight: 600, marginTop: '2px' }}>
+              {cameraBypassed ? 'Camera Waiver Applied' : 'Screen & Activity Guard'}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Status Indicators Pill */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: '#64748B' }}>Camera:</span>
-            <span style={{ fontWeight: 700, color: cameraActive ? '#16A34A' : '#DC2626' }}>
-              {cameraActive ? '● Active' : '● Offline'}
+            <span
+              style={{
+                fontWeight: 700,
+                color: cameraActive ? '#16A34A' : cameraBypassed ? '#0284C7' : '#DC2626',
+              }}
+            >
+              {cameraActive ? '● Active' : cameraBypassed ? '● Waived' : '● Offline'}
             </span>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: '#64748B' }}>Screen Share:</span>
             <span style={{ fontWeight: 700, color: screenShareActive ? '#16A34A' : '#DC2626' }}>
-              {screenShareActive ? '● Sharing' : '● Stoppped'}
+              {screenShareActive ? '● Sharing' : '● Stopped'}
             </span>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: '#64748B' }}>Head Pose:</span>
-            <span style={{ fontWeight: 700, color: poseDeviated ? '#D97706' : '#16A34A' }}>
-              {poseDeviated ? '▲ Deviated' : '● Centred'}
+            <span
+              style={{
+                fontWeight: 700,
+                color: !hasLiveCamera ? '#0284C7' : poseDeviated ? '#D97706' : '#16A34A',
+              }}
+            >
+              {!hasLiveCamera ? '● Waived' : poseDeviated ? '▲ Deviated' : '● Centred'}
             </span>
           </div>
 
@@ -526,10 +579,26 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
             <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
               Screen Sharing Interrupted
             </h3>
-            <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.6, marginBottom: '24px' }}>
-              Your examination screen sharing stream has been stopped. To maintain examination integrity, assessment
-              interaction is paused until screen sharing is restored.
+            <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.6, marginBottom: '20px' }}>
+              Your examination screen sharing stream has been stopped or disconnected. To maintain examination integrity,
+              assessment interaction is paused until screen sharing is restored.
             </p>
+
+            {recoveryError && (
+              <div
+                style={{
+                  marginBottom: '16px',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  backgroundColor: '#FEF2F2',
+                  border: '1px solid #FCA5A5',
+                  color: '#991B1B',
+                  fontSize: '13px',
+                }}
+              >
+                ⚠️ {recoveryError}
+              </div>
+            )}
 
             <button
               type="button"

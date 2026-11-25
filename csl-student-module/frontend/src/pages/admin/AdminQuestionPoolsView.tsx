@@ -7,18 +7,24 @@ import {
   deleteAdminQuestionPool,
   manageAdminQuestionPoolItems,
   getAdminQuestions,
+  getAdminQuestion,
   getAdminSections,
   archiveAdminQuestion,
   updateAdminQuestion,
   createAdminQuestionInPool,
   removeAdminQuestionFromPool,
+  previewAdminPoolCSV,
+  importAdminPoolCSV,
   type AdminQuestionPool,
   type AdminQuestion,
   type AdminSection,
+  type CSVImportPreviewResponse,
+  type SectionMappingRule,
 } from '../../api/admin';
 import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
+import { formatApiError } from '../../utils/errorFormatter';
 
 interface AdminQuestionPoolsViewProps {
   onCreateQuestion?: () => void;
@@ -29,7 +35,6 @@ interface AdminQuestionPoolsViewProps {
 
 export function AdminQuestionPoolsView({
   onCreateQuestion,
-  onImportCSV,
   onViewCentralBank,
   onNavigateToAssessment,
 }: AdminQuestionPoolsViewProps = {}) {
@@ -69,6 +74,25 @@ export function AdminQuestionPoolsView({
   const [poolQuestionType, setPoolQuestionType] = useState<'MCQ' | 'CODING'>('MCQ');
   const [editingQuestionInPool, setEditingQuestionInPool] = useState<AdminQuestion | null>(null);
   const [savingPoolQuestion, setSavingPoolQuestion] = useState(false);
+
+  // Pool-Scoped CSV Import Modal State
+  const [showPoolCsvModal, setShowPoolCsvModal] = useState(false);
+  const [targetCsvPoolId, setTargetCsvPoolId] = useState<string>('');
+  const [poolCsvStep, setPoolCsvStep] = useState<'UPLOAD' | 'PREVIEW' | 'RESULT'>('UPLOAD');
+  const [poolCsvFile, setPoolCsvFile] = useState<File | null>(null);
+  const [poolCsvText, setPoolCsvText] = useState('');
+  const [poolCsvAddToGlobal, setPoolCsvAddToGlobal] = useState(false); // Unchecked by default
+  const [poolCsvPreview, setPoolCsvPreview] = useState<CSVImportPreviewResponse | null>(null);
+  const [poolCsvSectionMapping, setPoolCsvSectionMapping] = useState<Record<string, SectionMappingRule>>({});
+  const [poolCsvLoading, setPoolCsvLoading] = useState(false);
+  const [poolCsvError, setPoolCsvError] = useState('');
+  const [poolCsvResult, setPoolCsvResult] = useState<{
+    success: boolean;
+    imported_count: number;
+    error_count: number;
+    errors: Array<string | { row?: number; error?: string }>;
+    add_to_global_bank: boolean;
+  } | null>(null);
 
   // Drawer Filters
   const [drawerSearch, setDrawerSearch] = useState('');
@@ -228,20 +252,113 @@ export function AdminQuestionPoolsView({
     setShowPoolQuestionModal(true);
   };
 
+  const handleOpenPoolCsvImport = (pool?: AdminQuestionPool | null) => {
+    const selectedPool = pool || managingPool || pools[0] || null;
+    setTargetCsvPoolId(selectedPool ? selectedPool.id : '');
+    setPoolCsvStep('UPLOAD');
+    setPoolCsvFile(null);
+    setPoolCsvText('');
+    setPoolCsvAddToGlobal(false);
+    setPoolCsvPreview(null);
+    setPoolCsvSectionMapping({});
+    setPoolCsvError('');
+    setPoolCsvResult(null);
+    setShowPoolCsvModal(true);
+  };
+
+  const handlePreviewPoolCsv = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCsvPoolId) {
+      setPoolCsvError('Please select a target Question Pool first.');
+      return;
+    }
+    if (!poolCsvFile && !poolCsvText.trim()) {
+      setPoolCsvError('Please select a CSV file or paste CSV text.');
+      return;
+    }
+    setPoolCsvLoading(true);
+    setPoolCsvError('');
+    try {
+      const preview = await previewAdminPoolCSV(
+        targetCsvPoolId,
+        poolCsvFile || undefined,
+        poolCsvText || undefined
+      );
+      setPoolCsvPreview(preview);
+      const initialMapping: Record<string, SectionMappingRule> = {};
+      (preview.detected_sections || []).forEach((sec) => {
+        const label = sec.detected_name || sec.raw_section || sec.code;
+        if (sec.matched_section_id) {
+          initialMapping[sec.code] = {
+            action: 'map',
+            target_section_id: sec.matched_section_id,
+            target_section_name: sec.matched_section_name || label,
+          };
+        } else {
+          initialMapping[sec.code] = {
+            action: 'create',
+            target_section_code: sec.code,
+            target_section_name: label,
+          };
+        }
+      });
+      setPoolCsvSectionMapping(initialMapping);
+      setPoolCsvStep('PREVIEW');
+    } catch (err: unknown) {
+      setPoolCsvError(formatApiError(err, 'Failed to parse CSV preview for this pool.'));
+    } finally {
+      setPoolCsvLoading(false);
+    }
+  };
+
+  const handleCommitPoolCsv = async () => {
+    if (!targetCsvPoolId) {
+      setPoolCsvError('Please select a target Question Pool.');
+      return;
+    }
+    setPoolCsvLoading(true);
+    setPoolCsvError('');
+    try {
+      const res = await importAdminPoolCSV(targetCsvPoolId, {
+        file: poolCsvFile || undefined,
+        csvContent: poolCsvText || undefined,
+        sectionMapping: poolCsvSectionMapping,
+        addToGlobalBank: poolCsvAddToGlobal,
+      });
+      setPoolCsvResult({
+        success: Boolean(res.success),
+        imported_count: res.imported_count ?? res.success_count ?? 0,
+        error_count: res.error_count ?? 0,
+        errors: res.errors || [],
+        add_to_global_bank: Boolean(res.add_to_global_bank),
+      });
+      setPoolCsvStep('RESULT');
+      await loadPools();
+      if (managingPool && managingPool.id === targetCsvPoolId) {
+        const refreshed = await getAdminQuestionPoolDetail(managingPool.id);
+        setManagingPool(refreshed);
+      }
+    } catch (err: unknown) {
+      setPoolCsvError(formatApiError(err, 'Pool CSV import failed.'));
+    } finally {
+      setPoolCsvLoading(false);
+    }
+  };
+
   const handleEditQuestionInPool = async (questionId: number) => {
     try {
       setPoolDetailLoading(true);
-      const allQ = await getAdminQuestions();
-      const match = allQ.find((q) => q.id === questionId);
-      if (match) {
-        setEditingQuestionInPool(match);
-        setPoolQuestionType(match.section_type === 'CODING' || match.assessment_type === 'CODING' ? 'CODING' : 'MCQ');
-        setShowPoolQuestionModal(true);
-      } else {
-        alert('Could not find question details.');
-      }
-    } catch {
-      alert('Failed to load question details for editing.');
+      const match = await getAdminQuestion(questionId);
+      setEditingQuestionInPool(match);
+      const isCoding =
+        match.question_type === 'CODING' ||
+        Boolean(match.has_programming_details) ||
+        match.section_type === 'CODING' ||
+        match.assessment_type === 'CODING';
+      setPoolQuestionType(isCoding ? 'CODING' : 'MCQ');
+      setShowPoolQuestionModal(true);
+    } catch (err: unknown) {
+      alert(formatApiError(err, 'Failed to load question details for editing.'));
     } finally {
       setPoolDetailLoading(false);
     }
@@ -265,11 +382,14 @@ export function AdminQuestionPoolsView({
     try {
       setSavingPoolQuestion(true);
       if (editingQuestionInPool) {
-        await updateAdminQuestion(editingQuestionInPool.id, data);
+        await updateAdminQuestion(editingQuestionInPool.id, {
+          ...data,
+          question_type: data.question_type || poolQuestionType,
+        });
       } else {
         await createAdminQuestionInPool(managingPool.id, {
           ...data,
-          question_type: poolQuestionType,
+          question_type: data.question_type || poolQuestionType,
         });
       }
       setShowPoolQuestionModal(false);
@@ -277,8 +397,6 @@ export function AdminQuestionPoolsView({
       const detail = await getAdminQuestionPoolDetail(managingPool.id);
       setManagingPool(detail);
       loadPools();
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to save question in pool.');
     } finally {
       setSavingPoolQuestion(false);
     }
@@ -631,16 +749,10 @@ export function AdminQuestionPoolsView({
           + Create Pool
         </button>
 
-        {/* Import CSV Button (Mockup 5) */}
+        {/* Pool-Scoped Import CSV Button */}
         <button
           type="button"
-          onClick={() => {
-            if (onImportCSV) {
-              onImportCSV();
-            } else {
-              alert('Please open CSV import from the main Question Bank view.');
-            }
-          }}
+          onClick={() => handleOpenPoolCsvImport(managingPool || pools[0] || null)}
           style={{
             backgroundColor: '#22C55E',
             color: '#FFFFFF',
@@ -839,7 +951,15 @@ export function AdminQuestionPoolsView({
                     Manage Pool
                   </button>
 
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenPoolCsvImport(pool)}
+                      style={{ background: 'none', border: 'none', fontSize: '11px', fontWeight: 700, color: '#059669', cursor: 'pointer' }}
+                    >
+                      Import CSV
+                    </button>
+                    <span style={{ color: '#CBD5E1' }}>•</span>
                     <button
                       type="button"
                       onClick={() => handleOpenEditModal(pool)}
@@ -923,22 +1043,40 @@ export function AdminQuestionPoolsView({
                     </span>
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenManageQuestions(pool)}
-                      style={{
-                        padding: '6px 14px',
-                        backgroundColor: '#0D52D6',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '16px',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Manage Pool
-                    </button>
+                    <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPoolCsvImport(pool)}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#ECFDF5',
+                          color: '#065F46',
+                          border: '1px solid #A7F3D0',
+                          borderRadius: '16px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Import CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenManageQuestions(pool)}
+                        style={{
+                          padding: '6px 14px',
+                          backgroundColor: '#0D52D6',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '16px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Manage Pool
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1253,6 +1391,25 @@ export function AdminQuestionPoolsView({
                 </button>
                 <button
                   type="button"
+                  onClick={() => handleOpenPoolCsvImport(managingPool)}
+                  style={{
+                    padding: '8px 12px',
+                    backgroundColor: '#ECFDF5',
+                    color: '#065F46',
+                    border: '1px solid #A7F3D0',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <span>Import CSV</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleOpenAddQuestions}
                   style={{
                     padding: '8px 12px',
@@ -1351,22 +1508,40 @@ export function AdminQuestionPoolsView({
                   <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 16px 0' }}>
                     Add questions from the independent Question Bank to populate this pool.
                   </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenAddQuestions}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#1455B8',
-                      color: '#FFFFFF',
-                      border: 'none',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    + Add Questions from Bank
-                  </button>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenPoolCsvImport(managingPool)}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: '#16A34A',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Import CSV to Pool
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenAddQuestions}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: '#1455B8',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Add Questions from Bank
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -1869,8 +2044,258 @@ export function AdminQuestionPoolsView({
           onSave={handleSaveQuestionInPool}
           saving={savingPoolQuestion}
           sections={sections}
-          forcedType={poolQuestionType}
+          forcedType={editingQuestionInPool ? undefined : poolQuestionType}
         />
+      )}
+
+      {/* Pool-Scoped CSV Import Modal */}
+      {showPoolCsvModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1200,
+            padding: '16px',
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '14px',
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: '24px',
+              boxShadow: '0 24px 48px rgba(15, 23, 42, 0.25)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0B2E6F' }}>
+                  Import Questions CSV to Pool
+                </h3>
+                <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#64748B' }}>
+                  Imported questions are scoped ONLY to the selected pool by default and do not clutter Global Question Bank unless opted in below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPoolCsvModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#64748B', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {poolCsvError && (
+              <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', fontSize: '12.5px', fontWeight: 600, marginBottom: '14px' }}>
+                {poolCsvError}
+              </div>
+            )}
+
+            {poolCsvStep === 'UPLOAD' && (
+              <form onSubmit={handlePreviewPoolCsv} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                    Target Question Pool *
+                  </label>
+                  <select
+                    value={targetCsvPoolId}
+                    onChange={(e) => setTargetCsvPoolId(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px', backgroundColor: '#F8FAFC' }}
+                  >
+                    <option value="">-- Select Target Pool --</option>
+                    {pools.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        [{p.code}] {p.name} ({p.questions_count} existing questions)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                    Upload CSV File (.csv)
+                  </label>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => setPoolCsvFile(e.target.files?.[0] || null)}
+                    style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px dashed #CBD5E1', backgroundColor: '#F8FAFC', fontSize: '13px' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                    Or Paste CSV Content Directly
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={poolCsvText}
+                    onChange={(e) => setPoolCsvText(e.target.value)}
+                    placeholder="prompt,section_type,difficulty,option_a,option_b,option_c,option_d,correct_option,marks"
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={poolCsvAddToGlobal}
+                    onChange={(e) => setPoolCsvAddToGlobal(e.target.checked)}
+                    data-testid="pool-csv-add-global-checkbox"
+                  />
+                  <span>Also add imported questions to the Global Question Bank</span>
+                </label>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPoolCsvModal(false)}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#475569', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={poolCsvLoading}
+                    style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#0D52D6', color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: poolCsvLoading ? 'not-allowed' : 'pointer' }}
+                  >
+                    {poolCsvLoading ? 'Analyzing CSV...' : 'Preview & Validate →'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {poolCsvStep === 'PREVIEW' && poolCsvPreview && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ padding: '12px 14px', borderRadius: '8px', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', fontSize: '13px', color: '#1E40AF' }}>
+                  <strong>{poolCsvPreview.valid_count ?? poolCsvPreview.total_rows}</strong> valid of{' '}
+                  <strong>{poolCsvPreview.total_rows}</strong> row(s) • Detected Type:{' '}
+                  <strong>{poolCsvPreview.detected_type || 'MCQ'}</strong> • Scope:{' '}
+                  <strong>{poolCsvAddToGlobal ? 'Pool + Global Bank' : 'Pool-Scoped Only'}</strong>
+                </div>
+
+                {poolCsvPreview.errors && poolCsvPreview.errors.length > 0 && (
+                  <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: '#FEF2F2', border: '1px solid #FECACA', fontSize: '12px', color: '#991B1B' }}>
+                    <strong>Row Warnings ({poolCsvPreview.error_count ?? poolCsvPreview.errors.length}):</strong>
+                    <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                      {poolCsvPreview.errors.map((err, i) => (
+                        <li key={i}>
+                          {typeof err === 'string'
+                            ? err
+                            : `Row ${err?.row ?? '?'}: ${err?.error ?? JSON.stringify(err)}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {poolCsvPreview.detected_sections && poolCsvPreview.detected_sections.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {poolCsvPreview.detected_sections.map((sec) => {
+                      const rule = poolCsvSectionMapping[sec.code] || { action: 'create' };
+                      return (
+                        <div key={sec.code} style={{ border: '1px solid #CBD5E1', borderRadius: '8px', padding: '10px 12px', backgroundColor: '#F8FAFC', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: '12.5px' }}>
+                            <strong>[{sec.code}]</strong> {sec.detected_name || sec.raw_section} ({sec.row_count ?? sec.count} rows)
+                          </div>
+                          <select
+                            value={rule.action}
+                            onChange={(e) => {
+                              const action = e.target.value as 'map' | 'create' | 'skip';
+                              setPoolCsvSectionMapping((prev) => ({
+                                ...prev,
+                                [sec.code]: {
+                                  ...prev[sec.code],
+                                  action,
+                                  target_section_id: action === 'map' ? sections[0]?.id : undefined,
+                                  target_section_code: action === 'create' ? sec.code : undefined,
+                                  target_section_name: action === 'create' ? (sec.detected_name || sec.raw_section || sec.code) : undefined,
+                                },
+                              }));
+                            }}
+                            style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', backgroundColor: '#FFFFFF' }}
+                          >
+                            <option value="map">Map to Existing Section</option>
+                            <option value="create">Create Section</option>
+                            <option value="skip">Skip Rows</option>
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={poolCsvAddToGlobal}
+                    onChange={(e) => setPoolCsvAddToGlobal(e.target.checked)}
+                  />
+                  <span>Also add imported questions to the Global Question Bank</span>
+                </label>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPoolCsvStep('UPLOAD')}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#475569', fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    type="button"
+                    disabled={poolCsvLoading}
+                    onClick={handleCommitPoolCsv}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: poolCsvLoading ? 'not-allowed' : 'pointer' }}
+                  >
+                    {poolCsvLoading ? 'Importing...' : 'Confirm & Import to Pool'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {poolCsvStep === 'RESULT' && poolCsvResult && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ padding: '14px', borderRadius: '8px', backgroundColor: poolCsvResult.error_count > 0 ? '#FFFBEB' : '#F0FDF4', border: `1px solid ${poolCsvResult.error_count > 0 ? '#FDE68A' : '#BBF7D0'}`, fontSize: '13px', color: '#0F172A' }}>
+                  <strong>
+                    Imported {poolCsvResult.imported_count} question(s) into pool
+                  </strong>
+                  <div style={{ fontSize: '12px', color: '#475569', marginTop: '4px' }}>
+                    Scope: {poolCsvResult.add_to_global_bank ? 'Pool + Global Question Bank' : 'Pool-Scoped Only (isolated from Global Question Bank)'}
+                  </div>
+                  {poolCsvResult.error_count > 0 && (
+                    <ul style={{ margin: '8px 0 0 16px', padding: 0, color: '#991B1B', fontSize: '12px' }}>
+                      {poolCsvResult.errors.map((err, i) => (
+                        <li key={i}>
+                          {typeof err === 'string'
+                            ? err
+                            : `Row ${err?.row ?? '?'}: ${err?.error ?? JSON.stringify(err)}`}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPoolCsvModal(false)}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#0B2E6F', color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

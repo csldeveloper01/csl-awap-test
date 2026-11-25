@@ -17,7 +17,7 @@ import {
 
 export interface ProctoringInitializerProps {
   attemptId: string;
-  onSuccess: (session: ProctoringSessionResponse, cameraStream: MediaStream, screenStream: MediaStream) => void;
+  onSuccess: (session: ProctoringSessionResponse, cameraStream: MediaStream | null, screenStream: MediaStream) => void;
   onCancel?: () => void;
   bypassGranted?: boolean;
 }
@@ -43,6 +43,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   const [faceEngineError, setFaceEngineError] = useState<string>('');
   const [calibrationError, setCalibrationError] = useState<string>('');
   const [screenShareError, setScreenShareError] = useState<string>('');
+  const [sessionError, setSessionError] = useState<string>('');
 
   // Streams
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -57,6 +58,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   // Refs for stable stream and calibration baseline persistence across async closures
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const handedOffRef = useRef<boolean>(false);
   const activeSessionRef = useRef<ProctoringSessionResponse | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -64,8 +66,19 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   const baselinePoseRef = useRef<HeadOrientation>({ yaw: 0, pitch: 0, roll: 0 });
   const detectedSignRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
 
-  // Overall workflow state: 'WELCOME' | 'CAMERA' | 'CALIBRATION' | 'SCREEN_SHARE' | 'CONFIRM'
+  // Overall workflow state
   const [activeStage, setActiveStage] = useState<'WELCOME' | 'CALIBRATION' | 'SCREEN_SHARE' | 'READY'>('WELCOME');
+
+  const stopHeldStreams = () => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    cameraStreamRef.current = null;
+    screenStreamRef.current = null;
+  };
 
   // Attach camera stream to video element
   useEffect(() => {
@@ -75,31 +88,62 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
     }
   }, [cameraStream, activeStage]);
 
-  // Clean up on unmount
+  // Stop streams if unmounted without handing off to the live exam room
   useEffect(() => {
     return () => {
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      if (!handedOffRef.current) {
+        stopHeldStreams();
       }
     };
   }, []);
 
+  const handleCancelClick = () => {
+    stopHeldStreams();
+    onCancel?.();
+  };
+
+  const handleBypassToScreenShare = () => {
+    setCameraStatus('SUCCESS');
+    setFaceEngineStatus('SUCCESS');
+    setCalibrationStatus('SUCCESS');
+    setActiveStage('SCREEN_SHARE');
+  };
+
   // Step 1: Start Camera Hardware
   const handleStartCamera = async () => {
+    if (cameraStatus === 'INITIALIZING') return;
+    if (bypassGranted) {
+      handleBypassToScreenShare();
+      return;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
     setCameraStatus('INITIALIZING');
     setCameraError('');
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Your browser does not support webcam hardware access.');
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user',
-        },
-        audio: false,
-      });
+      const existingCam = cameraStreamRef.current;
+      let stream: MediaStream;
+      if (existingCam && existingCam.getVideoTracks().some((t) => t.readyState === 'live')) {
+        stream = existingCam;
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user',
+          },
+          audio: false,
+        });
+      }
 
       cameraStreamRef.current = stream;
       setCameraStream(stream);
@@ -300,6 +344,8 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   // Step 5 & 6: Browser Checks & Security Session Init
   const handleCheckBrowserIntegrity = async (_scStream: MediaStream) => {
     setBrowserCheckStatus('INITIALIZING');
+    setSessionError('');
+    setScreenShareError('');
     try {
       if (!document.fullscreenEnabled) {
         throw new Error('Your browser does not permit fullscreen mode. Please update or unblock fullscreen.');
@@ -311,11 +357,13 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
       const session = await initProctoringSession(attemptId);
       activeSessionRef.current = session;
 
-      // Update hardware statuses
-      await updateProctoringCameraStatus(session.id, 'ACTIVE');
+      // Update hardware statuses accurately (never fabricate camera ACTIVE during bypass without webcam)
+      if (!bypassGranted && cameraStreamRef.current) {
+        await updateProctoringCameraStatus(session.id, 'ACTIVE');
+      }
       await updateProctoringScreenShareStatus(session.id, 'ACTIVE');
 
-      // Submit calibration baseline
+      // Submit calibration baseline when real calibration completed
       if (!bypassGranted && calibResultsRef.current.length > 0) {
         await submitProctoringCalibration(session.id, {
           baseline_orientation: baselinePoseRef.current,
@@ -325,7 +373,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
       }
 
       // Upload initial calibration snapshot frame
-      if (videoRef.current) {
+      if (!bypassGranted && videoRef.current && videoRef.current.readyState >= 2) {
         try {
           const canvas = document.createElement('canvas');
           canvas.width = 320;
@@ -348,15 +396,22 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
     } catch (err: any) {
       console.error('Session initialization error:', err);
       setSessionInitStatus('FAILED');
+      const msg =
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Could not complete Sentinel security handshake with the server. Please retry.';
+      setSessionError(msg);
+      setScreenShareError(msg);
     }
   };
 
-  // Step 7: Launch Exam
+  // Step 7: Launch Exam cleanly handing over active tracks without stopping
   const handleAuthorizeAndEnter = () => {
     const cam = cameraStreamRef.current || cameraStream;
     const sc = screenStreamRef.current || screenStream;
-    if (activeSessionRef.current && cam && sc) {
-      onSuccess(activeSessionRef.current, cam, sc);
+    if (activeSessionRef.current && sc && (cam || bypassGranted)) {
+      handedOffRef.current = true;
+      onSuccess(activeSessionRef.current, cam || null, sc);
     }
   };
 
@@ -414,11 +469,12 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
         {activeStage === 'WELCOME' && (
           <div>
             <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#0F172A', marginBottom: '8px' }}>
-              Step 1: Camera Initialization & Permissions
+              {bypassGranted ? 'Step 1: Admin Camera Bypass Verified' : 'Step 1: Camera Initialization & Calibration'}
             </h3>
             <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.6, marginBottom: '24px' }}>
-              CSL Sentinel enforces an active webcam stream throughout the assessment. Before entering the examination
-              room, you must grant webcam permission and complete a 6-step guided head calibration.
+              {bypassGranted
+                ? 'An administrator has granted you a camera calibration waiver for this assessment. Proceed directly to mandatory entire-screen sharing and Sentinel session binding.'
+                : 'CSL Sentinel enforces a live webcam stream throughout the assessment. Grant camera permission once to complete the 6-pose guided head calibration, followed immediately by screen sharing.'}
             </p>
 
             {cameraError && (
@@ -445,7 +501,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
               {onCancel && (
                 <button
                   type="button"
-                  onClick={onCancel}
+                  onClick={handleCancelClick}
                   style={{
                     padding: '10px 18px',
                     borderRadius: '8px',
@@ -478,7 +534,11 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
                   gap: '8px',
                 }}
               >
-                {cameraStatus === 'INITIALIZING' ? 'Connecting Webcam...' : 'Enable Camera & Continue →'}
+                {bypassGranted
+                  ? 'Continue to Screen Share →'
+                  : cameraStatus === 'INITIALIZING'
+                  ? 'Connecting Webcam...'
+                  : 'Enable Camera & Start Calibration →'}
               </button>
             </div>
           </div>
@@ -658,7 +718,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
               switching, and unauthorized applications in real time.
             </p>
 
-            {screenShareError && (
+            {(sessionError || screenShareError) && (
               <div
                 style={{
                   padding: '12px 16px',
@@ -670,7 +730,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
                   marginBottom: '20px',
                 }}
               >
-                ⚠️ {screenShareError}
+                ⚠️ {sessionError || screenShareError}
               </div>
             )}
 
@@ -693,27 +753,78 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
               </ul>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={handleStartScreenShare}
-                disabled={screenShareStatus === 'INITIALIZING'}
+                onClick={handleCancelClick}
                 style={{
-                  padding: '12px 28px',
+                  padding: '10px 18px',
                   borderRadius: '8px',
-                  border: 'none',
-                  backgroundColor: '#0B2E6F',
-                  color: '#FFFFFF',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  cursor: screenShareStatus === 'INITIALIZING' ? 'wait' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
+                  border: '1px solid #E2E8F0',
+                  backgroundColor: '#FFFFFF',
+                  color: '#475569',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
                 }}
               >
-                {screenShareStatus === 'INITIALIZING' ? 'Starting Screen Share...' : '🖥️ Share Screen & Verify'}
+                Cancel
               </button>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginLeft: 'auto' }}>
+                {sessionInitStatus === 'FAILED' &&
+                  screenStreamRef.current &&
+                  screenStreamRef.current.getVideoTracks().some((t) => t.readyState === 'live') && (
+                    <button
+                      type="button"
+                      onClick={() => handleCheckBrowserIntegrity(screenStreamRef.current!)}
+                      disabled={browserCheckStatus === 'INITIALIZING'}
+                      style={{
+                        padding: '12px 24px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        backgroundColor: '#059669',
+                        color: '#FFFFFF',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                    >
+                      🔄 Retry Sentinel Handshake
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  onClick={handleStartScreenShare}
+                  disabled={screenShareStatus === 'INITIALIZING' || sessionInitStatus === 'INITIALIZING'}
+                  style={{
+                    padding: '12px 28px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: '#0B2E6F',
+                    color: '#FFFFFF',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor:
+                      screenShareStatus === 'INITIALIZING' || sessionInitStatus === 'INITIALIZING'
+                        ? 'wait'
+                        : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  {screenShareStatus === 'INITIALIZING'
+                    ? 'Starting Screen Share...'
+                    : sessionInitStatus === 'INITIALIZING'
+                    ? 'Completing Sentinel Handshake...'
+                    : screenShareStatus === 'SUCCESS' && sessionInitStatus === 'FAILED'
+                    ? '🖥️ Re-select Screen & Retry'
+                    : '🖥️ Share Screen & Verify'}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -741,8 +852,9 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
               CSL Sentinel Integrity Checks Passed
             </h3>
             <p style={{ fontSize: '14px', color: '#64748B', maxWidth: '480px', margin: '0 auto 24px', lineHeight: 1.6 }}>
-              Webcam stream, facial baseline orientation, screen capture, and browser monitoring have all been successfully
-              initialized and bound to your assessment attempt.
+              {bypassGranted
+                ? 'Screen capture and browser monitoring have been initialized and bound to your assessment attempt (camera calibration waived by administrator).'
+                : 'Webcam stream, facial baseline orientation, screen capture, and browser monitoring have all been successfully initialized and bound to your assessment attempt.'}
             </p>
 
             <button

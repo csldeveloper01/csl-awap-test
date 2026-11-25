@@ -1,6 +1,8 @@
+from collections import defaultdict
 import csv
 import io
 import json
+import re
 import uuid
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -141,17 +143,22 @@ class AdminStatsView(APIView):
             is_simulation=False
         ).count()
 
-        total_questions = QuestionBank.objects.count()
-        active_questions = QuestionBank.objects.filter(is_active=True).count()
-        aptitude_questions_count = QuestionBank.objects.filter(
+        global_questions = QuestionBank.objects.filter(is_global=True)
+        total_questions = global_questions.count()
+        active_questions = global_questions.filter(is_active=True).count()
+        aptitude_questions_count = global_questions.filter(
             Q(section_type__iexact=QuestionBank.SectionType.APTITUDE) | Q(section__code__iexact="APTITUDE"),
-            is_active=True
+            is_active=True,
         ).count()
-        coding_questions_count = QuestionBank.objects.filter(
-            Q(section_type__iexact=QuestionBank.SectionType.CODING) | Q(section__code__iexact="CODING"),
-            is_active=True
-        ).count()
-        unassigned_questions_count = QuestionBank.objects.filter(pool_items__isnull=True, is_active=True).count()
+        coding_questions_count = global_questions.filter(
+            Q(assessment_type__iexact="CODING")
+            | Q(section_type__iexact=QuestionBank.SectionType.CODING)
+            | Q(section__code__iexact="CODING")
+            | Q(programming_details__isnull=False),
+            is_active=True,
+        ).distinct().count()
+        unassigned_questions_count = global_questions.filter(pool_items__isnull=True, is_active=True).count()
+        pool_only_questions_count = QuestionBank.objects.filter(is_global=False, is_active=True).count()
 
         pools_count = QuestionPool.objects.count()
         active_pools_count = QuestionPool.objects.filter(is_active=True).count()
@@ -162,9 +169,13 @@ class AdminStatsView(APIView):
             QuestionPool.objects.annotate(q_count=Count("items")).filter(q_count__lt=10, is_active=True).count()
         )
 
-        integrity_events_count = IntegrityEvent.objects.count()
-        unreviewed_integrity_count = IntegrityEvent.objects.filter(is_reviewed=False).count()
-        reviewed_integrity_count = IntegrityEvent.objects.filter(is_reviewed=True).count()
+        real_integrity_events = IntegrityEvent.objects.filter(
+            attempt__is_simulation=False,
+            attempt__candidate__is_simulation=False,
+        )
+        integrity_events_count = real_integrity_events.count()
+        unreviewed_integrity_count = real_integrity_events.filter(is_reviewed=False).count()
+        reviewed_integrity_count = real_integrity_events.filter(is_reviewed=True).count()
 
         recent_activities = []
         for log in AssessmentAuditLog.objects.select_related("performed_by").order_by("-timestamp")[:15]:
@@ -206,11 +217,13 @@ class AdminStatsView(APIView):
             "question_bank_health": {
                 "total_questions": total_questions,
                 "active_questions": active_questions,
+                "pool_only_questions": pool_only_questions_count,
                 "total_pools": pools_count,
                 "active_pools": active_pools_count,
                 "unassigned_questions": unassigned_questions_count,
                 "pools_requiring_questions": pools_requiring_questions,
                 "status": "OK" if unassigned_questions_count == 0 else "Action Required",
+                "overall_status": "OK" if unassigned_questions_count == 0 else "Action Required",
             },
             "integrity_summary": {
                 "total_events": integrity_events_count,
@@ -1347,6 +1360,72 @@ class AdminCandidateToggleStatusView(APIView):
 # QUESTION BANK MODULE
 # ==============================================================================
 
+def _upsert_coding_details_for_question(question: QuestionBank, coding_details: dict, replace_test_cases: bool = False):
+    """
+    Shared helper to create or update ProgrammingQuestion and ProgrammingTestCase records
+    for a CODING QuestionBank entry cleanly without duplicating logic across views.
+    """
+    if not isinstance(coding_details, dict):
+        return None
+
+    prog, _ = ProgrammingQuestion.objects.update_or_create(
+        question=question,
+        defaults={
+            "problem_statement": coding_details.get("problem_statement") or question.prompt,
+            "constraints": coding_details.get("constraints", ""),
+            "input_format": coding_details.get("input_format", ""),
+            "output_format": coding_details.get("output_format", ""),
+            "allowed_languages": coding_details.get("allowed_languages") or ["python", "java"],
+            "boilerplate_code": coding_details.get("boilerplate_code") or {},
+            "time_limit_seconds": float(coding_details.get("time_limit_seconds") or 2.0),
+            "memory_limit_mb": int(coding_details.get("memory_limit_mb") or 256),
+        },
+    )
+
+    test_cases = coding_details.get("test_cases")
+    if isinstance(test_cases, list):
+        if replace_test_cases:
+            kept_ids = []
+            for tc_data in test_cases:
+                if isinstance(tc_data, dict) and tc_data.get("id"):
+                    kept_ids.append(str(tc_data["id"]))
+            for existing_tc in prog.test_cases.filter(is_active=True):
+                if str(existing_tc.id) not in kept_ids:
+                    if existing_tc.results.exists():
+                        existing_tc.is_active = False
+                        existing_tc.save(update_fields=["is_active"])
+                    else:
+                        existing_tc.delete()
+
+        for tc_idx, tc in enumerate(test_cases):
+            if not isinstance(tc, dict):
+                continue
+            tc_id = tc.get("id")
+            if tc_id and replace_test_cases:
+                existing = prog.test_cases.filter(id=tc_id).first()
+                if existing:
+                    existing.input_text = tc.get("input_text", "")
+                    existing.expected_output = tc.get("expected_output", "")
+                    existing.is_public = bool(tc.get("is_public", False))
+                    existing.marks_weightage = float(tc.get("marks_weightage") or 1.0)
+                    existing.explanation = tc.get("explanation", "")
+                    existing.order = int(tc.get("order") or (tc_idx + 1))
+                    existing.is_active = True
+                    existing.save()
+                    continue
+            ProgrammingTestCase.objects.create(
+                programming_question=prog,
+                input_text=tc.get("input_text", ""),
+                expected_output=tc.get("expected_output", ""),
+                is_public=bool(tc.get("is_public", False)),
+                marks_weightage=float(tc.get("marks_weightage") or 1.0),
+                explanation=tc.get("explanation", ""),
+                order=int(tc.get("order") or (tc_idx + 1)),
+                is_active=True,
+            )
+    return prog
+
+
 class AdminQuestionListView(APIView):
     permission_classes = [IsCSLAdminUser]
 
@@ -1354,11 +1433,12 @@ class AdminQuestionListView(APIView):
         queryset = (
             QuestionBank.objects.all()
             .order_by("-id")
-            .select_related("section")
+            .select_related("section", "programming_details")
             .prefetch_related(
                 "assigned_assessments",
                 Prefetch("pool_items", queryset=QuestionPoolItem.objects.select_related("pool")),
                 "attempt_snapshots",
+                "programming_details__test_cases",
             )
         )
         section = request.query_params.get("section_type", "").strip()
@@ -1414,7 +1494,20 @@ class AdminQuestionListView(APIView):
             queryset = queryset.filter(is_archived=False)
 
         assessment_type = request.query_params.get("assessment_type", "").strip()
-        if assessment_type:
+        question_type = request.query_params.get("question_type", "").strip().upper()
+        if question_type == "CODING":
+            queryset = queryset.filter(
+                Q(assessment_type__iexact="CODING")
+                | Q(section_type__iexact="CODING")
+                | Q(programming_details__isnull=False)
+            ).distinct()
+        elif question_type == "MCQ":
+            queryset = queryset.exclude(
+                Q(assessment_type__iexact="CODING")
+                | Q(section_type__iexact="CODING")
+                | Q(programming_details__isnull=False)
+            )
+        elif assessment_type:
             queryset = queryset.filter(assessment_type__iexact=assessment_type)
 
         pool_id = request.query_params.get("pool_id", "").strip()
@@ -1424,6 +1517,13 @@ class AdminQuestionListView(APIView):
                 queryset = queryset.filter(pool_items__pool_id=pool_id)
             except (ValueError, TypeError):
                 queryset = queryset.none()
+        else:
+            include_pool_only = request.query_params.get("include_pool_only", "").strip().lower() in ["true", "1"]
+            is_global_param = request.query_params.get("is_global", "").strip().lower()
+            if is_global_param in ["false", "0"]:
+                queryset = queryset.filter(is_global=False)
+            elif not include_pool_only:
+                queryset = queryset.filter(is_global=True)
 
         unassigned = request.query_params.get("unassigned", "").strip().lower()
         if unassigned in ["true", "1"]:
@@ -1508,30 +1608,14 @@ class AdminQuestionListView(APIView):
                     )
 
                 coding_details = request.data.get("coding_details")
-                if coding_details and (question.assessment_type == "CODING" or question.section_type == "CODING"):
-                    prog, _ = ProgrammingQuestion.objects.update_or_create(
-                        question=question,
-                        defaults={
-                            "problem_statement": coding_details.get("problem_statement") or question.prompt,
-                            "constraints": coding_details.get("constraints", ""),
-                            "input_format": coding_details.get("input_format", ""),
-                            "output_format": coding_details.get("output_format", ""),
-                            "allowed_languages": coding_details.get("allowed_languages") or ["python", "java"],
-                            "boilerplate_code": coding_details.get("boilerplate_code") or {},
-                            "time_limit_seconds": float(coding_details.get("time_limit_seconds") or 2.0),
-                            "memory_limit_mb": int(coding_details.get("memory_limit_mb") or 256),
-                        },
-                    )
-                    for tc in coding_details.get("test_cases") or []:
-                        if isinstance(tc, dict):
-                            ProgrammingTestCase.objects.create(
-                                programming_question=prog,
-                                input_text=tc.get("input_text", ""),
-                                expected_output=tc.get("expected_output", ""),
-                                is_public=tc.get("is_public", False),
-                                marks_weightage=float(tc.get("marks_weightage") or 1.0),
-                                explanation=tc.get("explanation", ""),
-                            )
+                is_coding_req = (
+                    str(request.data.get("question_type") or "").upper() == "CODING"
+                    or question.assessment_type == "CODING"
+                    or question.section_type == "CODING"
+                )
+                if coding_details and is_coding_req:
+                    _upsert_coding_details_for_question(question, coding_details, replace_test_cases=False)
+            question.refresh_from_db()
             return Response(AdminQuestionSerializer(question).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1540,11 +1624,21 @@ class AdminQuestionDetailView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request, pk):
-        question = get_object_or_404(QuestionBank.objects.prefetch_related("assigned_assessments"), pk=pk)
+        question = get_object_or_404(
+            QuestionBank.objects.select_related("section", "programming_details").prefetch_related(
+                "assigned_assessments",
+                "pool_items__pool",
+                "programming_details__test_cases",
+            ),
+            pk=pk,
+        )
         return Response(AdminQuestionSerializer(question).data)
 
     def put(self, request, pk):
-        question = get_object_or_404(QuestionBank.objects.prefetch_related("assigned_assessments"), pk=pk)
+        question = get_object_or_404(
+            QuestionBank.objects.select_related("section", "programming_details").prefetch_related("assigned_assessments"),
+            pk=pk,
+        )
         target_assessment = None
         update_assessment = False
 
@@ -1583,6 +1677,16 @@ class AdminQuestionDetailView(APIView):
                             "total_pool_count": target_assessment.questions.count(),
                         },
                     )
+                coding_details = request.data.get("coding_details")
+                is_coding_req = (
+                    str(request.data.get("question_type") or "").upper() == "CODING"
+                    or question.assessment_type == "CODING"
+                    or question.section_type == "CODING"
+                    or hasattr(question, "programming_details")
+                )
+                if coding_details and is_coding_req:
+                    _upsert_coding_details_for_question(question, coding_details, replace_test_cases=True)
+            question.refresh_from_db()
             return Response(AdminQuestionSerializer(question).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1707,6 +1811,139 @@ class AdminQuestionArchiveView(APIView):
         })
 
 
+def _parse_bool_flag(val, default: bool = False) -> bool:
+    if val is None or val == "":
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ["true", "1", "yes", "on"]
+
+
+def _extract_csv_from_request(request):
+    file_obj = request.FILES.get("file")
+    csv_text = request.data.get("csv_content", "")
+    encoding_override = request.data.get("encoding")
+
+    if file_obj:
+        file_bytes = file_obj.read()
+        decoded_text, detected_enc = decode_csv_bytes(file_bytes, preferred_encoding=encoding_override)
+        return decoded_text, detected_enc, None
+    if csv_text:
+        return csv_text, "text/string", None
+    return None, None, Response(
+        {"detail": "Please supply a CSV file or csv_content string."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _build_csv_preview_response(decoded_text: str, detected_enc: str, target_pool: QuestionPool = None) -> Response:
+    result = parse_and_validate_csv(decoded_text, commit=False)
+    result["detected_encoding"] = detected_enc
+    result["supported_encodings"] = SUPPORTED_ENCODINGS
+    if target_pool is not None:
+        result["target_pool"] = {"id": str(target_pool.id), "name": target_pool.name, "code": target_pool.code}
+
+    existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
+    existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
+
+    section_counts = result.get("section_counts") or {}
+    if not section_counts:
+        for sample in result.get("preview_samples", []):
+            sec_name = sample.get("section_type") or ("CODING" if sample.get("type") == "CODING" else "APTITUDE")
+            sec_upper = sec_name.upper()
+            section_counts[sec_upper] = section_counts.get(sec_upper, 0) + 1
+
+    detected_sections = []
+    for sec_name, row_count in section_counts.items():
+        sec_upper = sec_name.upper()
+        matched_sec = existing_sections.get(sec_upper) or existing_names.get(sec_name.lower())
+        detected_sections.append({
+            "raw_section": sec_name,
+            "detected_name": matched_sec.name if matched_sec else sec_name.replace("_", " ").title(),
+            "code": sec_upper,
+            "matched": bool(matched_sec),
+            "matched_section_id": matched_sec.id if matched_sec else None,
+            "matched_section_name": matched_sec.name if matched_sec else None,
+            "count": row_count,
+            "row_count": row_count,
+        })
+
+    result["detected_sections"] = detected_sections
+    result["sample_rows"] = [
+        {
+            "row_idx": s.get("row_number", 0),
+            "prompt": s.get("prompt", "")[:120],
+            "section_type": s.get("section_type") or ("CODING" if s.get("type") == "CODING" else "APTITUDE"),
+            "correct_option": s.get("correct_option", "N/A"),
+            "difficulty": s.get("difficulty", "MEDIUM"),
+        }
+        for s in result.get("preview_samples", [])
+    ]
+    result["available_sections"] = [
+        {"id": s.id, "name": s.name, "code": s.code}
+        for s in AssessmentSection.objects.filter(is_active=True).order_by("order", "name")
+    ]
+    result["valid_rows"] = result.get("valid_count", 0)
+
+    return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
+
+
+def _execute_csv_import_commit(
+    request,
+    decoded_text: str,
+    detected_enc: str,
+    target_assessment=None,
+    target_pools=None,
+    destination_mode: str = "GLOBAL_ONLY",
+    is_global: bool = True,
+) -> Response:
+    section_mapping = request.data.get("section_mapping", {})
+    if isinstance(section_mapping, str):
+        try:
+            section_mapping = json.loads(section_mapping)
+        except Exception:
+            section_mapping = {}
+
+    target_pools = list(target_pools or [])
+    result = parse_and_validate_csv(
+        decoded_text,
+        target_assessment=target_assessment,
+        target_pools=target_pools,
+        section_mapping=section_mapping,
+        commit=True,
+        is_global=is_global,
+    )
+    result["detected_encoding"] = detected_enc
+    result["destination_mode"] = destination_mode
+    result["add_to_global_bank"] = bool(is_global)
+    result["assigned_pools"] = [
+        {"id": str(p.id), "name": p.name, "questions_count": p.items.count()}
+        for p in target_pools
+    ]
+    result["assessment_id"] = str(target_assessment.id) if target_assessment else None
+    result["assessment_title"] = target_assessment.title if target_assessment else None
+    result["total_pool_count"] = target_assessment.questions.count() if target_assessment else None
+    result["imported_to"] = "QUESTION_POOLS" if target_pools else ("ASSESSMENT_POOL" if target_assessment else "QUESTION_BANK")
+    result["skipped_count"] = 0
+
+    if result.get("success"):
+        log_assessment_audit(
+            action=AssessmentAuditLog.Action.QUESTIONS_IMPORTED,
+            entity_type="QUESTION_POOL" if (target_pools and not is_global) else "QUESTION_BANK",
+            entity_id=str(target_assessment.id) if target_assessment else (str(target_pools[0].id) if target_pools else "GLOBAL"),
+            user=request.user,
+            details={
+                "imported_count": result.get("imported_count", 0),
+                "detected_type": result.get("detected_type"),
+                "detected_encoding": detected_enc,
+                "is_global": bool(is_global),
+                "pool_ids": [str(p.id) for p in target_pools],
+            },
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+
 class AdminQuestionImportPreviewView(APIView):
     """
     Robust CSV question import preview supporting multiple encodings,
@@ -1715,70 +1952,22 @@ class AdminQuestionImportPreviewView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def post(self, request):
-        file_obj = request.FILES.get("file")
-        csv_text = request.data.get("csv_content", "")
-        encoding_override = request.data.get("encoding")
+        decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
+        if err_resp is not None:
+            return err_resp
 
-        if file_obj:
-            file_bytes = file_obj.read()
-            decoded_text, detected_enc = decode_csv_bytes(file_bytes, preferred_encoding=encoding_override)
-        elif csv_text:
-            decoded_text = csv_text
-            detected_enc = "text/string"
-        else:
-            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
+        target_pool = None
+        pool_id = request.data.get("pool_id") or request.query_params.get("pool_id")
+        if pool_id:
+            target_pool = QuestionPool.objects.filter(id=pool_id).first()
 
-        result = parse_and_validate_csv(decoded_text, commit=False)
-        result["detected_encoding"] = detected_enc
-        result["supported_encodings"] = SUPPORTED_ENCODINGS
-
-        # Maintain detected_sections structure for frontend compatibility
-        existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
-        existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
-        detected_sections = {}
-        for sample in result.get("preview_samples", []):
-            sec_name = sample.get("section_type") or ("CODING" if sample.get("type") == "CODING" else "APTITUDE")
-            sec_upper = sec_name.upper()
-            if sec_upper not in detected_sections:
-                matched_sec = existing_sections.get(sec_upper) or existing_names.get(sec_name.lower())
-                detected_sections[sec_upper] = {
-                    "raw_section": sec_name,
-                    "code": sec_upper,
-                    "matched": bool(matched_sec),
-                    "matched_section_id": matched_sec.id if matched_sec else None,
-                    "matched_section_name": matched_sec.name if matched_sec else None,
-                    "count": 1,
-                }
-            else:
-                detected_sections[sec_upper]["count"] += 1
-
-        result["detected_sections"] = list(detected_sections.values())
-        result["sample_rows"] = [
-            {
-                "row_idx": s.get("row_number", 0),
-                "prompt": s.get("prompt", "")[:120],
-                "section_type": s.get("section_type") or ("CODING" if s.get("type") == "CODING" else "APTITUDE"),
-                "correct_option": s.get("correct_option", "N/A"),
-                "difficulty": s.get("difficulty", "MEDIUM"),
-            }
-            for s in result.get("preview_samples", [])
-        ]
-        result["available_sections"] = [
-            {"id": s.id, "name": s.name, "code": s.code}
-            for s in AssessmentSection.objects.filter(is_active=True).order_by("order", "name")
-        ]
-        result["valid_rows"] = result.get("valid_count", 0)
-
-        return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
+        return _build_csv_preview_response(decoded_text, detected_enc, target_pool=target_pool)
 
 
 class AdminQuestionImportCSVView(APIView):
     """
     Explicit, safe CSV Question Bank import.
-    Accepts explicit section_mapping parameter: { "RAW_SECTION_CODE": { "action": "map", "section_id": 1 } }
-    or { "RAW_SECTION_CODE": { "action": "create", "name": "New Section Name" } }
-    or { "RAW_SECTION_CODE": { "action": "skip" } }.
-    Requires explicit admin confirmation before committing.
+    Supports Global Bank, Existing Pools, New Pool, or Pool-Only scoping.
     """
     permission_classes = [IsCSLAdminUser]
 
@@ -1790,10 +1979,14 @@ class AdminQuestionImportCSVView(APIView):
                 pool_ids = json.loads(pool_ids)
             except Exception:
                 pool_ids = [pool_ids]
+        single_pool_id = request.data.get("pool_id")
+        if single_pool_id and single_pool_id not in pool_ids:
+            pool_ids = list(pool_ids) + [single_pool_id]
+
         new_pool_name = (request.data.get("new_pool_name") or "").strip()
 
         target_pools = []
-        if destination_mode in ["EXISTING_POOLS", "GLOBAL_AND_POOLS"] and pool_ids:
+        if destination_mode in ["EXISTING_POOLS", "GLOBAL_AND_POOLS", "POOL_ONLY"] and pool_ids:
             target_pools = list(QuestionPool.objects.filter(id__in=pool_ids, is_active=True))
         elif destination_mode in ["NEW_POOL", "GLOBAL_AND_NEW_POOL"] and new_pool_name:
             import re as _re
@@ -1822,251 +2015,60 @@ class AdminQuestionImportCSVView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-        file_obj = request.FILES.get("file")
-        csv_text = request.data.get("csv_content", "")
-        encoding_override = request.data.get("encoding")
+        decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
+        if err_resp is not None:
+            return err_resp
 
-        if file_obj:
-            file_bytes = file_obj.read()
-            decoded_text, detected_enc = decode_csv_bytes(file_bytes, preferred_encoding=encoding_override)
-        elif csv_text:
-            decoded_text = csv_text
-            detected_enc = "text/string"
-        else:
-            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
+        default_is_global = destination_mode != "POOL_ONLY"
+        is_global = _parse_bool_flag(request.data.get("add_to_global_bank"), default=default_is_global)
 
-        # Parse section mapping dictionary if passed
-        section_mapping = request.data.get("section_mapping", {})
-        if isinstance(section_mapping, str):
-            try:
-                section_mapping = json.loads(section_mapping)
-            except Exception:
-                section_mapping = {}
-
-        result = parse_and_validate_csv(
-            decoded_text,
+        return _execute_csv_import_commit(
+            request=request,
+            decoded_text=decoded_text,
+            detected_enc=detected_enc,
             target_assessment=assessment,
             target_pools=target_pools,
-            section_mapping=section_mapping,
-            commit=True,
+            destination_mode=destination_mode,
+            is_global=is_global,
         )
-        result["detected_encoding"] = detected_enc
-        result["destination_mode"] = destination_mode
-        result["assigned_pools"] = [{"id": str(p.id), "name": p.name} for p in target_pools]
-        result["assessment_id"] = str(assessment.id) if assessment else None
-        result["assessment_title"] = assessment.title if assessment else None
-        result["total_pool_count"] = assessment.questions.count() if assessment else None
-        result["imported_to"] = "QUESTION_POOLS" if target_pools else ("ASSESSMENT_POOL" if assessment else "QUESTION_BANK")
-        result["skipped_count"] = 0
 
-        if result.get("success"):
-            log_assessment_audit(
-                action=AssessmentAuditLog.Action.QUESTIONS_IMPORTED,
-                entity_type="QUESTION_BANK",
-                entity_id=str(assessment.id) if assessment else (str(target_pools[0].id) if target_pools else "GLOBAL"),
-                user=request.user,
-                details={
-                    "imported_count": result.get("imported_count", 0),
-                    "detected_type": result.get("detected_type"),
-                    "detected_encoding": detected_enc,
-                },
-            )
-            return Response(result, status=status.HTTP_200_OK)
-        return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
-class AdminQuestionArchiveView(APIView):
+class AdminQuestionPoolImportPreviewView(APIView):
+    """Direct CSV preview endpoint scoped to a specific QuestionPool."""
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, pk):
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
+        if err_resp is not None:
+            return err_resp
+        return _build_csv_preview_response(decoded_text, detected_enc, target_pool=pool)
+
+
+class AdminQuestionPoolImportCSVView(APIView):
     """
-    Toggles question soft-archived status (is_archived).
+    Direct CSV import endpoint scoped to a specific QuestionPool.
+    Pool-scoped by default (is_global=False); only adds to Global Question Bank when
+    add_to_global_bank=true is explicitly selected.
     """
     permission_classes = [IsCSLAdminUser]
 
     def post(self, request, pk):
-        question = get_object_or_404(QuestionBank, pk=pk)
-        question.is_archived = not question.is_archived
-        question.save(update_fields=["is_archived", "updated_at"])
+        pool = get_object_or_404(QuestionPool, pk=pk)
+        decoded_text, detected_enc, err_resp = _extract_csv_from_request(request)
+        if err_resp is not None:
+            return err_resp
 
-        log_assessment_audit(
-            action=AssessmentAuditLog.Action.QUESTION_ARCHIVED if question.is_archived else AssessmentAuditLog.Action.QUESTION_UNARCHIVED,
-            entity_type="QUESTION",
-            entity_id=str(question.id),
-            user=request.user,
-            details={"is_archived": question.is_archived, "prompt": question.prompt[:80]},
+        add_to_global = _parse_bool_flag(request.data.get("add_to_global_bank"), default=False)
+        return _execute_csv_import_commit(
+            request=request,
+            decoded_text=decoded_text,
+            detected_enc=detected_enc,
+            target_assessment=None,
+            target_pools=[pool],
+            destination_mode="GLOBAL_AND_POOLS" if add_to_global else "POOL_ONLY",
+            is_global=add_to_global,
         )
-
-        return Response({
-            "id": question.id,
-            "is_archived": question.is_archived,
-            "message": f"Question {'archived' if question.is_archived else 'unarchived'} successfully."
-        })
-
-
-class AdminQuestionImportPreviewView(APIView):
-    """
-    Robust CSV question import preview supporting multiple encodings,
-    smart header aliasing, delimiter detection, and coding questions.
-    """
-    permission_classes = [IsCSLAdminUser]
-
-    def post(self, request):
-        file_obj = request.FILES.get("file")
-        csv_text = request.data.get("csv_content", "")
-        encoding_override = request.data.get("encoding")
-
-        if file_obj:
-            file_bytes = file_obj.read()
-            decoded_text, detected_enc = decode_csv_bytes(file_bytes, preferred_encoding=encoding_override)
-        elif csv_text:
-            decoded_text = csv_text
-            detected_enc = "text/string"
-        else:
-            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
-
-        result = parse_and_validate_csv(decoded_text, commit=False)
-        result["detected_encoding"] = detected_enc
-        result["supported_encodings"] = SUPPORTED_ENCODINGS
-
-        # Maintain detected_sections structure for frontend compatibility
-        existing_sections = {s.code.upper(): s for s in AssessmentSection.objects.filter(is_active=True)}
-        existing_names = {s.name.lower(): s for s in AssessmentSection.objects.filter(is_active=True)}
-        detected_sections = {}
-        for sample in result.get("preview_samples", []):
-            sec_name = sample.get("section_type") or ("CODING" if sample.get("type") == "CODING" else "APTITUDE")
-            sec_upper = sec_name.upper()
-            if sec_upper not in detected_sections:
-                matched_sec = existing_sections.get(sec_upper) or existing_names.get(sec_name.lower())
-                detected_sections[sec_upper] = {
-                    "raw_section": sec_name,
-                    "code": sec_upper,
-                    "matched": bool(matched_sec),
-                    "matched_section_id": matched_sec.id if matched_sec else None,
-                    "matched_section_name": matched_sec.name if matched_sec else None,
-                    "count": 1,
-                }
-            else:
-                detected_sections[sec_upper]["count"] += 1
-
-        result["detected_sections"] = list(detected_sections.values())
-        result["sample_rows"] = [
-            {
-                "row_idx": s.get("row_number", 0),
-                "prompt": s.get("prompt", "")[:120],
-                "section_type": s.get("section_type") or ("CODING" if s.get("type") == "CODING" else "APTITUDE"),
-                "correct_option": s.get("correct_option", "N/A"),
-                "difficulty": s.get("difficulty", "MEDIUM"),
-            }
-            for s in result.get("preview_samples", [])
-        ]
-        result["available_sections"] = [
-            {"id": s.id, "name": s.name, "code": s.code}
-            for s in AssessmentSection.objects.filter(is_active=True).order_by("order", "name")
-        ]
-        result["valid_rows"] = result.get("valid_count", 0)
-
-        return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
-
-
-class AdminQuestionImportCSVView(APIView):
-    """
-    Explicit, safe CSV Question Bank import.
-    Accepts explicit section_mapping parameter: { "RAW_SECTION_CODE": { "action": "map", "section_id": 1 } }
-    or { "RAW_SECTION_CODE": { "action": "create", "name": "New Section Name" } }
-    or { "RAW_SECTION_CODE": { "action": "skip" } }.
-    Requires explicit admin confirmation before committing.
-    """
-    permission_classes = [IsCSLAdminUser]
-
-    def post(self, request):
-        destination_mode = (request.data.get("destination_mode") or "GLOBAL_ONLY").upper()
-        pool_ids = request.data.get("pool_ids", [])
-        if isinstance(pool_ids, str):
-            try:
-                pool_ids = json.loads(pool_ids)
-            except Exception:
-                pool_ids = [pool_ids]
-        new_pool_name = (request.data.get("new_pool_name") or "").strip()
-
-        target_pools = []
-        if destination_mode in ["EXISTING_POOLS", "GLOBAL_AND_POOLS"] and pool_ids:
-            target_pools = list(QuestionPool.objects.filter(id__in=pool_ids, is_active=True))
-        elif destination_mode in ["NEW_POOL", "GLOBAL_AND_NEW_POOL"] and new_pool_name:
-            import re as _re
-            clean_code = _re.sub(r"[^A-Z0-9]", "", new_pool_name.upper())[:12] or "POOL"
-            new_code = clean_code
-            counter = 1
-            while QuestionPool.objects.filter(code=new_code).exists():
-                new_code = f"{clean_code[:8]}_{counter}"
-                counter += 1
-            created_pool = QuestionPool.objects.create(
-                name=new_pool_name,
-                code=new_code,
-                description=f"Created during CSV import on {timezone.now().strftime('%Y-%m-%d')}",
-                is_active=True,
-            )
-            target_pools.append(created_pool)
-
-        assessment_id = request.data.get("assessment_id")
-        assessment = None
-        if assessment_id:
-            try:
-                assessment = Assessment.objects.get(id=assessment_id)
-            except (Assessment.DoesNotExist, ValueError):
-                return Response(
-                    {"assessment_id": [f"Selected assessment '{assessment_id}' does not exist or is invalid."]},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-        file_obj = request.FILES.get("file")
-        csv_text = request.data.get("csv_content", "")
-        encoding_override = request.data.get("encoding")
-
-        if file_obj:
-            file_bytes = file_obj.read()
-            decoded_text, detected_enc = decode_csv_bytes(file_bytes, preferred_encoding=encoding_override)
-        elif csv_text:
-            decoded_text = csv_text
-            detected_enc = "text/string"
-        else:
-            return Response({"detail": "Please supply a CSV file or csv_content string."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Parse section mapping dictionary if passed
-        section_mapping = request.data.get("section_mapping", {})
-        if isinstance(section_mapping, str):
-            try:
-                section_mapping = json.loads(section_mapping)
-            except Exception:
-                section_mapping = {}
-
-        result = parse_and_validate_csv(
-            decoded_text,
-            target_assessment=assessment,
-            target_pools=target_pools,
-            section_mapping=section_mapping,
-            commit=True,
-        )
-        result["detected_encoding"] = detected_enc
-        result["destination_mode"] = destination_mode
-        result["assigned_pools"] = [{"id": str(p.id), "name": p.name} for p in target_pools]
-        result["assessment_id"] = str(assessment.id) if assessment else None
-        result["assessment_title"] = assessment.title if assessment else None
-        result["total_pool_count"] = assessment.questions.count() if assessment else None
-        result["imported_to"] = "QUESTION_POOLS" if target_pools else ("ASSESSMENT_POOL" if assessment else "QUESTION_BANK")
-        result["skipped_count"] = 0
-
-        if result.get("success"):
-            log_assessment_audit(
-                action=AssessmentAuditLog.Action.QUESTIONS_IMPORTED,
-                entity_type="QUESTION_BANK",
-                entity_id=str(assessment.id) if assessment else (str(target_pools[0].id) if target_pools else "GLOBAL"),
-                user=request.user,
-                details={
-                    "imported_count": result.get("imported_count", 0),
-                    "detected_type": result.get("detected_type"),
-                    "detected_encoding": detected_enc,
-                },
-            )
-            return Response(result, status=status.HTTP_200_OK)
-        return Response(result, status=status.HTTP_400_BAD_REQUEST)
-
 
 
 class AdminQuestionBulkAssignPoolView(APIView):
@@ -2565,9 +2567,12 @@ class AdminIntegrityEventsView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        queryset = IntegrityEvent.objects.select_related(
+        queryset = IntegrityEvent.objects.filter(
+            attempt__is_simulation=False,
+            attempt__candidate__is_simulation=False,
+        ).select_related(
             "attempt__candidate__college_ref", "attempt__assessment", "reviewed_by"
-        ).all().order_by("-server_timestamp")
+        ).order_by("-server_timestamp")
 
         event_type = request.query_params.get("event_type", "").strip()
         if event_type:
@@ -3635,6 +3640,7 @@ class AdminQuestionPoolQuestionsView(APIView):
 
         question_type = (data.get("question_type") or data.get("assessment_type") or data.get("section_type") or "MCQ").upper()
         is_coding = question_type == "CODING" or (data.get("section_type") or "").upper() == "CODING"
+        is_global = _parse_bool_flag(data.get("add_to_global_bank", data.get("is_global")), default=True)
 
         with transaction.atomic():
             if is_coding:
@@ -3648,12 +3654,18 @@ class AdminQuestionPoolQuestionsView(APIView):
                 marks = int(data.get("marks") or 10)
                 sec_type = (data.get("section_type") or "CODING").strip()
                 category = (data.get("category") or "").strip()
+                sec_obj = (
+                    AssessmentSection.objects.filter(code__iexact=sec_type).first()
+                    or AssessmentSection.objects.filter(name__iexact=sec_type).first()
+                    or AssessmentSection.objects.filter(code__iexact="CODING").first()
+                )
 
                 question = QuestionBank.objects.create(
                     prompt=prompt,
                     difficulty=difficulty,
                     marks=marks,
-                    section_type=sec_type,
+                    section=sec_obj,
+                    section_type=sec_obj.code if sec_obj else sec_type,
                     category=category,
                     assessment_type="CODING",
                     option_a="N/A (Coding Question)",
@@ -3663,37 +3675,15 @@ class AdminQuestionPoolQuestionsView(APIView):
                     correct_option="A",
                     explanation=data.get("explanation", ""),
                     is_active=data.get("is_active", True),
+                    is_global=is_global,
                 )
 
                 coding_data = data.get("coding_details") or data
-                problem_statement = coding_data.get("problem_statement") or prompt
-                prog = ProgrammingQuestion.objects.create(
-                    question=question,
-                    problem_statement=problem_statement,
-                    constraints=coding_data.get("constraints", ""),
-                    input_format=coding_data.get("input_format", ""),
-                    output_format=coding_data.get("output_format", ""),
-                    time_limit_seconds=float(coding_data.get("time_limit_seconds") or 2.0),
-                    memory_limit_mb=int(coding_data.get("memory_limit_mb") or 256),
-                    allowed_languages=coding_data.get("allowed_languages") or ["python", "java"],
-                    boilerplate_code=coding_data.get("boilerplate_code") or {},
-                )
-
-                test_cases = coding_data.get("test_cases") or []
-                if isinstance(test_cases, list):
-                    for tc_idx, tc in enumerate(test_cases):
-                        if isinstance(tc, dict):
-                            ProgrammingTestCase.objects.create(
-                                programming_question=prog,
-                                input_text=str(tc.get("input_text", "")),
-                                expected_output=str(tc.get("expected_output", "")),
-                                is_public=bool(tc.get("is_public", False)),
-                                marks_weightage=float(tc.get("marks_weightage") or 1.0),
-                                explanation=str(tc.get("explanation", "")),
-                                order=int(tc.get("order") or (tc_idx + 1)),
-                            )
+                _upsert_coding_details_for_question(question, coding_data, replace_test_cases=False)
             else:
-                serializer = AdminQuestionSerializer(data=data)
+                mcq_payload = data.copy() if hasattr(data, "copy") else dict(data)
+                mcq_payload["is_global"] = is_global
+                serializer = AdminQuestionSerializer(data=mcq_payload)
                 if not serializer.is_valid():
                     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
                 question = serializer.save()
@@ -3720,6 +3710,7 @@ class AdminQuestionPoolQuestionsView(APIView):
                 },
             )
 
+        question.refresh_from_db()
         pool.refresh_from_db()
         return Response({
             "success": True,
@@ -4361,6 +4352,13 @@ class AdminExportCandidateDataCSVView(APIView):
         if assessment_id:
             qs = qs.filter(attempts__assessment_id=assessment_id)
 
+        state_filter = (request.query_params.get("state") or "").strip().upper()
+        if state_filter:
+            if state_filter == "FLAGGED":
+                qs = qs.filter(Q(attempts__is_flagged=True) | Q(attempts__state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW))
+            else:
+                qs = qs.filter(attempts__state=state_filter)
+
         search = request.query_params.get("search", "").strip()
         if search:
             qs = qs.filter(
@@ -4368,6 +4366,7 @@ class AdminExportCandidateDataCSVView(APIView):
                 | Q(register_number__icontains=search)
                 | Q(email__icontains=search)
             )
+        qs = qs.distinct()
 
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="csl_candidates_export.csv"'
@@ -4394,8 +4393,19 @@ class AdminExportCandidateDataCSVView(APIView):
             return s
 
         for cand in qs.prefetch_related("attempts")[:2000]:
-            last_attempt = cand.attempts.order_by("-created_at").first()
-            last_score = f"{last_attempt.score}/{last_attempt.max_score}" if last_attempt and last_attempt.score is not None else "N/A"
+            real_attempts = [a for a in cand.attempts.all() if not a.is_simulation]
+            real_attempts.sort(key=lambda a: a.created_at, reverse=True)
+            last_attempt = real_attempts[0] if real_attempts else None
+            if last_attempt and last_attempt.state in [
+                AssessmentAttempt.State.SUBMITTED,
+                AssessmentAttempt.State.TIMED_OUT,
+                AssessmentAttempt.State.FLAGGED_FOR_REVIEW,
+                AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
+            ]:
+                max_m = last_attempt.snapshot_total_marks or (last_attempt.assessment.total_marks if last_attempt.assessment else 0)
+                last_score = f"{last_attempt.total_score}/{max_m}"
+            else:
+                last_score = "N/A"
             writer.writerow([
                 sanitize(cand.id),
                 sanitize(cand.full_name),
@@ -4405,7 +4415,7 @@ class AdminExportCandidateDataCSVView(APIView):
                 sanitize(cand.college_ref.name if cand.college_ref else cand.college),
                 sanitize(cand.department),
                 sanitize(cand.year_of_study),
-                cand.attempts.count(),
+                len(real_attempts),
                 sanitize(last_score),
                 cand.created_at.strftime("%Y-%m-%d %H:%M"),
             ])
@@ -4422,18 +4432,23 @@ class AdminStudentAccessReassessView(APIView):
 
     def post(self, request):
         candidate_id = request.data.get("candidate_id")
-        identifier = request.data.get("identifier", "").strip()
+        identifier = (
+            request.data.get("identifier")
+            or request.data.get("register_number")
+            or request.data.get("email")
+            or ""
+        ).strip()
         assessment_id = request.data.get("assessment_id")
-        action_type = request.data.get("action_type", "").upper()
+        action_type = (request.data.get("action_type") or request.data.get("action") or "").strip().upper()
         reason = request.data.get("reason", "Administrative Quick Action")
 
         candidate = None
         if candidate_id:
-            candidate = Candidate.objects.filter(id=candidate_id).first()
+            candidate = Candidate.objects.filter(id=candidate_id, is_simulation=False).first()
         elif identifier:
             candidate = (
-                Candidate.objects.filter(email__iexact=identifier).first()
-                or Candidate.objects.filter(register_number__iexact=identifier).first()
+                Candidate.objects.filter(email__iexact=identifier, is_simulation=False).first()
+                or Candidate.objects.filter(register_number__iexact=identifier, is_simulation=False).first()
             )
 
         if not candidate:
@@ -5386,26 +5401,40 @@ class AdminCameraBypassView(APIView):
 class AdminAdvancedStudentExportView(APIView):
     """
     Advanced Multi-College Student Data Export supporting XLSX and CSV formats.
-    Organizes multi-college exports into separate worksheets per college with
-    configurable mark percentage thresholds and conditional formatting using openpyxl.
+    Reads global XLSX appearance colors & score thresholds from AssessmentConfig,
+    organizes XLSX into Overview + per-college worksheets with styled headers and
+    alternating rows, while keeping CSV plain standards-compliant.
     """
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
-        export_format = request.query_params.get("format", "xlsx").lower()
+        export_format = (request.query_params.get("export_format") or request.query_params.get("format") or "xlsx").lower()
         college_id = request.query_params.get("college_id")
         drive_id = request.query_params.get("drive_id")
         assessment_id = request.query_params.get("assessment_id")
+        state_filter = (request.query_params.get("state") or "").strip().upper()
         search = request.query_params.get("search", "").strip()
 
-        # Parse configurable thresholds
+        from .models import default_export_score_thresholds
+        config = AssessmentConfig.objects.filter(is_active=True).first()
+        header_bg_hex = (
+            getattr(config, "export_header_bg_color", "#1E293B") or "#1E293B"
+        ).lstrip("#").upper()
+        header_text_hex = (
+            getattr(config, "export_header_text_color", "#FFFFFF") or "#FFFFFF"
+        ).lstrip("#").upper()
+        alt_row_hex = (
+            getattr(config, "export_alt_row_color", "#F8FAFC") or "#F8FAFC"
+        ).lstrip("#").upper()
+        use_alt_rows = bool(getattr(config, "enable_alt_row_styling", True))
+
+        configured_thresholds = getattr(config, "export_score_thresholds", None)
+        thresholds = (
+            configured_thresholds
+            if isinstance(configured_thresholds, list) and len(configured_thresholds) > 0
+            else default_export_score_thresholds()
+        )
         thresholds_param = request.query_params.get("thresholds")
-        thresholds = [
-            {"min": 80.0, "max": 100.0, "color": "D4EDDA", "label": "Distinction"},
-            {"min": 60.0, "max": 79.99, "color": "FFF3CD", "label": "First Class"},
-            {"min": 40.0, "max": 59.99, "color": "FFE5D0", "label": "Pass"},
-            {"min": 0.0, "max": 39.99, "color": "F8D7DA", "label": "Fail / Action Required"},
-        ]
         if thresholds_param:
             try:
                 parsed_thresholds = json.loads(thresholds_param)
@@ -5416,7 +5445,10 @@ class AdminAdvancedStudentExportView(APIView):
 
         # Fetch candidate attempts, strictly isolating simulation test runs
         attempts_qs = (
-            AssessmentAttempt.objects.filter(is_simulation=False)
+            AssessmentAttempt.objects.filter(
+                is_simulation=False,
+                candidate__is_simulation=False,
+            )
             .select_related("candidate", "candidate__college_ref", "assessment")
             .prefetch_related("candidate__drive_registrations__drive")
             .order_by("candidate__college", "-created_at")
@@ -5428,12 +5460,19 @@ class AdminAdvancedStudentExportView(APIView):
             attempts_qs = attempts_qs.filter(assessment_id=assessment_id)
         if drive_id:
             attempts_qs = attempts_qs.filter(candidate__drive_registrations__drive_id=drive_id)
+        if state_filter:
+            if state_filter == "FLAGGED":
+                attempts_qs = attempts_qs.filter(Q(is_flagged=True) | Q(state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW))
+            else:
+                attempts_qs = attempts_qs.filter(state=state_filter)
         if search:
             attempts_qs = attempts_qs.filter(
                 Q(candidate__full_name__icontains=search)
                 | Q(candidate__register_number__icontains=search)
                 | Q(candidate__email__icontains=search)
+                | Q(candidate__college__icontains=search)
             )
+        attempts_qs = attempts_qs.distinct()
 
         headers = [
             "Student Name",
@@ -5454,36 +5493,43 @@ class AdminAdvancedStudentExportView(APIView):
 
         def get_threshold_color(pct):
             for t in thresholds:
-                if t["min"] <= pct <= t["max"]:
-                    return t.get("color", "FFFFFF").lstrip("#")
+                if float(t.get("min", 0)) <= pct <= float(t.get("max", 100)):
+                    return str(t.get("color", "FFFFFF")).lstrip("#").upper()
             return "FFFFFF"
 
+        def sanitize_csv(val):
+            s = str(val or "").strip()
+            if s and s[0] in ("=", "+", "-", "@"):
+                return f"'{s}"
+            return s
+
         if export_format == "csv":
-            response = HttpResponse(content_type="text/csv")
+            response = HttpResponse(content_type="text/csv; charset=utf-8")
             response["Content-Disposition"] = 'attachment; filename="csl_student_export.csv"'
             writer = csv.writer(response)
             writer.writerow(headers)
 
             for att in attempts_qs:
                 cand = att.candidate
+                college_label = cand.college_ref.name if cand.college_ref else (cand.college or "")
                 d_name = cand.drive_registrations.first().drive.name if cand.drive_registrations.exists() else "Standalone"
                 reg_time = cand.created_at.strftime("%Y-%m-%d %H:%M:%S") if cand.created_at else "N/A"
                 start_time = att.started_at.strftime("%Y-%m-%d %H:%M:%S") if att.started_at else "Not Started"
                 sub_time = att.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if att.submitted_at else "In Progress"
                 writer.writerow([
-                    cand.full_name,
-                    cand.register_number,
-                    cand.email,
-                    cand.college,
-                    d_name,
-                    att.assessment.title if att.assessment else "General",
+                    sanitize_csv(cand.full_name),
+                    sanitize_csv(cand.register_number),
+                    sanitize_csv(cand.email),
+                    sanitize_csv(college_label),
+                    sanitize_csv(d_name),
+                    sanitize_csv(att.assessment.title if att.assessment else "General"),
                     "REGISTERED",
                     reg_time,
                     start_time,
                     sub_time,
                     att.total_score,
                     att.snapshot_total_marks,
-                    f"{att.percentage:.1f}%",
+                    f"{(att.percentage or 0.0):.1f}%",
                     att.state,
                 ])
             return response
@@ -5492,16 +5538,16 @@ class AdminAdvancedStudentExportView(APIView):
         wb = openpyxl.Workbook()
         wb.remove(wb.active)  # Remove default sheet
 
-        # Group attempts by College
         by_college = defaultdict(list)
         all_attempts = []
         for att in attempts_qs:
-            c_name = att.candidate.college or "General Institution"
+            c_name = (att.candidate.college_ref.name if att.candidate.college_ref else att.candidate.college) or "General Institution"
             by_college[c_name].append(att)
             all_attempts.append(att)
 
-        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Arial", size=11, bold=True, color=header_text_hex)
+        header_fill = PatternFill(start_color=header_bg_hex, end_color=header_bg_hex, fill_type="solid")
+        alt_fill = PatternFill(start_color=alt_row_hex, end_color=alt_row_hex, fill_type="solid")
         cell_font = Font(name="Arial", size=10)
         border_thin = Border(
             left=Side(style="thin", color="E2E8F0"),
@@ -5522,17 +5568,18 @@ class AdminAdvancedStudentExportView(APIView):
 
             for row_idx, att in enumerate(attempt_list, start=2):
                 cand = att.candidate
+                college_label = cand.college_ref.name if cand.college_ref else (cand.college or "")
                 d_name = cand.drive_registrations.first().drive.name if cand.drive_registrations.exists() else "Standalone"
                 reg_time = cand.created_at.strftime("%Y-%m-%d %H:%M:%S") if cand.created_at else "N/A"
                 start_time = att.started_at.strftime("%Y-%m-%d %H:%M:%S") if att.started_at else "Not Started"
                 sub_time = att.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if att.submitted_at else "In Progress"
-                pct = att.percentage or 0.0
+                pct = float(att.percentage or 0.0)
 
                 row_values = [
                     cand.full_name,
                     cand.register_number,
                     cand.email,
-                    cand.college,
+                    college_label,
                     d_name,
                     att.assessment.title if att.assessment else "General",
                     "REGISTERED",
@@ -5546,9 +5593,9 @@ class AdminAdvancedStudentExportView(APIView):
                 ]
                 ws.append(row_values)
 
-                # Format cells
                 color_hex = get_threshold_color(pct)
                 pct_fill = PatternFill(start_color=color_hex, end_color=color_hex, fill_type="solid")
+                is_even_data_row = use_alt_rows and ((row_idx - 2) % 2 == 1)
 
                 for col_idx in range(1, len(headers) + 1):
                     c = ws.cell(row=row_idx, column=col_idx)
@@ -5556,11 +5603,16 @@ class AdminAdvancedStudentExportView(APIView):
                     c.border = border_thin
                     c.alignment = Alignment(vertical="center")
 
-                    # Percentage formatting and coloring
+                    if is_even_data_row:
+                        c.fill = alt_fill
+
                     if col_idx == 13:
                         c.number_format = "0.0%"
                         c.fill = pct_fill
                         c.alignment = Alignment(horizontal="right", vertical="center")
+                    elif col_idx == 14:
+                        c.fill = pct_fill
+                        c.alignment = Alignment(horizontal="center", vertical="center")
                     elif col_idx in [11, 12]:
                         c.alignment = Alignment(horizontal="right", vertical="center")
 
@@ -5609,16 +5661,23 @@ class AdminAdvancedStudentExportView(APIView):
 class AdminProctoringSessionsListView(APIView):
     """
     Lists and filters proctoring sessions for the CSL Sentinel Admin Dashboard.
-    Supports filtering by assessment, session status, review status, and risk level.
+    Strictly excludes simulation/admin test run sessions from candidate metrics by default.
     """
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
         qs = (
-            ProctoringSession.objects.select_related("student", "student__college_ref", "assessment")
+            ProctoringSession.objects.select_related("student", "student__college_ref", "assessment", "assessment_session")
             .prefetch_related("events", "evidences")
             .order_by("-created_at")
         )
+        include_simulations = str(request.query_params.get("include_simulations", "")).lower() in ("true", "1")
+        if not include_simulations:
+            qs = qs.filter(
+                is_simulation=False,
+                assessment_session__is_simulation=False,
+                student__is_simulation=False,
+            )
 
         assessment_id = request.query_params.get("assessment_id")
         if assessment_id:
@@ -5662,10 +5721,17 @@ class AdminProctoringSessionDetailView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request, session_id):
-        session = get_object_or_404(
-            ProctoringSession.objects.select_related("student", "student__college_ref", "assessment", "reviewed_by"),
-            id=session_id,
+        qs = ProctoringSession.objects.select_related(
+            "student", "student__college_ref", "assessment", "assessment_session", "reviewed_by"
         )
+        include_simulations = str(request.query_params.get("include_simulations", "")).lower() in ("true", "1")
+        if not include_simulations:
+            qs = qs.filter(
+                is_simulation=False,
+                assessment_session__is_simulation=False,
+                student__is_simulation=False,
+            )
+        session = get_object_or_404(qs, id=session_id)
         serializer = AdminProctoringSessionDetailSerializer(session)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
