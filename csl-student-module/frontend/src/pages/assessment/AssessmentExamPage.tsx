@@ -6,8 +6,13 @@ import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygrou
 import { ProctoringStatusPanel } from '../../components/assessment/ProctoringStatusPanel';
 import {
   getProctoringStreams,
+  updateCachedCameraStream,
   updateCachedScreenStream,
   clearProctoringStreams,
+  getOrInitProctoringSession,
+  acquireCameraAndMicrophoneStream,
+  getMediaPermissionState,
+  hasLiveVideoTrack,
 } from '../../utils/proctoringStreamStore';
 import {
   getAttemptState,
@@ -118,6 +123,7 @@ export function AssessmentExamPage() {
   const [proctoringScStream, setProctoringScStream] = useState<MediaStream | null>(null);
 
   const [cameraBypassed, setCameraBypassed] = useState<boolean>(false);
+  const [cameraRecoveryReason, setCameraRecoveryReason] = useState<string>('');
 
   // Stop cached Sentinel media tracks cleanly if the browser tab is closed/navigated away
   useEffect(() => {
@@ -136,54 +142,82 @@ export function AssessmentExamPage() {
       setProctoringCamStream(null);
       setProctoringScStream(null);
       setCameraBypassed(false);
+      setCameraRecoveryReason('');
       return;
     }
 
-    const cached = getProctoringStreams();
-    const cameWithBypassOnly = Boolean(cached.session && !cached.cameraStream);
+    let cancelled = false;
 
-    if (cached.session) {
-      setProctoringSession(cached.session);
-    } else {
-      initProctoringSession(attemptId)
-        .then((sess) => {
-          setProctoringSession(sess);
-          sessionStorage.setItem('csl_proctoring_session_id', sess.id);
-          if (sess.face_calibration_status === 'SKIPPED_BY_ADMIN') {
-            setCameraBypassed(true);
-          }
-        })
-        .catch(console.warn);
-    }
+    const initializeExamProctoring = async () => {
+      const cached = getProctoringStreams();
 
-    if (cached.cameraStream && cached.cameraStream.getVideoTracks().some((t) => t.readyState === 'live')) {
-      setProctoringCamStream(cached.cameraStream);
-      setCameraBypassed(false);
-    } else if (cameWithBypassOnly || cached.session?.face_calibration_status === 'SKIPPED_BY_ADMIN') {
-      setProctoringCamStream(null);
-      setCameraBypassed(true);
-    } else if (!cached.session) {
-      // On direct reload, defer fallback camera request until initProctoringSession reports bypass status
-      initProctoringSession(attemptId)
-        .then((sess) => {
-          if (sess.face_calibration_status === 'SKIPPED_BY_ADMIN') {
+      if (hasLiveVideoTrack(cached.screenStream)) {
+        setProctoringScStream(cached.screenStream);
+      } else {
+        setProctoringScStream(null);
+      }
+
+      try {
+        const sess = cached.session ?? (await getOrInitProctoringSession(attemptId, initProctoringSession));
+        if (cancelled) return;
+
+        setProctoringSession(sess);
+        sessionStorage.setItem('csl_proctoring_session_id', sess.id);
+
+        if (sess.face_calibration_status === 'SKIPPED_BY_ADMIN') {
+          setCameraBypassed(true);
+          setProctoringCamStream(null);
+          setCameraRecoveryReason('');
+          return;
+        }
+
+        setCameraBypassed(false);
+        const latestCached = getProctoringStreams();
+        if (hasLiveVideoTrack(latestCached.cameraStream)) {
+          setProctoringCamStream(latestCached.cameraStream);
+          setCameraRecoveryReason('');
+          return;
+        }
+
+        // Only auto-reacquire without a prompt if browser permission is already granted (e.g. page reload).
+        const camPermission = await getMediaPermissionState('camera');
+        if (cancelled) return;
+
+        if (camPermission === 'granted') {
+          try {
+            const { stream } = await acquireCameraAndMicrophoneStream();
+            if (cancelled) return;
+            setProctoringCamStream(stream);
+            setCameraRecoveryReason('');
+          } catch (err: any) {
+            if (cancelled) return;
             setProctoringCamStream(null);
-            setCameraBypassed(true);
-          } else {
-            navigator.mediaDevices
-              ?.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } })
-              .then((cStream) => setProctoringCamStream(cStream))
-              .catch(console.warn);
+            setCameraRecoveryReason(
+              err?.name === 'NotAllowedError'
+                ? 'Camera/microphone permission is required to continue. Please restore permissions and click Restore Camera & Microphone.'
+                : 'Your camera/microphone stream could not be resumed automatically. Click below to reconnect.'
+            );
           }
-        })
-        .catch(console.warn);
-    }
+        } else {
+          setProctoringCamStream(null);
+          setCameraRecoveryReason(
+            camPermission === 'denied'
+              ? 'Camera or microphone permission is blocked in your browser. Enable permissions in your browser site settings, then click Restore Camera & Microphone.'
+              : 'Camera and microphone proctoring needs to be reconnected after reloading or opening this exam directly.'
+          );
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('Proctoring initialization failed in exam view:', err);
+        }
+      }
+    };
 
-    if (cached.screenStream && cached.screenStream.getVideoTracks().some((t) => t.readyState === 'live')) {
-      setProctoringScStream(cached.screenStream);
-    } else {
-      setProctoringScStream(null);
-    }
+    initializeExamProctoring();
+
+    return () => {
+      cancelled = true;
+    };
   }, [attemptId, isSimulationMode]);
 
   const isPageHiddenRef = useRef<boolean>(false);
@@ -2569,6 +2603,12 @@ export function AssessmentExamPage() {
           cameraStream={proctoringCamStream}
           screenStream={proctoringScStream}
           cameraBypassed={cameraBypassed}
+          cameraRecoveryReason={cameraRecoveryReason}
+          onCameraReconnected={(newStream) => {
+            setProctoringCamStream(newStream);
+            setCameraRecoveryReason('');
+            updateCachedCameraStream(newStream);
+          }}
           onScreenShareReconnected={(newStream) => {
             setProctoringScStream(newStream);
             updateCachedScreenStream(newStream);

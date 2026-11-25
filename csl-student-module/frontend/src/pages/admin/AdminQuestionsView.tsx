@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   getAdminQuestions,
+  getAdminQuestion,
   createAdminQuestion,
   updateAdminQuestion,
   toggleAdminQuestion,
@@ -23,7 +24,8 @@ import {
   type CSVImportPreviewResponse,
   type SectionMappingRule,
 } from '../../api/admin';
-import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
+import { AdminQuestionEditorModal, isCodingQuestion } from './AdminQuestionEditorModal';
+import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
 import { AdminQuestionPoolsView } from './AdminQuestionPoolsView';
 import { ImportCodingJsonModal } from './ImportCodingJsonModal';
 
@@ -183,8 +185,9 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
     is_active: true,
   });
 
-  // Dedicated Editor Modal state
-  const [showEditorModal, setShowEditorModal] = useState(false);
+  // Dedicated MCQ & Coding Editor Modal state
+  const [showMcqEditorModal, setShowMcqEditorModal] = useState(false);
+  const [showCodingEditorModal, setShowCodingEditorModal] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<AdminQuestion | null>(null);
   const [savingQuestion, setSavingQuestion] = useState(false);
 
@@ -550,14 +553,38 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   };
 
   // Editor Modal actions
-  const openCreateModal = () => {
+  const openCreateMcqModal = () => {
     setEditingQuestion(null);
-    setShowEditorModal(true);
+    setShowCodingEditorModal(false);
+    setShowMcqEditorModal(true);
   };
 
-  const openEditModal = (q: AdminQuestion) => {
-    setEditingQuestion(q);
-    setShowEditorModal(true);
+  const openCreateCodingModal = () => {
+    setEditingQuestion(null);
+    setShowMcqEditorModal(false);
+    setShowCodingEditorModal(true);
+  };
+
+  const openEditModal = async (q: AdminQuestion) => {
+    const coding = isCodingQuestion(q);
+    if (coding) {
+      setShowMcqEditorModal(false);
+      if (!q.programming_details) {
+        try {
+          const full = await getAdminQuestion(q.id);
+          setEditingQuestion(full);
+        } catch {
+          setEditingQuestion(q);
+        }
+      } else {
+        setEditingQuestion(q);
+      }
+      setShowCodingEditorModal(true);
+    } else {
+      setShowCodingEditorModal(false);
+      setEditingQuestion(q);
+      setShowMcqEditorModal(true);
+    }
   };
 
   const handleSaveQuestion = async (formData: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any; question_type?: 'MCQ' | 'CODING' }) => {
@@ -570,7 +597,8 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
       }
 
       alert(editingQuestion ? 'Question updated successfully.' : 'New question created successfully.');
-      setShowEditorModal(false);
+      setShowMcqEditorModal(false);
+      setShowCodingEditorModal(false);
       setEditingQuestion(null);
       await loadQuestions();
       const freshAssessments = await getAdminAssessments();
@@ -753,7 +781,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
       {activeSubTab === 'POOLS' ? (
         <AdminQuestionPoolsView
-          onCreateQuestion={() => openCreateModal()}
+          onCreateQuestion={() => openCreateMcqModal()}
           onImportCSV={() => setShowImportModal(true)}
           onViewCentralBank={() => setActiveSubTab('BANK')}
           onNavigateToAssessment={(assId) => {
@@ -884,12 +912,13 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
           <button
             type="button"
-            onClick={openCreateModal}
+            data-testid="create-mcq-question-btn"
+            onClick={openCreateMcqModal}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              padding: '9px 20px',
+              padding: '9px 16px',
               backgroundColor: '#1455B8',
               color: '#FFFFFF',
               border: 'none',
@@ -900,11 +929,29 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               boxShadow: '0 2px 8px rgba(20, 85, 184, 0.25)',
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"></line>
-              <line x1="5" y1="12" x2="19" y2="12"></line>
-            </svg>
-            <span>+ Create Question</span>
+            <span>+ Create MCQ Question</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="create-coding-question-btn"
+            onClick={openCreateCodingModal}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '9px 16px',
+              backgroundColor: '#0F172A',
+              color: '#38BDF8',
+              border: '1px solid #0EA5E9',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.18)',
+            }}
+          >
+            <span>&lt;/&gt; + Create Coding Question</span>
           </button>
         </div>
       </div>
@@ -1528,9 +1575,10 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                     </p>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <button
-                        onClick={openCreateModal}
+                        type="button"
+                        onClick={openCreateMcqModal}
                         style={{
-                          padding: '8px 16px',
+                          padding: '8px 14px',
                           backgroundColor: '#1455B8',
                           color: '#FFFFFF',
                           border: 'none',
@@ -1540,7 +1588,23 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           cursor: 'pointer',
                         }}
                       >
-                        + Add Question
+                        + Create MCQ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openCreateCodingModal}
+                        style={{
+                          padding: '8px 14px',
+                          backgroundColor: '#0F172A',
+                          color: '#38BDF8',
+                          border: '1px solid #0EA5E9',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        &lt;/&gt; + Create Coding
                       </button>
                       <button
                         onClick={() => {
@@ -1616,12 +1680,41 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       })()}
                     </td>
                     <td style={{ padding: '12px 14px', color: '#0F172A' }}>
-                      <div style={{ fontWeight: 600, marginBottom: '2px', lineHeight: 1.45 }}>
-                        {q.prompt.length > 110 ? `${q.prompt.slice(0, 110)}...` : q.prompt}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                        {isCodingQuestion(q) && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 800,
+                              backgroundColor: '#0F172A',
+                              color: '#38BDF8',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              fontFamily: 'monospace',
+                            }}
+                          >
+                            &lt;/&gt; CODING
+                          </span>
+                        )}
+                        <span style={{ fontWeight: 600, lineHeight: 1.45 }}>
+                          {q.prompt.length > 110 ? `${q.prompt.slice(0, 110)}...` : q.prompt}
+                        </span>
                       </div>
-                      <div style={{ fontSize: '11px', color: '#64748B' }}>
-                        A: {q.option_a.slice(0, 24)} | B: {q.option_b.slice(0, 24)} | C: {q.option_c.slice(0, 24)} | D: {q.option_d.slice(0, 24)}
-                      </div>
+                      {isCodingQuestion(q) ? (
+                        <div style={{ fontSize: '11px', color: '#475569', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <span>
+                            Languages: {(q.programming_details?.allowed_languages || ['python']).join(', ').toUpperCase()}
+                          </span>
+                          <span>•</span>
+                          <span>
+                            Test Cases: {q.programming_details?.test_cases?.length ?? 0} ({q.programming_details?.test_cases?.filter((t) => t.is_public).length ?? 0} sample / {q.programming_details?.test_cases?.filter((t) => !t.is_public).length ?? 0} hidden)
+                          </span>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '11px', color: '#64748B' }}>
+                          A: {q.option_a.slice(0, 24)} | B: {q.option_b.slice(0, 24)} | C: {q.option_c.slice(0, 24)} | D: {q.option_d.slice(0, 24)}
+                        </div>
+                      )}
                       {q.pool_memberships && q.pool_memberships.length > 0 ? (
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
                           {q.pool_memberships.map((pool) => (
@@ -1660,23 +1753,42 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          width: '24px',
-                          height: '24px',
-                          borderRadius: '6px',
-                          backgroundColor: '#DCFCE7',
-                          color: '#166534',
-                          fontWeight: 800,
-                          fontFamily: 'monospace',
-                          border: '1px solid #86EFAC',
-                        }}
-                      >
-                        {q.correct_option}
-                      </span>
+                      {isCodingQuestion(q) ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '2px 7px',
+                            borderRadius: '6px',
+                            backgroundColor: '#E0F2FE',
+                            color: '#0369A1',
+                            fontWeight: 800,
+                            fontSize: '10.5px',
+                            border: '1px solid #BAE6FD',
+                          }}
+                        >
+                          TESTS
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '6px',
+                            backgroundColor: '#DCFCE7',
+                            color: '#166534',
+                            fontWeight: 800,
+                            fontFamily: 'monospace',
+                            border: '1px solid #86EFAC',
+                          }}
+                        >
+                          {q.correct_option}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                       <span
@@ -1949,15 +2061,29 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         </div>
       </div>
 
-      {/* ─── DEDICATED SPACIOUS QUESTION EDITOR MODAL ─────────────── */}
+      {/* ─── DEDICATED MCQ & CODING QUESTION EDITOR MODALS ────────── */}
       <AdminQuestionEditorModal
-        isOpen={showEditorModal}
+        isOpen={showMcqEditorModal}
         question={editingQuestion}
         assessments={assessments}
         sections={sections}
         defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
         onClose={() => {
-          setShowEditorModal(false);
+          setShowMcqEditorModal(false);
+          setEditingQuestion(null);
+        }}
+        onSave={handleSaveQuestion}
+        saving={savingQuestion}
+      />
+
+      <AdminCodingQuestionModal
+        isOpen={showCodingEditorModal}
+        question={editingQuestion}
+        assessments={assessments}
+        sections={sections}
+        defaultAssessmentId={selectedAssessment?.id || assessmentFilter || ''}
+        onClose={() => {
+          setShowCodingEditorModal(false);
           setEditingQuestion(null);
         }}
         onSave={handleSaveQuestion}
@@ -2693,50 +2819,80 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               {previewQuestion.prompt}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-              {[
-                { key: 'A', text: previewQuestion.option_a },
-                { key: 'B', text: previewQuestion.option_b },
-                { key: 'C', text: previewQuestion.option_c },
-                { key: 'D', text: previewQuestion.option_d },
-              ].map(({ key, text }) => {
-                const isCorrect = (previewQuestion.correct_option || '').toUpperCase() === key;
-                return (
-                  <div
-                    key={key}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: isCorrect ? '2px solid #16A34A' : '1px solid #E2E8F0',
-                      backgroundColor: isCorrect ? '#F0FDF4' : '#FFFFFF',
-                    }}
-                  >
-                    <span
+            {isCodingQuestion(previewQuestion) ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+                {previewQuestion.programming_details?.problem_statement &&
+                  previewQuestion.programming_details.problem_statement !== previewQuestion.prompt && (
+                    <div style={{ fontSize: '13.5px', color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                      {previewQuestion.programming_details.problem_statement}
+                    </div>
+                  )}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', backgroundColor: '#E0F2FE', color: '#0369A1' }}>
+                    Languages: {(previewQuestion.programming_details?.allowed_languages || ['python']).join(', ').toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', backgroundColor: '#F1F5F9', color: '#334155' }}>
+                    Time: {previewQuestion.programming_details?.time_limit_seconds ?? 2}s • Memory: {previewQuestion.programming_details?.memory_limit_mb ?? 256}MB
+                  </span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', backgroundColor: '#F0FDF4', color: '#166534' }}>
+                    {(previewQuestion.programming_details?.test_cases || []).filter((t) => t.is_public).length} Sample / {(previewQuestion.programming_details?.test_cases || []).filter((t) => !t.is_public).length} Hidden Cases
+                  </span>
+                </div>
+                {previewQuestion.programming_details?.constraints && (
+                  <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '12.5px' }}>
+                    <strong>Constraints:</strong>
+                    <div style={{ fontFamily: 'monospace', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+                      {previewQuestion.programming_details.constraints}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                {[
+                  { key: 'A', text: previewQuestion.option_a },
+                  { key: 'B', text: previewQuestion.option_b },
+                  { key: 'C', text: previewQuestion.option_c },
+                  { key: 'D', text: previewQuestion.option_d },
+                ].map(({ key, text }) => {
+                  const isCorrect = (previewQuestion.correct_option || '').toUpperCase() === key;
+                  return (
+                    <div
+                      key={key}
                       style={{
-                        width: '24px',
-                        height: '24px',
-                        borderRadius: '50%',
-                        backgroundColor: isCorrect ? '#16A34A' : '#E2E8F0',
-                        color: isCorrect ? '#FFFFFF' : '#475569',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 800,
-                        fontSize: '12px',
+                        gap: '12px',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: isCorrect ? '2px solid #16A34A' : '1px solid #E2E8F0',
+                        backgroundColor: isCorrect ? '#F0FDF4' : '#FFFFFF',
                       }}
                     >
-                      {isCorrect ? '✓' : key}
-                    </span>
-                    <span style={{ fontSize: '13.5px', color: isCorrect ? '#14532D' : '#334155', fontWeight: isCorrect ? 700 : 500 }}>
-                      {text}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                      <span
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: '50%',
+                          backgroundColor: isCorrect ? '#16A34A' : '#E2E8F0',
+                          color: isCorrect ? '#FFFFFF' : '#475569',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 800,
+                          fontSize: '12px',
+                        }}
+                      >
+                        {isCorrect ? '✓' : key}
+                      </span>
+                      <span style={{ fontSize: '13.5px', color: isCorrect ? '#14532D' : '#334155', fontWeight: isCorrect ? 700 : 500 }}>
+                        {text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {previewQuestion.explanation && (
               <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', padding: '12px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>

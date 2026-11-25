@@ -3,62 +3,36 @@ import {
   type AdminQuestion,
   type AdminAssessment,
   type AdminSection,
-  type AdminProgrammingTestCase,
   getAdminSections,
-  fetchAdminQuestionCoding,
-  deleteAdminProgrammingTestCase,
 } from '../../api/admin';
 import { formatApiError } from '../../utils/errorFormatter';
+
+export function isCodingQuestion(q?: Partial<AdminQuestion> | null): boolean {
+  if (!q) return false;
+  return (
+    q.question_type === 'CODING' ||
+    Boolean(q.has_programming_details) ||
+    Boolean(q.programming_details) ||
+    (q.assessment_type || '').toUpperCase() === 'CODING' ||
+    (q.section_type || '').toUpperCase() === 'CODING'
+  );
+}
 
 interface AdminQuestionEditorModalProps {
   question: AdminQuestion | null; // null if creating, populated if editing
   isOpen: boolean;
   onClose: () => void;
-  onSave: (data: Partial<AdminQuestion> & { assessment_id?: string; pool_id?: string; question_type?: 'MCQ' | 'CODING' }) => Promise<void>;
+  onSave: (
+    data: Partial<AdminQuestion> & { assessment_id?: string; pool_id?: string; question_type?: 'MCQ' }
+  ) => Promise<void>;
   saving: boolean;
   assessments?: AdminAssessment[];
   defaultAssessmentId?: string;
   sections?: AdminSection[];
-  forcedType?: 'MCQ' | 'CODING';
 }
 
 const EMPTY_ASSESSMENTS: AdminAssessment[] = [];
 const EMPTY_SECTIONS: AdminSection[] = [];
-
-const SUPPORTED_CODING_LANGUAGES: { key: string; label: string }[] = [
-  { key: 'python', label: 'Python 3' },
-  { key: 'java', label: 'Java' },
-  { key: 'c', label: 'C' },
-  { key: 'cpp', label: 'C++' },
-  { key: 'javascript', label: 'JavaScript' },
-];
-
-const DEFAULT_BOILERPLATES: Record<string, string> = {
-  python: "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
-  java: "import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n    }\n}\n",
-  c: "#include <stdio.h>\n\nint main() {\n    return 0;\n}\n",
-  cpp: "#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n",
-  javascript: "const fs = require('fs');\nconst input = fs.readFileSync(0, 'utf-8').trim();\n",
-};
-
-function resolveCanonicalQuestionType(
-  question: AdminQuestion | null,
-  forcedType?: 'MCQ' | 'CODING'
-): 'MCQ' | 'CODING' {
-  if (forcedType === 'CODING' || forcedType === 'MCQ') return forcedType;
-  if (question) {
-    if (
-      question.question_type === 'CODING' ||
-      question.has_programming_details ||
-      (question.assessment_type || '').toUpperCase() === 'CODING' ||
-      (question.section_type || '').toUpperCase() === 'CODING'
-    ) {
-      return 'CODING';
-    }
-    return 'MCQ';
-  }
-  return 'MCQ';
-}
 
 export function AdminQuestionEditorModal({
   question,
@@ -69,14 +43,10 @@ export function AdminQuestionEditorModal({
   assessments = EMPTY_ASSESSMENTS,
   defaultAssessmentId = '',
   sections = EMPTY_SECTIONS,
-  forcedType,
 }: AdminQuestionEditorModalProps) {
   const isEditMode = Boolean(question && question.id);
 
-  // Form fields
-  const [questionType, setQuestionType] = useState<'MCQ' | 'CODING'>(() =>
-    resolveCanonicalQuestionType(question, forcedType)
-  );
+  // Form fields (MCQ Only)
   const [assessmentId, setAssessmentId] = useState<string>('');
   const [prompt, setPrompt] = useState('');
   const [sectionType, setSectionType] = useState<string>('APTITUDE');
@@ -101,22 +71,6 @@ export function AdminQuestionEditorModal({
   const [marks, setMarks] = useState<number>(1);
   const [isArchived, setIsArchived] = useState(false);
 
-  // Coding Question State (Phase 3.1 / Unified Editor)
-  const [codingConstraints, setCodingConstraints] = useState('');
-  const [codingInputFormat, setCodingInputFormat] = useState('');
-  const [codingOutputFormat, setCodingOutputFormat] = useState('');
-  const [codingTimeLimit, setCodingTimeLimit] = useState<number>(2.0);
-  const [codingMemoryLimit, setCodingMemoryLimit] = useState<number>(256);
-  const [codingAllowedLanguages, setCodingAllowedLanguages] = useState<string[]>(['python', 'java']);
-  const [activeBoilerplateLang, setActiveBoilerplateLang] = useState<string>('python');
-  const [codingBoilerplate, setCodingBoilerplate] = useState<Record<string, string>>(DEFAULT_BOILERPLATES);
-  const [codingTestCases, setCodingTestCases] = useState<AdminProgrammingTestCase[]>([]);
-  const [newTcInput, setNewTcInput] = useState('');
-  const [newTcOutput, setNewTcOutput] = useState('');
-  const [newTcIsPublic, setNewTcIsPublic] = useState(false);
-  const [newTcWeight, setNewTcWeight] = useState<number>(1.0);
-  const [loadingCodingDetails, setLoadingCodingDetails] = useState(false);
-
   // Validation error state
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -125,28 +79,9 @@ export function AdminQuestionEditorModal({
 
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSelectQuestionType = (nextType: 'MCQ' | 'CODING') => {
-    setQuestionType(nextType);
-    if (nextType === 'CODING') {
-      if (sectionType === 'APTITUDE' || !sectionType) setSectionType('CODING');
-      setMarks((prev) => (prev <= 1 ? 10 : prev));
-    } else {
-      if (sectionType === 'CODING' || !sectionType) setSectionType('APTITUDE');
-      setMarks((prev) => (prev === 10 ? 1 : prev));
-    }
-  };
-
-  // Synchronize ALL MCQ + Coding state cleanly on open/question change
+  // Synchronize MCQ state cleanly on open/question change
   useEffect(() => {
     if (!isOpen) return;
-
-    const canonicalType = resolveCanonicalQuestionType(question, forcedType);
-    setQuestionType(canonicalType);
-    setNewTcInput('');
-    setNewTcOutput('');
-    setNewTcIsPublic(false);
-    setNewTcWeight(1.0);
-    setActiveBoilerplateLang('python');
 
     if (question) {
       const existingAssessmentId =
@@ -157,8 +92,8 @@ export function AdminQuestionEditorModal({
         defaultAssessmentId ||
         '';
 
-      const initSection = question.section_type || (canonicalType === 'CODING' ? 'CODING' : 'APTITUDE');
-      const initMarks = question.marks ?? (canonicalType === 'CODING' ? 10 : 1);
+      const initSection = question.section_type && question.section_type !== 'CODING' ? question.section_type : 'APTITUDE';
+      const initMarks = question.marks ?? 1;
 
       setAssessmentId(existingAssessmentId);
       setPrompt(question.prompt || '');
@@ -174,40 +109,7 @@ export function AdminQuestionEditorModal({
       setMarks(initMarks);
       setIsArchived(question.is_archived ?? false);
 
-      setCodingConstraints('');
-      setCodingInputFormat('');
-      setCodingOutputFormat('');
-      setCodingTimeLimit(2.0);
-      setCodingMemoryLimit(256);
-      setCodingAllowedLanguages(['python', 'java']);
-      setCodingBoilerplate({ ...DEFAULT_BOILERPLATES });
-      setCodingTestCases([]);
-
-      if (question.id && canonicalType === 'CODING') {
-        setLoadingCodingDetails(true);
-        fetchAdminQuestionCoding(question.id)
-          .then((details) => {
-            if (details) {
-              const langs = details.allowed_languages && details.allowed_languages.length > 0
-                ? details.allowed_languages
-                : ['python', 'java'];
-              setCodingConstraints(details.constraints || '');
-              setCodingInputFormat(details.input_format || '');
-              setCodingOutputFormat(details.output_format || '');
-              setCodingTimeLimit(details.time_limit_seconds || 2.0);
-              setCodingMemoryLimit(details.memory_limit_mb || 256);
-              setCodingAllowedLanguages(langs);
-              setActiveBoilerplateLang(langs[0] || 'python');
-              setCodingBoilerplate({ ...DEFAULT_BOILERPLATES, ...(details.boilerplate_code || {}) });
-              setCodingTestCases(details.test_cases || []);
-            }
-          })
-          .catch(() => {})
-          .finally(() => setLoadingCodingDetails(false));
-      }
-
       initialStateRef.current = JSON.stringify({
-        questionType: canonicalType,
         assessmentId: existingAssessmentId,
         prompt: question.prompt || '',
         sectionType: initSection,
@@ -223,8 +125,8 @@ export function AdminQuestionEditorModal({
       });
     } else {
       const initialNewAssessmentId = defaultAssessmentId || '';
-      const defaultSection = canonicalType === 'CODING' ? 'CODING' : 'APTITUDE';
-      const defaultMarks = canonicalType === 'CODING' ? 10 : 1;
+      const defaultSection = 'APTITUDE';
+      const defaultMarks = 1;
 
       setAssessmentId(initialNewAssessmentId);
       setPrompt('');
@@ -240,17 +142,7 @@ export function AdminQuestionEditorModal({
       setMarks(defaultMarks);
       setIsArchived(false);
 
-      setCodingConstraints('');
-      setCodingInputFormat('');
-      setCodingOutputFormat('');
-      setCodingTimeLimit(2.0);
-      setCodingMemoryLimit(256);
-      setCodingAllowedLanguages(['python', 'java']);
-      setCodingBoilerplate({ ...DEFAULT_BOILERPLATES });
-      setCodingTestCases([]);
-
       initialStateRef.current = JSON.stringify({
-        questionType: canonicalType,
         assessmentId: initialNewAssessmentId,
         prompt: '',
         sectionType: defaultSection,
@@ -266,14 +158,13 @@ export function AdminQuestionEditorModal({
       });
     }
     setErrorMsg('');
-  }, [isOpen, question?.id, forcedType, defaultAssessmentId]);
+  }, [isOpen, question?.id, defaultAssessmentId]);
 
   if (!isOpen) return null;
 
   // Unsaved changes check
   const hasUnsavedChanges = () => {
     const currentState = JSON.stringify({
-      questionType,
       assessmentId,
       prompt,
       sectionType,
@@ -356,77 +247,40 @@ export function AdminQuestionEditorModal({
     }
   };
 
-  // Submission handler
+  // Submission handler (MCQ Only)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
-    // Field validations
     if (!prompt.trim()) {
-      setErrorMsg('Question prompt / problem statement is required.');
+      setErrorMsg('Question prompt is required.');
+      return;
+    }
+    if (!optionA.trim() || !optionB.trim() || !optionC.trim() || !optionD.trim()) {
+      setErrorMsg('All four answer options (A, B, C, D) must be provided.');
+      return;
+    }
+    if (!['A', 'B', 'C', 'D'].includes(correctOption)) {
+      setErrorMsg('A valid correct option key (A, B, C, or D) must be selected.');
       return;
     }
 
-    const isCoding = questionType === 'CODING';
-
-    if (isCoding) {
-      if (codingAllowedLanguages.length === 0) {
-        setErrorMsg('Select at least one allowed programming language.');
-        return;
-      }
-      if (codingTestCases.length === 0) {
-        setErrorMsg('At least one evaluation test case is required for coding questions.');
-        return;
-      }
-      if (Number(marks) <= 0) {
-        setErrorMsg('Question marks must be a positive number (> 0).');
-        return;
-      }
-    } else {
-      if (!optionA.trim() || !optionB.trim() || !optionC.trim() || !optionD.trim()) {
-        setErrorMsg('All four answer options (A, B, C, D) must be provided.');
-        return;
-      }
-      if (!['A', 'B', 'C', 'D'].includes(correctOption)) {
-        setErrorMsg('A valid correct option key (A, B, C, or D) must be selected.');
-        return;
-      }
-    }
-
-    const filteredBoilerplates: Record<string, string> = {};
-    if (isCoding) {
-      codingAllowedLanguages.forEach((lang) => {
-        filteredBoilerplates[lang] = codingBoilerplate[lang] ?? DEFAULT_BOILERPLATES[lang] ?? '';
-      });
-    }
-
-    const payload: Partial<AdminQuestion> & { assessment_id?: string; coding_details?: any; question_type: 'MCQ' | 'CODING' } = {
+    const payload: Partial<AdminQuestion> & { assessment_id?: string; question_type: 'MCQ' } = {
       ...(assessmentId.trim() ? { assessment_id: assessmentId.trim() } : {}),
-      marks: Number(marks) || (isCoding ? 10 : 1),
+      marks: Number(marks) || 1,
       is_archived: isArchived,
       prompt: prompt.trim(),
       section_type: sectionType,
-      question_type: questionType,
-      assessment_type: isCoding ? 'CODING' : 'INITIAL_DIAGNOSTIC',
+      question_type: 'MCQ',
+      assessment_type: 'INITIAL_DIAGNOSTIC',
       difficulty,
-      option_a: isCoding ? 'N/A (Coding Question)' : optionA.trim(),
-      option_b: isCoding ? 'N/A (Coding Question)' : optionB.trim(),
-      option_c: isCoding ? 'N/A (Coding Question)' : optionC.trim(),
-      option_d: isCoding ? 'N/A (Coding Question)' : optionD.trim(),
-      correct_option: isCoding ? 'A' : correctOption,
+      option_a: optionA.trim(),
+      option_b: optionB.trim(),
+      option_c: optionC.trim(),
+      option_d: optionD.trim(),
+      correct_option: correctOption,
       explanation: explanation.trim(),
       is_active: isActive,
-      coding_details: isCoding ? {
-        problem_statement: prompt.trim(),
-        constraints: codingConstraints.trim(),
-        input_format: codingInputFormat.trim(),
-        output_format: codingOutputFormat.trim(),
-        time_limit_seconds: Number(codingTimeLimit) || 2.0,
-        memory_limit_mb: Number(codingMemoryLimit) || 256,
-        allowed_languages: codingAllowedLanguages,
-        boilerplate_code: filteredBoilerplates,
-        test_cases: codingTestCases,
-      } : undefined,
     };
 
     try {
@@ -434,38 +288,6 @@ export function AdminQuestionEditorModal({
     } catch (err: unknown) {
       setErrorMsg(formatApiError(err, 'Failed to save question.'));
     }
-  };
-
-  const handleAddTestCase = () => {
-    if (newTcOutput === '') {
-      setErrorMsg('Expected output is required for the test case.');
-      return;
-    }
-    setErrorMsg('');
-    const tc: AdminProgrammingTestCase = {
-      input_text: newTcInput,
-      expected_output: newTcOutput,
-      is_public: newTcIsPublic,
-      marks_weightage: Number(newTcWeight) || 1.0,
-      explanation: '',
-      order: codingTestCases.length + 1,
-    };
-    setCodingTestCases([...codingTestCases, tc]);
-    setNewTcInput('');
-    setNewTcOutput('');
-    setNewTcIsPublic(false);
-    setNewTcWeight(1.0);
-  };
-
-  const handleRemoveTestCase = async (index: number, tcId?: string) => {
-    if (tcId && question?.id) {
-      try {
-        await deleteAdminProgrammingTestCase(question.id, tcId);
-      } catch (err) {
-        console.warn('Failed to delete test case via API:', err);
-      }
-    }
-    setCodingTestCases(codingTestCases.filter((_, i) => i !== index));
   };
 
   // Extract code blocks and prose for live preview
@@ -604,19 +426,11 @@ export function AdminQuestionEditorModal({
                   letterSpacing: '-0.01em',
                 }}
               >
-                {isEditMode
-                  ? `Edit Question #${question!.id}`
-                  : forcedType === 'CODING'
-                  ? 'Create Coding Problem'
-                  : forcedType === 'MCQ'
-                  ? 'Create MCQ Question'
-                  : 'Create New Question'}
+                {isEditMode ? `Edit MCQ Question #${question!.id}` : 'Create MCQ Question'}
               </h2>
               <p style={{ fontSize: '12.5px', color: '#64748B', margin: 0 }}>
                 {isEditMode
-                  ? 'Update question details, options, constraints, or test cases.'
-                  : forcedType === 'CODING'
-                  ? 'Author an algorithmic coding problem with public and hidden test cases.'
+                  ? 'Update multiple choice question prompt, answer options, or explanation.'
                   : 'Compose a multiple choice question with options, correct answer, and explanation.'}
               </p>
             </div>
@@ -818,60 +632,6 @@ export function AdminQuestionEditorModal({
                       ? 'Optional: select an assessment to assign or move this question.'
                       : 'Optional: link directly to an assessment or leave unassigned in Question Bank / Pool.'}
                   </p>
-                </div>
-
-                {/* 0.5 Canonical Question Format Toggle */}
-                <div
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    borderRadius: '14px',
-                    border: '1px solid #CBD5E1',
-                    padding: '14px 20px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '12px',
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: '12.5px', fontWeight: 800, color: '#0B2E6F' }}>
-                      Question Format Type *
-                    </div>
-                    <div style={{ fontSize: '11.5px', color: '#64748B' }}>
-                      {forcedType
-                        ? `Locked to ${forcedType === 'CODING' ? 'Coding Problem' : 'Multiple Choice (MCQ)'} for this workflow.`
-                        : 'Select whether candidates answer via MCQ options or interactive Monaco Coding Playground.'}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    {(['MCQ', 'CODING'] as const).map((mode) => {
-                      const active = questionType === mode;
-                      const lockedOut = Boolean(forcedType && forcedType !== mode);
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          disabled={lockedOut}
-                          onClick={() => handleSelectQuestionType(mode)}
-                          data-testid={`question-type-${mode.toLowerCase()}`}
-                          style={{
-                            padding: '8px 14px',
-                            borderRadius: '8px',
-                            border: active ? '2px solid #0D52D6' : '1px solid #CBD5E1',
-                            backgroundColor: active ? '#EFF6FF' : '#FFFFFF',
-                            color: active ? '#0D52D6' : '#475569',
-                            fontWeight: 700,
-                            fontSize: '12px',
-                            cursor: lockedOut ? 'not-allowed' : 'pointer',
-                            opacity: lockedOut ? 0.5 : 1,
-                          }}
-                        >
-                          {mode === 'MCQ' ? 'Multiple Choice (MCQ)' : 'Coding Problem (Monaco)'}
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
 
                 {/* 1. Metadata Selector Bar */}
@@ -1121,368 +881,7 @@ export function AdminQuestionEditorModal({
                   </div>
                 </div>
 
-                {questionType === 'CODING' ? (
-                  /* --- CODING QUESTION SPECIFICATION & TEST CASES CARD --- */
-                  <div
-                    style={{
-                      backgroundColor: '#FFFFFF',
-                      borderRadius: '14px',
-                      border: '1.5px solid #CBD5E1',
-                      padding: '20px 22px',
-                      boxShadow: '0 2px 6px rgba(11, 46, 111, 0.03)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '16px',
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-                          Programming Problem Specification
-                        </h4>
-                        <span style={{ fontSize: '11px', color: '#1455B8', fontWeight: 700, backgroundColor: '#EFF6FF', padding: '2px 8px', borderRadius: '4px' }}>
-                          {loadingCodingDetails ? 'Loading saved specs...' : 'Monaco Playground Active'}
-                        </span>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#64748B' }}>
-                        Configure problem statement, constraints, input/output specifications, execution limits, and evaluation test cases.
-                      </p>
-                    </div>
-
-                    {/* Constraints */}
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                        Constraints
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={codingConstraints}
-                        onChange={(e) => setCodingConstraints(e.target.value)}
-                        placeholder="e.g. 1 <= n <= 10^5, -10^9 <= a[i] <= 10^9"
-                        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                      />
-                    </div>
-
-                    {/* Input Format & Output Format */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                          Input Format
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={codingInputFormat}
-                          onChange={(e) => setCodingInputFormat(e.target.value)}
-                          placeholder="e.g. First line contains integer n. Second line contains n space-separated integers."
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                          Output Format
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={codingOutputFormat}
-                          onChange={(e) => setCodingOutputFormat(e.target.value)}
-                          placeholder="e.g. Print a single integer representing the maximum subarray sum."
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Time & Memory Limits */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                          Time Limit (Seconds) *
-                        </label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0.5"
-                          max="10.0"
-                          value={codingTimeLimit}
-                          onChange={(e) => setCodingTimeLimit(Number(e.target.value))}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '4px' }}>
-                          Memory Limit (MB) *
-                        </label>
-                        <input
-                          type="number"
-                          min="64"
-                          max="1024"
-                          value={codingMemoryLimit}
-                          onChange={(e) => setCodingMemoryLimit(Number(e.target.value))}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', boxSizing: 'border-box' }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Allowed Languages & Starter Boilerplate Code */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px', backgroundColor: '#F8FAFC', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
-                          Allowed Programming Languages *
-                        </label>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                          {SUPPORTED_CODING_LANGUAGES.map((lang) => {
-                            const checked = codingAllowedLanguages.includes(lang.key);
-                            return (
-                              <label
-                                key={lang.key}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                  fontSize: '12px',
-                                  fontWeight: 600,
-                                  color: '#1E293B',
-                                  padding: '5px 10px',
-                                  borderRadius: '6px',
-                                  border: checked ? '1px solid #0D52D6' : '1px solid #CBD5E1',
-                                  backgroundColor: checked ? '#EFF6FF' : '#FFFFFF',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      const updated = [...codingAllowedLanguages, lang.key];
-                                      setCodingAllowedLanguages(updated);
-                                      if (!codingBoilerplate[lang.key]) {
-                                        setCodingBoilerplate((prev) => ({
-                                          ...prev,
-                                          [lang.key]: DEFAULT_BOILERPLATES[lang.key] || '',
-                                        }));
-                                      }
-                                      setActiveBoilerplateLang(lang.key);
-                                    } else {
-                                      const updated = codingAllowedLanguages.filter((k) => k !== lang.key);
-                                      setCodingAllowedLanguages(updated);
-                                      if (activeBoilerplateLang === lang.key && updated.length > 0) {
-                                        setActiveBoilerplateLang(updated[0]);
-                                      }
-                                    }
-                                  }}
-                                />
-                                <span>{lang.label}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {codingAllowedLanguages.length > 0 && (
-                        <div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
-                              Starter Boilerplate Code ({activeBoilerplateLang.toUpperCase()})
-                            </label>
-                            <div style={{ display: 'flex', gap: '4px' }}>
-                              {codingAllowedLanguages.map((langKey) => (
-                                <button
-                                  key={langKey}
-                                  type="button"
-                                  onClick={() => setActiveBoilerplateLang(langKey)}
-                                  style={{
-                                    padding: '3px 8px',
-                                    borderRadius: '4px',
-                                    border: activeBoilerplateLang === langKey ? '1px solid #0D52D6' : '1px solid #CBD5E1',
-                                    backgroundColor: activeBoilerplateLang === langKey ? '#0D52D6' : '#FFFFFF',
-                                    color: activeBoilerplateLang === langKey ? '#FFFFFF' : '#475569',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  {langKey.toUpperCase()}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea
-                            rows={4}
-                            value={codingBoilerplate[activeBoilerplateLang] ?? ''}
-                            onChange={(e) =>
-                              setCodingBoilerplate((prev) => ({
-                                ...prev,
-                                [activeBoilerplateLang]: e.target.value,
-                              }))
-                            }
-                            style={{
-                              width: '100%',
-                              padding: '8px 10px',
-                              borderRadius: '8px',
-                              border: '1px solid #CBD5E1',
-                              fontSize: '12px',
-                              fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace",
-                              boxSizing: 'border-box',
-                              backgroundColor: '#FFFFFF',
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Evaluation Test Cases Section */}
-                    <div style={{ marginTop: '8px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 800, color: '#0B2E6F' }}>
-                            Evaluation Test Cases ({codingTestCases.length})
-                          </span>
-                          <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '999px', backgroundColor: '#EFF6FF', color: '#1455B8', fontWeight: 700 }}>
-                            Public Samples: {codingTestCases.filter(t => t.is_public).length}
-                          </span>
-                          <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '999px', backgroundColor: '#FEF3C7', color: '#B45309', fontWeight: 700 }}>
-                            Hidden Evaluation: {codingTestCases.filter(t => !t.is_public).length}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Existing Test Cases Table */}
-                      {codingTestCases.length === 0 ? (
-                        <div style={{ padding: '16px', backgroundColor: '#FEF2F2', border: '1px dashed #FCA5A5', borderRadius: '8px', textAlign: 'center', color: '#991B1B', fontSize: '12px' }}>
-                          ⚠️ At least one test case is required before this problem can be evaluated. Add a sample test case below.
-                        </div>
-                      ) : (
-                        <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', overflow: 'hidden', marginBottom: '14px' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                            <thead style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left' }}>
-                              <tr>
-                                <th style={{ padding: '8px 10px', color: '#475569' }}>#</th>
-                                <th style={{ padding: '8px 10px', color: '#475569' }}>Visibility</th>
-                                <th style={{ padding: '8px 10px', color: '#475569' }}>Input (stdin)</th>
-                                <th style={{ padding: '8px 10px', color: '#475569' }}>Expected Output</th>
-                                <th style={{ padding: '8px 10px', color: '#475569' }}>Weight</th>
-                                <th style={{ padding: '8px 10px', color: '#475569', textAlign: 'right' }}>Action</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {codingTestCases.map((tc, idx) => (
-                                <tr key={tc.id || idx} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                                  <td style={{ padding: '8px 10px', fontWeight: 700 }}>{idx + 1}</td>
-                                  <td style={{ padding: '8px 10px' }}>
-                                    <span style={{
-                                      padding: '2px 6px',
-                                      borderRadius: '4px',
-                                      fontSize: '10px',
-                                      fontWeight: 700,
-                                      backgroundColor: tc.is_public ? '#EFF6FF' : '#FEF3C7',
-                                      color: tc.is_public ? '#1455B8' : '#B45309',
-                                    }}>
-                                      {tc.is_public ? 'PUBLIC' : 'HIDDEN'}
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: '8px 10px', fontFamily: 'monospace', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {tc.input_text || '(empty)'}
-                                  </td>
-                                  <td style={{ padding: '8px 10px', fontFamily: 'monospace', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {tc.expected_output}
-                                  </td>
-                                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>{tc.marks_weightage || 1.0}</td>
-                                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveTestCase(idx, tc.id)}
-                                      style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '13px' }}
-                                      title="Remove Test Case"
-                                    >
-                                      🗑️
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {/* Add New Test Case Inline Form */}
-                      <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '10px', padding: '14px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#0B2E6F', display: 'block', marginBottom: '8px' }}>
-                          + Add Test Case
-                        </span>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '8px' }}>
-                          <div>
-                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '2px' }}>
-                              Standard Input (stdin)
-                            </label>
-                            <textarea
-                              rows={2}
-                              value={newTcInput}
-                              onChange={(e) => setNewTcInput(e.target.value)}
-                              placeholder="Input passed to stdin..."
-                              style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
-                            />
-                          </div>
-                          <div>
-                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '2px' }}>
-                              Expected Output (stdout) *
-                            </label>
-                            <textarea
-                              rows={2}
-                              value={newTcOutput}
-                              onChange={(e) => setNewTcOutput(e.target.value)}
-                              placeholder="Exact expected stdout..."
-                              style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px', fontFamily: 'monospace', boxSizing: 'border-box' }}
-                            />
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
-                              <input
-                                type="checkbox"
-                                checked={newTcIsPublic}
-                                onChange={(e) => setNewTcIsPublic(e.target.checked)}
-                                style={{ accentColor: '#1455B8' }}
-                              />
-                              <span>Public Sample Case</span>
-                            </label>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <label style={{ fontSize: '11px', fontWeight: 700, color: '#475569' }}>Weight:</label>
-                              <input
-                                type="number"
-                                min="0.1"
-                                step="any"
-                                value={newTcWeight}
-                                onChange={(e) => setNewTcWeight(Number(e.target.value))}
-                                style={{ width: '60px', padding: '4px 6px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '12px' }}
-                              />
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={handleAddTestCase}
-                            style={{
-                              padding: '6px 14px',
-                              backgroundColor: '#1455B8',
-                              color: '#FFFFFF',
-                              border: 'none',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Add to Test Cases
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {/* 3. Answer Options Card */}
+                {/* 3. Answer Options Card */}
                 <div
                   style={{
                     backgroundColor: '#FFFFFF',
@@ -1744,8 +1143,6 @@ export function AdminQuestionEditorModal({
                     />
                   </div>
                 </div>
-              </>
-            )}
               </div>
 
             {/* ────────────────────────────────────────────────────────
@@ -1806,12 +1203,12 @@ export function AdminQuestionEditorModal({
                           borderRadius: '9999px',
                           fontSize: '11px',
                           fontWeight: 800,
-                          backgroundColor: questionType === 'CODING' ? '#FEF3C7' : '#EFF6FF',
-                          color: questionType === 'CODING' ? '#B45309' : '#1455B8',
-                          border: `1px solid ${questionType === 'CODING' ? '#FDE68A' : '#BFDBFE'}`,
+                          backgroundColor: '#EFF6FF',
+                          color: '#1455B8',
+                          border: '1px solid #BFDBFE',
                         }}
                       >
-                        {questionType === 'CODING' ? 'Coding Problem' : sectionType || 'Aptitude MCQ'}
+                        {sectionType || 'Aptitude MCQ'}
                       </span>
                     </div>
                   </div>
@@ -1851,28 +1248,7 @@ export function AdminQuestionEditorModal({
                     {previewProse}
                   </div>
 
-                  {questionType === 'CODING' ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12.5px', color: '#334155' }}>
-                      {codingConstraints && (
-                        <div style={{ padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                          <strong style={{ color: '#0B2E6F', display: 'block', marginBottom: '4px' }}>Constraints</strong>
-                          <div style={{ whiteSpace: 'pre-wrap' }}>{codingConstraints}</div>
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                        <span style={{ padding: '3px 8px', borderRadius: '6px', backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '11px' }}>
-                          Languages: {codingAllowedLanguages.join(', ').toUpperCase() || 'None'}
-                        </span>
-                        <span style={{ padding: '3px 8px', borderRadius: '6px', backgroundColor: '#F1F5F9', color: '#0F172A', fontWeight: 700, fontSize: '11px' }}>
-                          Time: {codingTimeLimit}s • Memory: {codingMemoryLimit}MB
-                        </span>
-                        <span style={{ padding: '3px 8px', borderRadius: '6px', backgroundColor: '#ECFDF5', color: '#166534', fontWeight: 700, fontSize: '11px' }}>
-                          {codingTestCases.filter((t) => t.is_public).length} Public / {codingTestCases.filter((t) => !t.is_public).length} Hidden Test Cases
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                  /* Preview 4 Options with Correct Answer Highlight */
+                  {/* Preview 4 Options with Correct Answer Highlight */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {[
                       { key: 'A', text: optionA },
@@ -1941,7 +1317,6 @@ export function AdminQuestionEditorModal({
                       );
                     })}
                   </div>
-                  )}
                 </div>
 
                 {/* 2. Question Metadata Information Card */}

@@ -14,6 +14,11 @@ import {
   uploadProctoringEvidence,
   type ProctoringSessionResponse,
 } from '../../api/assessment';
+import {
+  acquireCameraAndMicrophoneStream,
+  getOrInitProctoringSession,
+  hasLiveVideoTrack,
+} from '../../utils/proctoringStreamStore';
 
 export interface ProctoringInitializerProps {
   attemptId: string;
@@ -47,6 +52,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
 
   // Streams
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [hasAudioTrack, setHasAudioTrack] = useState<boolean>(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
 
   // Calibration state
@@ -59,6 +65,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const handedOffRef = useRef<boolean>(false);
+  const sessionInitInFlightRef = useRef<boolean>(false);
   const activeSessionRef = useRef<ProctoringSessionResponse | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -113,7 +120,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
     setActiveStage('SCREEN_SHARE');
   };
 
-  // Step 1: Start Camera Hardware
+  // Step 1: Start Camera & Microphone Hardware (single combined permission request)
   const handleStartCamera = async () => {
     if (cameraStatus === 'INITIALIZING') return;
     if (bypassGranted) {
@@ -127,26 +134,21 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
     setCameraStatus('INITIALIZING');
     setCameraError('');
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Your browser does not support webcam hardware access.');
-      }
       const existingCam = cameraStreamRef.current;
       let stream: MediaStream;
-      if (existingCam && existingCam.getVideoTracks().some((t) => t.readyState === 'live')) {
+      let audioOk = false;
+      if (hasLiveVideoTrack(existingCam) && existingCam) {
         stream = existingCam;
+        audioOk = existingCam.getAudioTracks().some((t) => t.readyState === 'live');
       } else {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: false,
-        });
+        const acquired = await acquireCameraAndMicrophoneStream();
+        stream = acquired.stream;
+        audioOk = acquired.hasAudio;
       }
 
       cameraStreamRef.current = stream;
       setCameraStream(stream);
+      setHasAudioTrack(audioOk);
       setCameraStatus('SUCCESS');
 
       if (videoRef.current) {
@@ -156,27 +158,35 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
         };
       }
 
-      // Listen for camera disconnection / track ended
+      // Listen for camera disconnection / track ended (ignored once handed off)
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
+          if (handedOffRef.current) return;
           setCameraStatus('FAILED');
-          setCameraError('Camera stream was unexpectedly disconnected or terminated.');
+          setCameraError('Camera stream was unexpectedly disconnected or permission was revoked.');
+        };
+      }
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.onended = () => {
+          if (handedOffRef.current) return;
+          setHasAudioTrack(false);
         };
       }
 
       // Automatically initialize Face Detection Engine
       await handleInitFaceEngine(stream);
     } catch (err: any) {
-      console.error('Camera initialization error:', err);
+      console.error('Camera/microphone initialization error:', err);
       setCameraStatus('FAILED');
-      let msg = 'Camera permission was denied or camera is unavailable.';
+      let msg = 'Camera/microphone permission was denied or hardware is unavailable.';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera access was blocked. Please permit webcam access in browser address bar.';
+        msg = 'Camera/microphone access was blocked. Please allow webcam and microphone permissions in the browser address bar.';
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         msg = 'No compatible webcam device was detected on your computer.';
       } else if (err.name === 'NotReadableError') {
-        msg = 'Webcam is currently occupied by another program (e.g., Zoom, Teams).';
+        msg = 'Webcam or microphone is currently occupied by another application (e.g., Zoom, Teams).';
       }
       setCameraError(msg);
     }
@@ -343,6 +353,8 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
 
   // Step 5 & 6: Browser Checks & Security Session Init
   const handleCheckBrowserIntegrity = async (_scStream: MediaStream) => {
+    if (sessionInitInFlightRef.current) return;
+    sessionInitInFlightRef.current = true;
     setBrowserCheckStatus('INITIALIZING');
     setSessionError('');
     setScreenShareError('');
@@ -352,9 +364,12 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
       }
       setBrowserCheckStatus('SUCCESS');
 
-      // Step 6: Create or Retrieve Proctoring Session on Django Backend
+      // Step 6: Create or Retrieve Proctoring Session idempotently on Django Backend
       setSessionInitStatus('INITIALIZING');
-      const session = await initProctoringSession(attemptId);
+      const session =
+        activeSessionRef.current?.assessment_session === attemptId
+          ? activeSessionRef.current
+          : await getOrInitProctoringSession(attemptId, initProctoringSession);
       activeSessionRef.current = session;
 
       // Update hardware statuses accurately (never fabricate camera ACTIVE during bypass without webcam)
@@ -402,6 +417,8 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
         'Could not complete Sentinel security handshake with the server. Please retry.';
       setSessionError(msg);
       setScreenShareError(msg);
+    } finally {
+      sessionInitInFlightRef.current = false;
     }
   };
 
@@ -465,16 +482,36 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
 
       {/* Main Content Area */}
       <div style={{ padding: '32px' }}>
+        {/* Persistent hidden video element after calibration so active camera tracks & snapshot evidence remain live */}
+        {cameraStream && activeStage !== 'CALIBRATION' && (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            aria-hidden="true"
+            style={{
+              position: 'fixed',
+              width: '1px',
+              height: '1px',
+              opacity: 0.001,
+              pointerEvents: 'none',
+              bottom: 0,
+              right: 0,
+            }}
+          />
+        )}
+
         {/* Stage 1: Welcome & Camera Launch */}
         {activeStage === 'WELCOME' && (
           <div>
             <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#0F172A', marginBottom: '8px' }}>
-              {bypassGranted ? 'Step 1: Admin Camera Bypass Verified' : 'Step 1: Camera Initialization & Calibration'}
+              {bypassGranted ? 'Step 1: Admin Camera Bypass Verified' : 'Step 1: Camera & Microphone Initialization'}
             </h3>
             <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.6, marginBottom: '24px' }}>
               {bypassGranted
                 ? 'An administrator has granted you a camera calibration waiver for this assessment. Proceed directly to mandatory entire-screen sharing and Sentinel session binding.'
-                : 'CSL Sentinel enforces a live webcam stream throughout the assessment. Grant camera permission once to complete the 6-pose guided head calibration, followed immediately by screen sharing.'}
+                : 'CSL Sentinel maintains continuous webcam and microphone supervision throughout the assessment. Grant permission once now to complete the 6-pose head calibration and reuse the same live stream into the exam with no second prompt.'}
             </p>
 
             {cameraError && (
@@ -892,6 +929,7 @@ export const ProctoringInitializer: React.FC<ProctoringInitializerProps> = ({
           }}
         >
           <span>Camera: {cameraStatus}</span> •
+          <span>Mic: {bypassGranted ? 'Waived' : hasAudioTrack ? 'Active' : cameraStatus === 'SUCCESS' ? 'Unavailable' : 'PENDING'}</span> •
           <span>Engine: {faceEngineStatus}</span> •
           <span>Calibration: {calibrationStatus}</span> •
           <span>Screen: {screenShareStatus}</span> •

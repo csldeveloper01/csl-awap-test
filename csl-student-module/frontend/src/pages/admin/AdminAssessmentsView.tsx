@@ -35,8 +35,6 @@ import {
   unlinkAdminAssessmentPoolSource,
   startAdminTestRun,
   downloadAdminAssessmentSebConfig,
-  createAdminQuestion,
-  createAdminQuestionInPool,
   type AdminAssessment,
   type AdminAssessmentDetail,
   type AdminCollege,
@@ -48,7 +46,6 @@ import {
   archiveAdminDrive,
   type AdminDrive,
 } from '../../api/admin';
-import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
 
 interface AdminAssessmentsViewProps {
   onNavigateToQuestions?: (assessmentId?: string) => void;
@@ -226,11 +223,6 @@ export function AdminAssessmentsView({
   const [createError, setCreateError] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
-  // Wizard Direct Question Authoring (Phase 2)
-  const [showWizardQuestionModal, setShowWizardQuestionModal] = useState(false);
-  const [wizardQuestionType, setWizardQuestionType] = useState<'MCQ' | 'CODING'>('MCQ');
-  const [wizardSavingQuestion, setWizardSavingQuestion] = useState(false);
-
   const handleTestRun = async (assessmentId: string) => {
     try {
       setRunningTestSimulation(assessmentId);
@@ -319,64 +311,6 @@ export function AdminAssessmentsView({
       setAvailableSections(data);
     } catch (err) {
       console.error('Failed to fetch reusable sections:', err);
-    }
-  };
-
-  const fetchQuestionPools = async () => {
-    try {
-      const data = await getAdminQuestionPools();
-      setAvailableQuestionPools(data);
-    } catch (err) {
-      console.error('Failed to fetch question pools:', err);
-    }
-  };
-
-  const handleSaveWizardQuestion = async (data: any) => {
-    try {
-      setWizardSavingQuestion(true);
-      const targetPoolId = createForm.selected_pool_ids[0];
-      let createdQ: any;
-      if (targetPoolId) {
-        const res = await createAdminQuestionInPool(targetPoolId, {
-          ...data,
-          question_type: data.question_type || wizardQuestionType,
-        });
-        createdQ = res.question;
-      } else {
-        createdQ = await createAdminQuestion({
-          ...data,
-          question_type: data.question_type || wizardQuestionType,
-        });
-      }
-
-      const secId = createdQ?.section_id ?? createdQ?.section;
-      if (createdQ && (secId || createdQ.section_type)) {
-        const freshSecs = await getAdminSections().catch(() => availableSections);
-        setAvailableSections(freshSecs);
-        const matchSec =
-          freshSecs.find((s) => s.id === secId) ||
-          freshSecs.find((s) => s.code.toUpperCase() === String(createdQ.section_type || '').toUpperCase());
-        if (matchSec) {
-          setCreateSections((prev) => {
-            if (prev.some((s) => s.section_id === matchSec.id)) return prev;
-            return [
-              ...prev,
-              {
-                section_id: matchSec.id,
-                name: matchSec.name,
-                code: matchSec.code,
-                question_count: 5,
-                marks_per_question: createdQ.marks || (wizardQuestionType === 'CODING' ? 10 : 1),
-              },
-            ];
-          });
-        }
-      }
-
-      await fetchQuestionPools();
-      setShowWizardQuestionModal(false);
-    } finally {
-      setWizardSavingQuestion(false);
     }
   };
 
@@ -1608,21 +1542,6 @@ export function AdminAssessmentsView({
     );
   };
 
-  const renderWizardQuestionModal = () => {
-    if (!showWizardQuestionModal) return null;
-    return (
-      <AdminQuestionEditorModal
-        question={null}
-        isOpen={showWizardQuestionModal}
-        onClose={() => setShowWizardQuestionModal(false)}
-        onSave={handleSaveWizardQuestion}
-        saving={wizardSavingQuestion}
-        sections={availableSections}
-        forcedType={wizardQuestionType}
-      />
-    );
-  };
-
   // Drive hierarchy filtered assessments (Phase 2.2.2)
   const displayedAssessments: AdminAssessment[] = useMemo(() => {
     return assessments.filter((a: AdminAssessment) => {
@@ -2302,51 +2221,11 @@ export function AdminAssessmentsView({
                 <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                     <strong style={{ fontSize: '13px', color: '#0F172A', margin: 0 }}>
-                      Link Question Pools & Direct Authoring
+                      Link Existing Question Pools
                     </strong>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWizardQuestionType('MCQ');
-                          setShowWizardQuestionModal(true);
-                        }}
-                        style={{
-                          padding: '4px 10px',
-                          backgroundColor: '#EFF6FF',
-                          border: '1px solid #BFDBFE',
-                          color: '#1D4ED8',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        + Create MCQ Question
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWizardQuestionType('CODING');
-                          setShowWizardQuestionModal(true);
-                        }}
-                        style={{
-                          padding: '4px 10px',
-                          backgroundColor: '#F0FDF4',
-                          border: '1px solid #BBF7D0',
-                          color: '#15803D',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        + Create Coding Question
-                      </button>
-                    </div>
                   </div>
                   <span style={{ fontSize: '12px', color: '#64748B', display: 'block', marginBottom: '12px' }}>
-                    Select independent question pools to automatically source questions, or create new questions directly into the draft.
+                    Select existing independent question pools to source questions for this assessment. Author or edit questions in the Question Bank or Question Pools sections.
                   </span>
                   {availableQuestionPools.length === 0 ? (
                     <div style={{ fontSize: '12px', color: '#94A3B8' }}>No independent question pools found. Questions will be sampled from the central bank.</div>
@@ -2901,10 +2780,9 @@ export function AdminAssessmentsView({
             </div>
           </div>
         )}
-        {/* Inline Section, Drive, & Wizard Question Modals mounted inside wizard */}
+        {/* Inline Section & Drive Modals mounted inside wizard */}
         {renderInlineSectionModal()}
         {renderInlineDriveModal()}
-        {renderWizardQuestionModal()}
       </div>
     );
   }
@@ -7363,9 +7241,6 @@ export function AdminAssessmentsView({
           </div>
         </div>
       )}
-
-      {/* Wizard Question Authoring Modal */}
-      {renderWizardQuestionModal()}
     </div>
   );
 }

@@ -21,7 +21,8 @@ import {
   type CSVImportPreviewResponse,
   type SectionMappingRule,
 } from '../../api/admin';
-import { AdminQuestionEditorModal } from './AdminQuestionEditorModal';
+import { AdminQuestionEditorModal, isCodingQuestion } from './AdminQuestionEditorModal';
+import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
 import { formatApiError } from '../../utils/errorFormatter';
@@ -350,12 +351,7 @@ export function AdminQuestionPoolsView({
       setPoolDetailLoading(true);
       const match = await getAdminQuestion(questionId);
       setEditingQuestionInPool(match);
-      const isCoding =
-        match.question_type === 'CODING' ||
-        Boolean(match.has_programming_details) ||
-        match.section_type === 'CODING' ||
-        match.assessment_type === 'CODING';
-      setPoolQuestionType(isCoding ? 'CODING' : 'MCQ');
+      setPoolQuestionType(isCodingQuestion(match) ? 'CODING' : 'MCQ');
       setShowPoolQuestionModal(true);
     } catch (err: unknown) {
       alert(formatApiError(err, 'Failed to load question details for editing.'));
@@ -1511,6 +1507,38 @@ export function AdminQuestionPoolsView({
                   <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
+                      onClick={handleOpenCreateMCQInPool}
+                      style={{
+                        padding: '8px 14px',
+                        backgroundColor: '#0D52D6',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Create MCQ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenCreateCodingInPool}
+                      style={{
+                        padding: '8px 14px',
+                        backgroundColor: '#7C3AED',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + Create Coding
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => handleOpenPoolCsvImport(managingPool)}
                       style={{
                         padding: '8px 16px',
@@ -2032,8 +2060,22 @@ export function AdminQuestionPoolsView({
           </div>
         </div>
       )}
-      {/* Direct Authoring Modal for Question Pools */}
-      {showPoolQuestionModal && (
+      {/* Dedicated MCQ & Coding Modals for Question Pools */}
+      {showPoolQuestionModal && poolQuestionType === 'CODING' && (
+        <AdminCodingQuestionModal
+          question={editingQuestionInPool}
+          isOpen={showPoolQuestionModal}
+          onClose={() => {
+            setShowPoolQuestionModal(false);
+            setEditingQuestionInPool(null);
+          }}
+          onSave={handleSaveQuestionInPool}
+          saving={savingPoolQuestion}
+          sections={sections}
+          isPoolScoped={true}
+        />
+      )}
+      {showPoolQuestionModal && poolQuestionType === 'MCQ' && (
         <AdminQuestionEditorModal
           question={editingQuestionInPool}
           isOpen={showPoolQuestionModal}
@@ -2044,7 +2086,6 @@ export function AdminQuestionPoolsView({
           onSave={handleSaveQuestionInPool}
           saving={savingPoolQuestion}
           sections={sections}
-          forcedType={editingQuestionInPool ? undefined : poolQuestionType}
         />
       )}
 

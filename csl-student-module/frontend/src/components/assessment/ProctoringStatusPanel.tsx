@@ -10,12 +10,19 @@ import {
   uploadProctoringEvidence,
   type ProctoringSessionResponse,
 } from '../../api/assessment';
+import {
+  acquireCameraAndMicrophoneStream,
+  hasLiveVideoTrack,
+  hasLiveAudioTrack,
+} from '../../utils/proctoringStreamStore';
 
 export interface ProctoringStatusPanelProps {
   session: ProctoringSessionResponse;
   cameraStream?: MediaStream | null;
   screenStream?: MediaStream | null;
   cameraBypassed?: boolean;
+  cameraRecoveryReason?: string;
+  onCameraReconnected?: (newStream: MediaStream) => void;
   onScreenShareReconnected?: (newStream: MediaStream) => void;
   onViolationThresholdExceeded?: (reason: string) => void;
 }
@@ -25,20 +32,27 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
   cameraStream = null,
   screenStream = null,
   cameraBypassed = false,
+  cameraRecoveryReason = '',
+  onCameraReconnected,
   onScreenShareReconnected,
   onViolationThresholdExceeded,
 }) => {
-  const hasLiveCamera = Boolean(cameraStream && cameraStream.getVideoTracks().some((t) => t.readyState === 'live'));
-  const hasLiveScreen = Boolean(screenStream && screenStream.getVideoTracks().some((t) => t.readyState === 'live'));
+  const hasLiveCamera = hasLiveVideoTrack(cameraStream);
+  const hasLiveAudio = hasLiveAudioTrack(cameraStream);
+  const hasLiveScreen = hasLiveVideoTrack(screenStream);
 
   const [cameraActive, setCameraActive] = useState<boolean>(hasLiveCamera);
+  const [micActive, setMicActive] = useState<boolean>(hasLiveAudio);
   const [screenShareActive, setScreenShareActive] = useState<boolean>(hasLiveScreen);
   const [faceCount, setFaceCount] = useState<number>(1);
   const [poseDeviated, setPoseDeviated] = useState<boolean>(false);
   const [activeAlert, setActiveAlert] = useState<string>('');
   const [riskScore, setRiskScore] = useState<number>(session.risk_score || 0);
 
-  // Recovery modal for screen share
+  // Recovery modal states for camera/mic and screen share
+  const [showCameraRecovery, setShowCameraRecovery] = useState<boolean>(() => !cameraBypassed && !hasLiveCamera);
+  const [reconnectingCamera, setReconnectingCamera] = useState<boolean>(false);
+  const [cameraRecoveryError, setCameraRecoveryError] = useState<string>('');
   const [showScreenRecovery, setShowScreenRecovery] = useState<boolean>(!hasLiveScreen);
   const [reconnectingScreen, setReconnectingScreen] = useState<boolean>(false);
   const [recoveryError, setRecoveryError] = useState<string>('');
@@ -71,22 +85,53 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
     }
   }, [cameraStream]);
 
-  // Monitor camera track lifecycle (skipped gracefully if admin bypassed webcam)
+  // Monitor camera and microphone track lifecycle (skipped gracefully if admin bypassed webcam)
   useEffect(() => {
-    const videoTrack = cameraStream?.getVideoTracks()[0];
-    if (!videoTrack || videoTrack.readyState !== 'live') {
+    if (cameraBypassed) {
       setCameraActive(false);
+      setMicActive(false);
+      setShowCameraRecovery(false);
       return;
     }
-    setCameraActive(true);
-    const handleEnded = () => {
+
+    const videoTrack = cameraStream?.getVideoTracks()[0];
+    const audioTrack = cameraStream?.getAudioTracks()[0];
+
+    if (!videoTrack || videoTrack.readyState !== 'live') {
       setCameraActive(false);
-      setActiveAlert('Camera stream was disconnected!');
+      setMicActive(Boolean(audioTrack && audioTrack.readyState === 'live'));
+      setShowCameraRecovery(true);
+      return;
+    }
+
+    setCameraActive(true);
+    setMicActive(Boolean(audioTrack && audioTrack.readyState === 'live'));
+    setShowCameraRecovery(false);
+
+    const handleVideoEnded = () => {
+      setCameraActive(false);
+      setShowCameraRecovery(true);
+      setActiveAlert('Camera stream was disconnected! Please restore immediately.');
       updateProctoringCameraStatus(session.id, 'DISCONNECTED').catch(console.error);
     };
-    videoTrack.addEventListener('ended', handleEnded);
-    return () => videoTrack.removeEventListener('ended', handleEnded);
-  }, [cameraStream, session.id]);
+
+    const handleAudioEnded = () => {
+      setMicActive(false);
+      setActiveAlert('Microphone audio track was disconnected!');
+    };
+
+    videoTrack.addEventListener('ended', handleVideoEnded);
+    if (audioTrack && audioTrack.readyState === 'live') {
+      audioTrack.addEventListener('ended', handleAudioEnded);
+    }
+
+    return () => {
+      videoTrack.removeEventListener('ended', handleVideoEnded);
+      if (audioTrack) {
+        audioTrack.removeEventListener('ended', handleAudioEnded);
+      }
+    };
+  }, [cameraStream, cameraBypassed, session.id]);
 
   // Monitor screen share track lifecycle
   useEffect(() => {
@@ -310,6 +355,42 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
     };
   }, [session.id]);
 
+  // Camera & Microphone Reconnection Workflow (user-gesture safe)
+  const handleReconnectCamera = async () => {
+    setReconnectingCamera(true);
+    setCameraRecoveryError('');
+    try {
+      const { stream: newStream, hasAudio } = await acquireCameraAndMicrophoneStream();
+      if (cameraStream && cameraStream !== newStream) {
+        cameraStream.getTracks().forEach((t) => t.stop());
+      }
+
+      setCameraActive(true);
+      setMicActive(hasAudio);
+      setShowCameraRecovery(false);
+      setActiveAlert('');
+
+      await updateProctoringCameraStatus(session.id, 'ACTIVE');
+      recordProctoringEvent(session.id, {
+        event_type: 'CAMERA_RECONNECTED',
+        severity: 'INFO',
+        metadata: { has_audio: hasAudio },
+      }).catch(console.error);
+
+      if (onCameraReconnected) {
+        onCameraReconnected(newStream);
+      }
+    } catch (err: any) {
+      setCameraRecoveryError(
+        err?.name === 'NotAllowedError'
+          ? 'Camera/microphone permission was denied or blocked. Please enable permissions in your browser bar and try again.'
+          : err?.message || 'Camera reconnection failed. Please ensure your webcam is available and retry.'
+      );
+    } finally {
+      setReconnectingCamera(false);
+    }
+  };
+
   // Screen Share Reconnection Workflow
   const handleReconnectScreenShare = async () => {
     setReconnectingScreen(true);
@@ -468,6 +549,18 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: '#64748B' }}>Mic:</span>
+            <span
+              style={{
+                fontWeight: 700,
+                color: micActive ? '#16A34A' : cameraBypassed ? '#0284C7' : '#D97706',
+              }}
+            >
+              {micActive ? '● Active' : cameraBypassed ? '● Waived' : '○ Off'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: '#64748B' }}>Screen Share:</span>
             <span style={{ fontWeight: 700, color: screenShareActive ? '#16A34A' : '#DC2626' }}>
               {screenShareActive ? '● Sharing' : '● Stopped'}
@@ -504,7 +597,7 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
       </div>
 
       {/* Floating Active Warning Banner */}
-      {activeAlert && !showScreenRecovery && (
+      {activeAlert && !showScreenRecovery && !showCameraRecovery && (
         <div
           style={{
             position: 'fixed',
@@ -533,8 +626,8 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
         </div>
       )}
 
-      {/* Mandatory Screen Share Recovery Modal */}
-      {showScreenRecovery && (
+      {/* Mandatory Proctoring Hardware Recovery Modal (Camera/Mic & Screen Share) */}
+      {(showScreenRecovery || showCameraRecovery) && (
         <div
           style={{
             position: 'fixed',
@@ -551,7 +644,7 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
         >
           <div
             style={{
-              maxWidth: '520px',
+              maxWidth: '540px',
               width: '100%',
               backgroundColor: '#FFFFFF',
               borderRadius: '20px',
@@ -567,56 +660,106 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
                 borderRadius: '50%',
                 backgroundColor: '#FEE2E2',
                 color: '#DC2626',
-                fontSize: '32px',
+                fontSize: '30px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 margin: '0 auto 16px',
               }}
             >
-              🖥️
+              {showCameraRecovery && !showScreenRecovery ? '📷' : '🖥️'}
             </div>
             <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-              Screen Sharing Interrupted
+              {showCameraRecovery && showScreenRecovery
+                ? 'Proctoring Streams Interrupted'
+                : showCameraRecovery
+                ? 'Camera & Microphone Reconnection Required'
+                : 'Screen Sharing Interrupted'}
             </h3>
             <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.6, marginBottom: '20px' }}>
-              Your examination screen sharing stream has been stopped or disconnected. To maintain examination integrity,
-              assessment interaction is paused until screen sharing is restored.
+              {showCameraRecovery && cameraRecoveryReason
+                ? cameraRecoveryReason
+                : 'Your examination proctoring stream has stopped or disconnected (for example, after a page reload or permission change). Restore the required stream(s) below to resume your test.'}
             </p>
 
-            {recoveryError && (
+            {showCameraRecovery && (
               <div
                 style={{
-                  marginBottom: '16px',
-                  padding: '10px 14px',
-                  borderRadius: '8px',
+                  marginBottom: showScreenRecovery ? '14px' : '0px',
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1px solid #FECACA',
                   backgroundColor: '#FEF2F2',
-                  border: '1px solid #FCA5A5',
-                  color: '#991B1B',
-                  fontSize: '13px',
+                  textAlign: 'left',
                 }}
               >
-                ⚠️ {recoveryError}
+                <div style={{ fontSize: '13px', fontWeight: 800, color: '#991B1B', marginBottom: '6px' }}>
+                  Camera & Microphone Stream Offline
+                </div>
+                {cameraRecoveryError && (
+                  <div style={{ fontSize: '12px', color: '#B91C1C', marginBottom: '10px' }}>
+                    ⚠️ {cameraRecoveryError}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleReconnectCamera}
+                  disabled={reconnectingCamera}
+                  style={{
+                    width: '100%',
+                    padding: '11px 20px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: reconnectingCamera ? 'wait' : 'pointer',
+                  }}
+                >
+                  {reconnectingCamera ? 'Restoring Camera & Mic...' : 'Restore Camera & Microphone'}
+                </button>
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleReconnectScreenShare}
-              disabled={reconnectingScreen}
-              style={{
-                padding: '12px 28px',
-                borderRadius: '10px',
-                border: 'none',
-                backgroundColor: '#DC2626',
-                color: '#FFFFFF',
-                fontSize: '14px',
-                fontWeight: 700,
-                cursor: reconnectingScreen ? 'wait' : 'pointer',
-              }}
-            >
-              {reconnectingScreen ? 'Connecting...' : 'Reconnect Screen Share Now'}
-            </button>
+            {showScreenRecovery && (
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: '12px',
+                  border: '1px solid #FECACA',
+                  backgroundColor: '#FEF2F2',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontSize: '13px', fontWeight: 800, color: '#991B1B', marginBottom: '6px' }}>
+                  Screen Sharing Stream Offline
+                </div>
+                {recoveryError && (
+                  <div style={{ fontSize: '12px', color: '#B91C1C', marginBottom: '10px' }}>
+                    ⚠️ {recoveryError}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleReconnectScreenShare}
+                  disabled={reconnectingScreen}
+                  style={{
+                    width: '100%',
+                    padding: '11px 20px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: reconnectingScreen ? 'wait' : 'pointer',
+                  }}
+                >
+                  {reconnectingScreen ? 'Connecting...' : 'Reconnect Screen Share Now'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
