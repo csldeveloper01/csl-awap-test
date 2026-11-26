@@ -392,7 +392,7 @@ class Phase3WorkflowsTestCase(TestCase):
         self.assertEqual(len(run_res.data["sample_results"]), 1)
         self.assertTrue(run_res.data["sample_results"][0]["passed"])
 
-        # 2. Submit solution for grading
+        # 2. Submit solution for browser-first persistence (pending manual evaluation, no auto score)
         submit_payload = {
             "attempt_id": str(attempt.id),
             "question_id": q.id,
@@ -400,23 +400,17 @@ class Phase3WorkflowsTestCase(TestCase):
             "source_code": "import sys\nn = int(sys.stdin.read().strip())\nprint(n * n)",
         }
         submit_res = cand_client.post("/api/assessment/code/submit/", submit_payload, format="json")
-        self.assertEqual(submit_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(submit_res.data["verdict"], "ACCEPTED")
-        self.assertEqual(submit_res.data["score_awarded"], 10.0)
-        self.assertEqual(submit_res.data["passed_test_cases"], 2)
+        self.assertEqual(submit_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(submit_res.data["verdict"], "PENDING")
+        self.assertEqual(submit_res.data["review_status"], "PENDING_REVIEW")
+        self.assertEqual(submit_res.data["score_awarded"], 0.0)
+        self.assertTrue(submit_res.data["requires_manual_evaluation"])
+        self.assertEqual(submit_res.data["results"], [])
 
-        # STRICT SECURITY CHECK: Hidden test case must NOT leak expected_output, input_text, or actual_output to student!
-        for r in submit_res.data["results"]:
-            if not r["is_public"]:
-                self.assertIsNone(r.get("input_text"))
-                self.assertIsNone(r.get("expected_output"))
-                self.assertIsNone(r.get("actual_output"))
-                self.assertIsNone(r.get("explanation"))
-
-        # Check attempt updated scores
+        # Attempt coding_score remains 0 until manual admin review
         attempt.refresh_from_db()
-        self.assertEqual(attempt.coding_score, 10)
-        self.assertEqual(attempt.total_score, 25) # 15 aptitude + 10 coding
+        self.assertEqual(attempt.coding_score, 0)
+        self.assertEqual(attempt.total_score, 0)
 
         # 3. Test Partial Credit (Passing only public test case)
         partial_code = "import sys\nn = int(sys.stdin.read().strip())\nif n == 5: print(25)\nelse: print(0)"

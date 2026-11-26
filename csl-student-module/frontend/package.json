@@ -5,15 +5,18 @@
   "type": "module",
   "scripts": {
     "sync:pyodide": "node scripts/sync-pyodide.mjs",
-    "postinstall": "node scripts/sync-pyodide.mjs",
-    "predev": "node scripts/sync-pyodide.mjs",
+    "sync:java": "node scripts/sync-java-wasm.mjs",
+    "sync:runtimes": "node scripts/sync-pyodide.mjs && node scripts/sync-java-wasm.mjs",
+    "postinstall": "npm run sync:runtimes",
+    "predev": "npm run sync:runtimes",
     "dev": "vite",
-    "prebuild": "node scripts/sync-pyodide.mjs",
+    "prebuild": "npm run sync:runtimes",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@live-codes/java-wasm": "^0.1.0",
     "@mediapipe/tasks-vision": "^1.2.3",
     "@monaco-editor/react": "^4.7.0",
     "@tanstack/react-query": "^5.105.0",

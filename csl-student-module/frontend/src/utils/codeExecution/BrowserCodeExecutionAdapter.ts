@@ -11,7 +11,7 @@ import type {
 export const DEFAULT_MAX_INPUT_CHARS = 256_000;
 export const DEFAULT_MAX_OUTPUT_CHARS = 100_000;
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 5_000;
-export const RUNTIME_INIT_GRACE_MS = 25_000;
+export const RUNTIME_INIT_GRACE_MS = 30_000;
 
 /**
  * Authoritative output comparison normalizer aligned with backend coding_service.py:
@@ -28,9 +28,36 @@ export function normalizeCodeOutput(text?: string | null): string {
 }
 
 export function normalizeCanonicalLanguage(lang: string): 'python' | 'java' | string {
-  const clean = (lang || '').trim().toLowerCase();
-  if (clean === 'python3' || clean === 'py') return 'python';
-  return clean;
+  const raw = (lang || '').trim().toLowerCase();
+  const compact = raw.replace(/[\s_-]+/g, '');
+  if (compact === 'python' || compact === 'python3' || compact === 'py') return 'python';
+  if (compact === 'java' || compact === 'java17' || compact === 'java21' || compact === 'java8') return 'java';
+  return raw;
+}
+
+/**
+ * Resolves the Java entry class name so both `public class Solution` (CSL boilerplate)
+ * and `public class Main` compile cleanly with javac in browser TeaVM.
+ */
+export function extractJavaMainClass(sourceCode: string): string {
+  const stripped = (sourceCode || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  const pubMatch = stripped.match(/\bpublic\s+(?:final\s+|abstract\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (pubMatch?.[1]) return pubMatch[1];
+  const anyClass = stripped.match(/\bclass\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (anyClass?.[1]) return anyClass[1];
+  return 'Main';
+}
+
+function truncateText(text: string, maxChars: number, label: string): { value: string; truncated: boolean } {
+  if (!text || text.length <= maxChars) {
+    return { value: text || '', truncated: false };
+  }
+  return {
+    value: `${text.slice(0, maxChars)}\n... [${label} truncated at ${maxChars} characters]`,
+    truncated: true,
+  };
 }
 
 class PyodideWorkerDriver implements LanguageExecutionDriver {
@@ -44,6 +71,10 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
 
   isSupported(): boolean {
     return typeof Worker !== 'undefined';
+  }
+
+  getRuntimeState(): BrowserRuntimeState {
+    return this.runtimeState;
   }
 
   private setState(state: BrowserRuntimeState, detail?: string) {
@@ -84,6 +115,10 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
   warmup(onStateChange?: (state: BrowserRuntimeState, detail?: string) => void): void {
     if (!this.isSupported()) return;
     this.activeStateListener = onStateChange;
+    if (this.runtimeState === 'READY' || this.runtimeState === 'LOADING_RUNTIME') {
+      onStateChange?.(this.runtimeState);
+      return;
+    }
     const worker = this.ensureWorker();
     if (this.runtimeState === 'IDLE') {
       worker.onmessage = (evt: MessageEvent) => {
@@ -143,7 +178,6 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
       });
     }
 
-    // Cancel any leftover in-flight execution deterministically
     if (this.activeReject) {
       this.cancel();
     }
@@ -180,7 +214,6 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
         }, timeoutMs);
       };
 
-      // Init load safeguard while Pyodide fetches WASM assets
       this.activeInitTimer = window.setTimeout(() => {
         if (this.runtimeState !== 'READY' && this.runtimeState !== 'EXECUTING') {
           this.terminateWorker();
@@ -238,7 +271,6 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
         });
       };
 
-      // If runtime is already warm, start strict execution timeout immediately
       if (this.runtimeState === 'READY') {
         armExecutionTimer();
       }
@@ -255,43 +287,322 @@ class PyodideWorkerDriver implements LanguageExecutionDriver {
 }
 
 /**
- * Isolated replaceable driver boundary for browser Java execution.
- * 199xVM prototype audit established that 199xVM does not yet pass CSL's required
- * 25-test Java compatibility suite (missing System.in stdin wiring, java.util.Scanner,
- * multidimensional arrays, array initializers, interface assignment, plus GPL-2.0
- * licensing constraints). Never fakes compatibility or falls back silently to /code/run/.
+ * Browser-side Java execution driver powered by @live-codes/java-wasm
+ * (OpenJDK javac + TeaVM WasmGC running offline in a dedicated Web Worker).
+ * Supports System.in / Scanner, collections, generics, classes, and worker timeout termination.
  */
-class JavaBrowserDriver implements LanguageExecutionDriver {
+class JavaWasmWorkerDriver implements LanguageExecutionDriver {
   public readonly language = 'java';
+  private worker: Worker | null = null;
+  private runtimeState: BrowserRuntimeState = 'IDLE';
+  private initPromise: Promise<void> | null = null;
+  private activeReject: ((res: BrowserExecutionResult) => void) | null = null;
+  private activeTimer: number | null = null;
+  private activeInitTimer: number | null = null;
+  private activeStateListener: ((state: BrowserRuntimeState, detail?: string) => void) | undefined;
 
   isSupported(): boolean {
-    return false;
+    return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined';
+  }
+
+  getRuntimeState(): BrowserRuntimeState {
+    return this.runtimeState;
   }
 
   getUnsupportedReason(): string {
-    return (
-      'Browser-side Java execution is disabled until a JLS-compliant, stdin-capable runtime ' +
-      'passes the CSL 25-case compatibility suite and licensing review (199xVM lacks System.in, ' +
-      'java.util.Scanner, multidimensional arrays, and carries GPL-2.0). ' +
-      'Use "Submit Solution" to run authoritative server-side Java evaluation.'
-    );
+    return 'Web Workers or WebAssembly are unavailable in this browser environment.';
   }
 
-  execute(): Promise<BrowserExecutionResult> {
-    const reason = this.getUnsupportedReason();
-    return Promise.resolve({
-      status: 'BROWSER_RUNTIME_UNSUPPORTED',
-      stdout: '',
-      stderr: reason,
-      compilationErrors: '',
-      runtimeErrors: reason,
-      executionTimeMs: 0,
-      unsupportedReason: reason,
+  private setState(state: BrowserRuntimeState, detail?: string) {
+    this.runtimeState = state;
+    this.activeStateListener?.(state, detail);
+  }
+
+  private clearTimers() {
+    if (this.activeTimer !== null) {
+      window.clearTimeout(this.activeTimer);
+      this.activeTimer = null;
+    }
+    if (this.activeInitTimer !== null) {
+      window.clearTimeout(this.activeInitTimer);
+      this.activeInitTimer = null;
+    }
+  }
+
+  private terminateWorker(nextState: BrowserRuntimeState = 'IDLE') {
+    this.clearTimers();
+    this.initPromise = null;
+    if (this.worker) {
+      try {
+        this.worker.terminate();
+      } catch {
+        // ignore termination error
+      }
+      this.worker = null;
+    }
+    this.setState(nextState);
+  }
+
+  private getTeaVmBaseUrl(): string {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return new URL('/java-wasm/teavm/', window.location.origin).href;
+    }
+    return '/java-wasm/teavm/';
+  }
+
+  private ensureInitialized(): Promise<void> {
+    if (this.worker && this.runtimeState === 'READY') {
+      return Promise.resolve();
+    }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.setState('LOADING_RUNTIME', 'Loading Java compiler & TeaVM Wasm runtime...');
+    const worker = new Worker('/java-wasm/worker-java.js');
+    this.worker = worker;
+
+    this.initPromise = new Promise<void>((resolve, reject) => {
+      this.activeInitTimer = window.setTimeout(() => {
+        const msg = 'Timed out while loading the browser Java (TeaVM Wasm) runtime.';
+        this.terminateWorker('ERROR');
+        this.activeStateListener?.('ERROR', msg);
+        reject(new Error(msg));
+      }, RUNTIME_INIT_GRACE_MS);
+
+      worker.onmessage = (evt: MessageEvent) => {
+        const data = evt.data;
+        if (!data) return;
+        if (data.type === 'initialized') {
+          if (this.activeInitTimer !== null) {
+            window.clearTimeout(this.activeInitTimer);
+            this.activeInitTimer = null;
+          }
+          this.setState('READY');
+          resolve();
+        } else if (data.type === 'init-error') {
+          if (this.activeInitTimer !== null) {
+            window.clearTimeout(this.activeInitTimer);
+            this.activeInitTimer = null;
+          }
+          const msg = String(data.error || 'Failed to initialize browser Java runtime.');
+          this.terminateWorker('ERROR');
+          this.activeStateListener?.('ERROR', msg);
+          reject(new Error(msg));
+        }
+      };
+
+      worker.onerror = (err) => {
+        if (this.activeInitTimer !== null) {
+          window.clearTimeout(this.activeInitTimer);
+          this.activeInitTimer = null;
+        }
+        const msg = err.message || 'Java Web Worker failed to start.';
+        this.terminateWorker('ERROR');
+        this.activeStateListener?.('ERROR', msg);
+        reject(new Error(msg));
+      };
+
+      worker.postMessage({
+        cmd: 'init',
+        baseUrl: this.getTeaVmBaseUrl(),
+        persistFiles: false,
+      });
+    });
+
+    return this.initPromise;
+  }
+
+  warmup(onStateChange?: (state: BrowserRuntimeState, detail?: string) => void): void {
+    if (!this.isSupported()) return;
+    this.activeStateListener = onStateChange;
+    if (this.runtimeState === 'READY' || this.runtimeState === 'LOADING_RUNTIME') {
+      onStateChange?.(this.runtimeState);
+      return;
+    }
+    this.ensureInitialized().catch(() => {
+      // Errors are broadcast through runtimeState listener
     });
   }
 
   cancel(): void {
-    // no-op
+    this.clearTimers();
+    if (this.activeReject) {
+      const resolveAsCancelled = this.activeReject;
+      this.activeReject = null;
+      this.terminateWorker('IDLE');
+      resolveAsCancelled({
+        status: 'CANCELLED',
+        stdout: '',
+        stderr: 'Java execution cancelled cleanly (Web Worker terminated).',
+        compilationErrors: '',
+        runtimeErrors: 'Java execution cancelled cleanly (Web Worker terminated).',
+        executionTimeMs: 0,
+      });
+    } else {
+      this.terminateWorker('IDLE');
+    }
+  }
+
+  async execute(req: BrowserExecutionRequest): Promise<BrowserExecutionResult> {
+    if (!this.isSupported()) {
+      return {
+        status: 'RUNTIME_LOAD_ERROR',
+        stdout: '',
+        stderr: this.getUnsupportedReason(),
+        compilationErrors: '',
+        runtimeErrors: this.getUnsupportedReason(),
+        executionTimeMs: 0,
+      };
+    }
+
+    const maxIn = req.maxInputChars ?? DEFAULT_MAX_INPUT_CHARS;
+    const maxOut = req.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
+    const stdin = req.stdin ?? '';
+    if (stdin.length > maxIn) {
+      return {
+        status: 'RUNTIME_ERROR',
+        stdout: '',
+        stderr: `Input exceeds maximum browser limit of ${maxIn} characters.`,
+        compilationErrors: '',
+        runtimeErrors: `Input exceeds maximum browser limit of ${maxIn} characters.`,
+        executionTimeMs: 0,
+      };
+    }
+
+    if (this.activeReject) {
+      this.cancel();
+    }
+
+    this.activeStateListener = req.onRuntimeStateChange;
+    try {
+      await this.ensureInitialized();
+    } catch (initErr) {
+      const msg = initErr instanceof Error ? initErr.message : String(initErr);
+      return {
+        status: 'RUNTIME_LOAD_ERROR',
+        stdout: '',
+        stderr: msg,
+        compilationErrors: '',
+        runtimeErrors: msg,
+        executionTimeMs: 0,
+      };
+    }
+
+    const worker = this.worker;
+    if (!worker) {
+      return {
+        status: 'RUNTIME_LOAD_ERROR',
+        stdout: '',
+        stderr: 'Java runtime worker is unavailable.',
+        compilationErrors: '',
+        runtimeErrors: 'Java runtime worker is unavailable.',
+        executionTimeMs: 0,
+      };
+    }
+
+    const timeoutMs = Math.max(500, req.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS);
+    const mainClass = extractJavaMainClass(req.sourceCode);
+
+    return new Promise<BrowserExecutionResult>((resolve) => {
+      let settled = false;
+      const finish = (res: BrowserExecutionResult) => {
+        if (settled) return;
+        settled = true;
+        this.clearTimers();
+        this.activeReject = null;
+        resolve(res);
+      };
+
+      this.activeReject = finish;
+      this.setState('EXECUTING', 'Compiling and running Java in browser...');
+
+      this.activeTimer = window.setTimeout(() => {
+        this.terminateWorker('IDLE');
+        finish({
+          status: 'TIME_LIMIT_EXCEEDED',
+          stdout: '',
+          stderr: `Java execution timed out after ${(timeoutMs / 1000).toFixed(1)}s and the Web Worker was terminated.`,
+          compilationErrors: '',
+          runtimeErrors: `Java execution timed out after ${(timeoutMs / 1000).toFixed(1)}s and the Web Worker was terminated.`,
+          executionTimeMs: timeoutMs,
+        });
+      }, timeoutMs);
+
+      worker.onmessage = (event: MessageEvent) => {
+        const data = event.data;
+        if (!data || data.type !== 'result') return;
+
+        this.setState('READY');
+        const outCap = truncateText(String(data.stdout || ''), maxOut, 'Stdout');
+        const rawErr = String(data.stderr || data.error || '');
+        const errCap = truncateText(rawErr, maxOut, 'Stderr');
+        const elapsedMs = Number(
+          data.runMs ??
+            ((Number(data.compileMs || 0) + Number(data.generateMs || 0)) || 0)
+        );
+
+        if (data.ok) {
+          finish({
+            status: 'ACCEPTED',
+            stdout: outCap.value,
+            stderr: errCap.value,
+            compilationErrors: '',
+            runtimeErrors: '',
+            executionTimeMs: Math.round(elapsedMs * 10) / 10,
+            truncated: outCap.truncated || errCap.truncated,
+          });
+          return;
+        }
+
+        const diagnostics: Array<{ severity?: string }> = Array.isArray(data.diagnostics) ? data.diagnostics : [];
+        const hasCompileError =
+          diagnostics.some((d) => d.severity === 'error') || data.runMs === undefined;
+
+        if (hasCompileError) {
+          finish({
+            status: 'COMPILATION_ERROR',
+            stdout: outCap.value,
+            stderr: errCap.value,
+            compilationErrors: errCap.value || 'Java compilation failed.',
+            runtimeErrors: '',
+            executionTimeMs: Math.round(elapsedMs * 10) / 10,
+            truncated: outCap.truncated || errCap.truncated,
+          });
+        } else {
+          finish({
+            status: 'RUNTIME_ERROR',
+            stdout: outCap.value,
+            stderr: errCap.value,
+            compilationErrors: '',
+            runtimeErrors: errCap.value || 'Java runtime error occurred.',
+            executionTimeMs: Math.round(elapsedMs * 10) / 10,
+            truncated: outCap.truncated || errCap.truncated,
+          });
+        }
+      };
+
+      worker.onerror = (err) => {
+        this.terminateWorker('IDLE');
+        const msg = err.message || 'Unhandled Web Worker crash during Java execution.';
+        finish({
+          status: 'RUNTIME_ERROR',
+          stdout: '',
+          stderr: msg,
+          compilationErrors: '',
+          runtimeErrors: msg,
+          executionTimeMs: 0,
+        });
+      };
+
+      worker.postMessage({
+        cmd: 'run',
+        source: req.sourceCode,
+        input: stdin,
+        mainClass,
+        platform: 'posix',
+      });
+    });
   }
 }
 
@@ -303,13 +614,18 @@ export class BrowserCodeExecutionAdapter {
   constructor() {
     this.drivers = {
       python: new PyodideWorkerDriver(),
-      java: new JavaBrowserDriver(),
+      java: new JavaWasmWorkerDriver(),
     };
   }
 
   getDriver(language: string): LanguageExecutionDriver | null {
     const canonical = normalizeCanonicalLanguage(language);
     return this.drivers[canonical] || null;
+  }
+
+  getRuntimeState(language: string): BrowserRuntimeState {
+    const driver = this.getDriver(language);
+    return driver?.getRuntimeState?.() ?? 'IDLE';
   }
 
   isBrowserExecutionSupported(language: string): boolean {
@@ -323,13 +639,20 @@ export class BrowserCodeExecutionAdapter {
     if (!driver) {
       return `Language '${language}' is not configured for local browser execution.`;
     }
+    if (driver.isSupported()) {
+      return '';
+    }
     return driver.getUnsupportedReason?.() || `Browser execution unavailable for '${language}'.`;
   }
 
   warmup(language: string, onStateChange?: (state: BrowserRuntimeState, detail?: string) => void): void {
     const driver = this.getDriver(language);
-    if (driver && 'warmup' in driver && typeof (driver as PyodideWorkerDriver).warmup === 'function') {
-      (driver as PyodideWorkerDriver).warmup(onStateChange);
+    if (
+      driver &&
+      'warmup' in driver &&
+      typeof (driver as PyodideWorkerDriver | JavaWasmWorkerDriver).warmup === 'function'
+    ) {
+      (driver as PyodideWorkerDriver | JavaWasmWorkerDriver).warmup(onStateChange);
     }
   }
 

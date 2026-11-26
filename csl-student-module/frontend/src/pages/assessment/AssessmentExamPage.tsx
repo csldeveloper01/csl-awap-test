@@ -4,6 +4,7 @@ import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import { SecurePdfViewer } from '../../components/assessment/SecurePdfViewer';
 import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygroundPane';
 import { ProctoringStatusPanel } from '../../components/assessment/ProctoringStatusPanel';
+import { clearAttemptCodingDrafts } from '../../utils/codeExecution/draftStorage';
 import {
   getProctoringStreams,
   updateCachedCameraStream,
@@ -526,6 +527,7 @@ export function AssessmentExamPage() {
       await flushPendingQueue();
       const res = await finalizeAssessment(attemptId);
       localStorage.removeItem(`csl_pending_answers_${attemptId}`);
+      clearAttemptCodingDrafts(attemptId);
       navigate(`/assessment/results/${res.id || attemptId}`, { replace: true });
     } catch (err: any) {
       console.error('Finalize error:', err);
@@ -553,6 +555,7 @@ export function AssessmentExamPage() {
       await flushPendingQueue();
       const res = await finalizeAssessment(attemptId);
       localStorage.removeItem(`csl_pending_answers_${attemptId}`);
+      clearAttemptCodingDrafts(attemptId);
       navigate(`/assessment/results/${res?.id || attemptId}`, { replace: true });
     } catch {
       clearProctoringStreams();

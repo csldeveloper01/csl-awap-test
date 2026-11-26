@@ -23,6 +23,7 @@ from .models import (
     QuestionBank,
     ProgrammingQuestion,
     ProgrammingTestCase,
+    CodeSubmission,
     AssessmentConfig,
     IntegrityEvent,
     AssessmentAuditLog,
@@ -46,7 +47,7 @@ from .storage_service import ProctoringEvidenceStorageService
 from .admin_permissions import IsCSLAdminUser
 from .csv_importer import decode_csv_bytes, parse_and_validate_csv, SUPPORTED_ENCODINGS
 from .tokens import generate_candidate_token
-from .services import start_assessment_for_candidate
+from .services import start_assessment_for_candidate, recalculate_attempt_coding_scores
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -2597,6 +2598,144 @@ class AdminAttemptBulkDeleteView(APIView):
             "message": f"Successfully deleted {count} assessment attempt(s) and their associated snapshots and logs.",
             "deleted_count": count,
         }, status=status.HTTP_200_OK)
+
+
+class AdminCodeSubmissionReviewView(APIView):
+    """
+    Authorized administrator evaluation endpoint for browser-first coding submissions.
+    Validates manual score against question max_marks, preserves full submission
+    history, and recalculates authoritative attempt coding scores and completion state.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, submission_id):
+        submission = get_object_or_404(
+            CodeSubmission.objects.select_related("attempt", "candidate", "programming_question__question"),
+            id=submission_id,
+        )
+
+        raw_status = str(request.data.get("review_status") or "").strip().upper()
+        if raw_status not in CodeSubmission.ReviewStatus.values:
+            return Response(
+                {
+                    "detail": f"Invalid review_status '{raw_status}'. Valid statuses: {', '.join(CodeSubmission.ReviewStatus.values)}."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        review_notes = str(request.data.get("review_notes") or "").strip()
+        max_marks = float(submission.max_marks or getattr(submission.programming_question.question, "marks", 1) or 1)
+        raw_score = request.data.get("score_awarded", None)
+
+        if raw_status in (
+            CodeSubmission.ReviewStatus.PENDING_REVIEW,
+            CodeSubmission.ReviewStatus.UNDER_REVIEW,
+        ):
+            final_score = 0.0
+            final_verdict = CodeSubmission.Verdict.PENDING
+        elif raw_status == CodeSubmission.ReviewStatus.MANUALLY_REJECTED:
+            if raw_score is not None and str(raw_score).strip() != "":
+                try:
+                    parsed = float(raw_score)
+                except (TypeError, ValueError):
+                    return Response({"detail": "score_awarded must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+                if parsed < 0 or parsed > 0:
+                    return Response(
+                        {"detail": "Rejected submissions cannot be awarded positive marks."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            final_score = 0.0
+            final_verdict = CodeSubmission.Verdict.WRONG_ANSWER
+        elif raw_status == CodeSubmission.ReviewStatus.MANUALLY_ACCEPTED:
+            if raw_score is None or str(raw_score).strip() == "":
+                final_score = max_marks
+            else:
+                try:
+                    final_score = float(raw_score)
+                except (TypeError, ValueError):
+                    return Response({"detail": "score_awarded must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+                if final_score < 0 or final_score > max_marks:
+                    return Response(
+                        {"detail": f"score_awarded ({final_score}) must be between 0 and max_marks ({max_marks})."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            final_verdict = CodeSubmission.Verdict.ACCEPTED
+        else:  # MANUALLY_SCORED
+            if raw_score is None or str(raw_score).strip() == "":
+                return Response(
+                    {"detail": "score_awarded is required when review_status is MANUALLY_SCORED."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                final_score = float(raw_score)
+            except (TypeError, ValueError):
+                return Response({"detail": "score_awarded must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+            if final_score < 0 or final_score > max_marks:
+                return Response(
+                    {"detail": f"score_awarded ({final_score}) must be between 0 and max_marks ({max_marks})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            final_verdict = CodeSubmission.Verdict.ACCEPTED if final_score > 0 else CodeSubmission.Verdict.WRONG_ANSWER
+
+        with transaction.atomic():
+            submission.review_status = raw_status
+            submission.score_awarded = round(final_score, 2)
+            submission.verdict = final_verdict
+            submission.review_notes = review_notes
+            submission.reviewed_by = request.user
+            submission.reviewed_at = timezone.now()
+            submission.save(
+                update_fields=[
+                    "review_status",
+                    "score_awarded",
+                    "verdict",
+                    "review_notes",
+                    "reviewed_by",
+                    "reviewed_at",
+                ]
+            )
+
+            updated_attempt = recalculate_attempt_coding_scores(submission.attempt_id)
+
+            log_assessment_audit(
+                action=AssessmentAuditLog.Action.CODE_SUBMISSION_REVIEWED,
+                entity_type="CODE_SUBMISSION",
+                entity_id=str(submission.id),
+                user=request.user,
+                details={
+                    "attempt_id": str(submission.attempt_id),
+                    "question_id": submission.programming_question.question_id if submission.programming_question else None,
+                    "review_status": submission.review_status,
+                    "score_awarded": submission.score_awarded,
+                    "max_marks": max_marks,
+                },
+            )
+
+        return Response(
+            {
+                "message": "Coding submission evaluation recorded.",
+                "submission": {
+                    "id": str(submission.id),
+                    "review_status": submission.review_status,
+                    "verdict": submission.verdict,
+                    "score_awarded": submission.score_awarded,
+                    "max_marks": submission.max_marks,
+                    "review_notes": submission.review_notes,
+                    "reviewed_at": submission.reviewed_at.isoformat() if submission.reviewed_at else None,
+                },
+                "attempt": {
+                    "id": str(updated_attempt.id),
+                    "state": updated_attempt.state,
+                    "coding_score": updated_attempt.coding_score,
+                    "total_score": updated_attempt.total_score,
+                    "percentage": updated_attempt.percentage,
+                    "is_manual_evaluation_pending": (
+                        updated_attempt.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+                    ),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ==============================================================================

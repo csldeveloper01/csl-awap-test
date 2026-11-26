@@ -1369,6 +1369,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
 
     section_scores = {}
 
+    has_coding_context = False
     for s in snapshots:
         sec_key = (s.section_type or "GENERAL").strip().upper()
         if sec_key not in section_scores:
@@ -1386,7 +1387,11 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
         section_scores[sec_key]["total_questions"] += 1
         section_scores[sec_key]["max_marks"] += q_marks
 
-        if s.selected_option and s.selected_option == s.correct_option_key:
+        is_interactive_coding = bool(s.programming_data)
+        if is_interactive_coding or sec_key == "CODING":
+            has_coding_context = True
+
+        if not is_interactive_coding and s.selected_option and s.selected_option == s.correct_option_key:
             s.is_correct = True
             section_scores[sec_key]["correct"] += 1
             section_scores[sec_key]["score"] += q_marks
@@ -1397,6 +1402,46 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
                 coding_score += q_marks
         else:
             s.is_correct = False
+
+    # Attribute any already-reviewed or pending coding submissions only when attempt contains coding context
+    pending_review_exists = False
+    code_subs = []
+    if has_coding_context:
+        from .models import CodeSubmission
+        code_subs = list(locked_attempt.code_submissions.order_by("-created_at"))
+        latest_by_q = {}
+        reviewed_by_q = {}
+        for sub in code_subs:
+            pq_id = sub.programming_question_id
+            if pq_id not in latest_by_q:
+                latest_by_q[pq_id] = sub
+            if sub.review_status in (
+                CodeSubmission.ReviewStatus.MANUALLY_ACCEPTED,
+                CodeSubmission.ReviewStatus.MANUALLY_REJECTED,
+                CodeSubmission.ReviewStatus.MANUALLY_SCORED,
+            ):
+                if pq_id not in reviewed_by_q:
+                    reviewed_by_q[pq_id] = sub
+        pending_review_exists = any(
+            sub.review_status in (
+                CodeSubmission.ReviewStatus.PENDING_REVIEW,
+                CodeSubmission.ReviewStatus.UNDER_REVIEW,
+            )
+            for sub in latest_by_q.values()
+        )
+        reviewed_coding_float = sum(float(sub.score_awarded or 0.0) for sub in reviewed_by_q.values())
+        reviewed_coding_int = int(round(reviewed_coding_float))
+        if reviewed_by_q or pending_review_exists:
+            # Replace legacy option-based coding count with authoritative CodeSubmission score when CodeSubmissions exist
+            total_score -= coding_score
+            coding_score = reviewed_coding_int
+            total_score += coding_score
+            if "CODING" in section_scores:
+                section_scores["CODING"]["score"] = coding_score
+                section_scores["CODING"]["manual_evaluation_pending"] = pending_review_exists
+
+    if pending_review_exists and final_state == AssessmentAttempt.State.SUBMITTED:
+        final_state = AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
 
     for sec_data in section_scores.values():
         if sec_data["max_marks"] > 0:
@@ -1445,9 +1490,10 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
     )
     write_ms = (time.perf_counter() - write_start) * 1000.0
 
-    # Cache snapshots on attempt instance so serializer accesses do not re-query
+    # Cache snapshots and code submissions on attempt instance so serializer accesses do not re-query
     locked_attempt._prefetched_objects_cache = getattr(locked_attempt, "_prefetched_objects_cache", {})
     locked_attempt._prefetched_objects_cache["question_snapshots"] = snapshots
+    locked_attempt._prefetched_objects_cache["code_submissions"] = code_subs
 
     service_ms = (time.perf_counter() - service_start) * 1000.0
     logger.info(
@@ -1459,6 +1505,139 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
         final_state,
     )
 
+    return locked_attempt
+
+
+@transaction.atomic
+def recalculate_attempt_coding_scores(attempt_or_id):
+    """
+    Recalculates authoritative coding_score, total_score, percentage, section_scores,
+    and transitions state cleanly once manual code evaluation completes without
+    altering MCQ scoring.
+    """
+    from .models import CodeSubmission
+
+    attempt_id = attempt_or_id.id if isinstance(attempt_or_id, AssessmentAttempt) else attempt_or_id
+    locked_attempt = (
+        AssessmentAttempt.objects.select_for_update(of=("self",))
+        .select_related("assessment", "config")
+        .filter(id=attempt_id)
+        .first()
+    )
+    if not locked_attempt:
+        return None
+
+    snapshots = list(locked_attempt.question_snapshots.all())
+    marks_map = {}
+    if locked_attempt.assessment_id:
+        for alloc in locked_attempt.assessment.section_allocations.select_related("section").all():
+            marks_map[alloc.section.code.upper()] = alloc.marks_per_question
+            marks_map[alloc.section.name.upper()] = alloc.marks_per_question
+
+    mcq_total = 0
+    aptitude_score = 0
+    section_scores = {}
+
+    for s in snapshots:
+        sec_key = (s.section_type or "GENERAL").strip().upper()
+        if sec_key not in section_scores:
+            q_marks = marks_map.get(sec_key, 1)
+            section_scores[sec_key] = {
+                "section_code": sec_key,
+                "score": 0,
+                "max_marks": 0,
+                "correct": 0,
+                "total_questions": 0,
+                "percentage": 0.0,
+                "marks_per_question": q_marks,
+            }
+        q_marks = section_scores[sec_key]["marks_per_question"]
+        section_scores[sec_key]["total_questions"] += 1
+        section_scores[sec_key]["max_marks"] += q_marks
+
+        is_interactive_coding = bool(s.programming_data)
+        if not is_interactive_coding and s.is_correct:
+            section_scores[sec_key]["correct"] += 1
+            section_scores[sec_key]["score"] += q_marks
+            mcq_total += q_marks
+            if sec_key in ("APTITUDE",):
+                aptitude_score += q_marks
+
+    subs = list(locked_attempt.code_submissions.order_by("-created_at"))
+    latest_by_question = {}
+    reviewed_by_question = {}
+    for sub in subs:
+        pq_id = sub.programming_question_id
+        if pq_id not in latest_by_question:
+            latest_by_question[pq_id] = sub
+        if sub.review_status in (
+            CodeSubmission.ReviewStatus.MANUALLY_ACCEPTED,
+            CodeSubmission.ReviewStatus.MANUALLY_REJECTED,
+            CodeSubmission.ReviewStatus.MANUALLY_SCORED,
+        ):
+            if pq_id not in reviewed_by_question:
+                reviewed_by_question[pq_id] = sub
+
+    pending_exists = any(
+        sub.review_status in (
+            CodeSubmission.ReviewStatus.PENDING_REVIEW,
+            CodeSubmission.ReviewStatus.UNDER_REVIEW,
+        )
+        for sub in latest_by_question.values()
+    )
+
+    coding_score = int(round(sum(float(sub.score_awarded or 0.0) for sub in reviewed_by_question.values())))
+    total_score = mcq_total + coding_score
+
+    if "CODING" in section_scores:
+        section_scores["CODING"]["score"] = coding_score
+        section_scores["CODING"]["correct"] = sum(
+            1
+            for sub in reviewed_by_question.values()
+            if sub.review_status == CodeSubmission.ReviewStatus.MANUALLY_ACCEPTED or (sub.score_awarded or 0) > 0
+        )
+        section_scores["CODING"]["manual_evaluation_pending"] = pending_exists
+
+    for sec_data in section_scores.values():
+        if sec_data["max_marks"] > 0:
+            sec_data["percentage"] = round((sec_data["score"] / float(sec_data["max_marks"])) * 100.0, 2)
+
+    max_marks = (
+        locked_attempt.assessment.total_marks
+        if locked_attempt.assessment
+        else (locked_attempt.config.total_marks if locked_attempt.config else 50)
+    )
+    percentage = round((total_score / float(max_marks)) * 100.0, 2) if max_marks else 0.0
+
+    locked_attempt.aptitude_score = aptitude_score
+    locked_attempt.coding_score = coding_score
+    locked_attempt.total_score = total_score
+    locked_attempt.percentage = percentage
+    if section_scores:
+        locked_attempt.section_scores = section_scores
+
+    if (
+        locked_attempt.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+        and not pending_exists
+    ):
+        locked_attempt.state = AssessmentAttempt.State.SUBMITTED
+    elif (
+        locked_attempt.state == AssessmentAttempt.State.SUBMITTED
+        and pending_exists
+    ):
+        locked_attempt.state = AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+
+    locked_attempt.save(
+        update_fields=[
+            "state",
+            "aptitude_score",
+            "coding_score",
+            "total_score",
+            "percentage",
+            "section_scores",
+            "updated_at",
+        ]
+    )
     return locked_attempt
 
 

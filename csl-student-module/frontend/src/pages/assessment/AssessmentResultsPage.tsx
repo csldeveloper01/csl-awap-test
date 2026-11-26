@@ -238,8 +238,10 @@ export function AssessmentResultsPage() {
             margin: '0 0 24px 0',
           }}
         >
-          {result.delivery_mode === 'PDF_CODING' || result.is_manual_evaluation_pending
+          {result.delivery_mode === 'PDF_CODING'
             ? 'Your coding assessment session has concluded. Your physical answer paper will be manually evaluated by the technical evaluation team.'
+            : result.is_manual_evaluation_pending
+            ? 'Your coding solutions and responses have been recorded safely and are queued for manual technical evaluation.'
             : 'Your responses have been recorded and your assessment session has concluded successfully.'}
         </p>
 
@@ -270,9 +272,11 @@ export function AssessmentResultsPage() {
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: '#64748B', fontWeight: 600 }}>Submission Status:</span>
-            <span style={{ color: result.delivery_mode === 'PDF_CODING' ? '#7C3AED' : '#059669', fontWeight: 700 }}>
-              {result.delivery_mode === 'PDF_CODING' || result.is_manual_evaluation_pending
+            <span style={{ color: result.delivery_mode === 'PDF_CODING' ? '#7C3AED' : result.is_manual_evaluation_pending ? '#B45309' : '#059669', fontWeight: 700 }}>
+              {result.delivery_mode === 'PDF_CODING'
                 ? 'Recorded — Pending Paper Evaluation'
+                : result.is_manual_evaluation_pending
+                ? 'Recorded — Pending Manual Evaluation'
                 : 'Recorded & Verified'}
             </span>
           </div>

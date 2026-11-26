@@ -444,7 +444,17 @@ class AssessmentResultSerializer(serializers.ModelSerializer):
         return "MCQ"
 
     def get_is_manual_evaluation_pending(self, obj):
-        return obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+        if obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION:
+            return True
+        from .models import CodeSubmission
+        pending_statuses = (
+            CodeSubmission.ReviewStatus.PENDING_REVIEW,
+            CodeSubmission.ReviewStatus.UNDER_REVIEW,
+        )
+        prefetch_cache = getattr(obj, "_prefetched_objects_cache", None)
+        if prefetch_cache and "code_submissions" in prefetch_cache:
+            return any(sub.review_status in pending_statuses for sub in prefetch_cache["code_submissions"])
+        return obj.code_submissions.filter(review_status__in=pending_statuses).exists()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

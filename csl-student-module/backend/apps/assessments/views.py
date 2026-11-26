@@ -2040,12 +2040,22 @@ class StudentCodeRunView(APIView):
 
 class StudentCodeSubmitView(APIView):
     """
-    Candidate submits programming solution for authoritative grading.
-    Evaluates against all configured test cases (public and hidden).
-    Saves CodeSubmission and CodeTestResult linked to AssessmentAttempt.
+    Browser-First Coding Submission Persistence Endpoint.
+    Validates candidate authentication, attempt ownership, expiry, question membership,
+    permitted language, and non-empty source code. Persists a new CodeSubmission record
+    with PENDING_REVIEW status without invoking Judge0 or executing candidate code.
     """
     authentication_classes = [CandidateAssessmentAuthentication]
     permission_classes = [AllowAny]
+
+    @staticmethod
+    def _normalize_lang(raw_lang: str) -> str:
+        clean = (raw_lang or "").strip().lower()
+        if clean in ("python3", "py"):
+            return "python"
+        if clean in ("java17", "java21", "java8"):
+            return "java"
+        return clean
 
     def post(self, request):
         candidate = get_authorized_candidate(request)
@@ -2054,10 +2064,9 @@ class StudentCodeSubmitView(APIView):
 
         attempt_id = request.data.get("attempt_id")
         raw_question_id = request.data.get("question_id")
-        language = (request.data.get("language") or "python").lower().strip()
-        if language == "python3":
-            language = "python"
+        language = self._normalize_lang(request.data.get("language") or "python")
         source_code = request.data.get("source_code", "")
+        raw_browser_meta = request.data.get("browser_execution_metadata") or request.data.get("browser_metadata")
 
         if not attempt_id:
             return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2092,50 +2101,108 @@ class StudentCodeSubmitView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        from .models import ProgrammingQuestion
-        from .coding_service import evaluate_submission
+        from django.db import transaction
+        from django.utils import timezone
+        from .models import ProgrammingQuestion, CodeSubmission, QuestionBank
 
-        prog_q = get_object_or_404(ProgrammingQuestion, question_id=question_id)
+        prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
+        is_coding_snapshot = bool(
+            snapshot
+            and (
+                (snapshot.section_type or "").strip().upper() == "CODING"
+                or bool(snapshot.programming_data)
+            )
+        )
+        is_coding_question_bank = bool(
+            prog_q
+            or (snapshot and snapshot.question and snapshot.question.section_type == QuestionBank.SectionType.CODING)
+            or QuestionBank.objects.filter(id=question_id, section_type=QuestionBank.SectionType.CODING).exists()
+        )
+        if not (is_coding_snapshot or is_coding_question_bank) or not prog_q:
+            return Response(
+                {"detail": "The specified question is not a coding problem or lacks programming configuration."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         allowed_languages = (
             snapshot.programming_data.get("allowed_languages")
             if (snapshot and snapshot.programming_data)
             else (prog_q.allowed_languages if prog_q else ["python", "java"])
         )
-        normalized_allowed = [("python" if l.lower() == "python3" else l.lower()) for l in (allowed_languages or [])]
+        normalized_allowed = [self._normalize_lang(l) for l in (allowed_languages or [])]
         if normalized_allowed and language not in normalized_allowed:
             return Response(
                 {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Disallow grading a problem with 0 test cases
-        has_cases = False
-        if snapshot and snapshot.programming_data and snapshot.programming_data.get("test_cases"):
-            has_cases = len(snapshot.programming_data["test_cases"]) > 0
-        else:
-            has_cases = prog_q.test_cases.filter(is_active=True).exists()
+        # Determine question max marks from frozen allocation or QuestionBank
+        max_marks = float(getattr(prog_q.question, "marks", 1) or 1)
+        if attempt.assessment_id:
+            sec_code = (snapshot.section_type if snapshot else "CODING") or "CODING"
+            alloc = attempt.assessment.section_allocations.filter(section__code__iexact=sec_code).first()
+            if alloc and alloc.marks_per_question:
+                max_marks = float(alloc.marks_per_question)
 
-        if not has_cases:
-            return Response(
-                {"detail": "This coding problem has no configured test cases and cannot be evaluated."},
-                status=status.HTTP_400_BAD_REQUEST,
+        # Sanitize optional browser execution metadata and explicitly mark untrusted
+        sanitized_meta = {}
+        if isinstance(raw_browser_meta, dict):
+            for key in (
+                "runtime_name",
+                "runtime_version",
+                "browser_status",
+                "public_samples_attempted",
+                "public_samples_passed",
+                "execution_time_ms",
+            ):
+                if key in raw_browser_meta:
+                    sanitized_meta[key] = raw_browser_meta[key]
+        if sanitized_meta or isinstance(raw_browser_meta, dict):
+            sanitized_meta["is_authoritative"] = False
+            sanitized_meta["is_verified"] = False
+            sanitized_meta["untrusted_telemetry"] = True
+            sanitized_meta["recorded_at"] = timezone.now().isoformat()
+
+        with transaction.atomic():
+            submission = CodeSubmission.objects.create(
+                attempt=attempt,
+                candidate=candidate,
+                programming_question=prog_q,
+                language=language,
+                source_code=source_code,
+                verdict=CodeSubmission.Verdict.PENDING,
+                review_status=CodeSubmission.ReviewStatus.PENDING_REVIEW,
+                score_awarded=0.0,
+                max_marks=max_marks,
+                total_test_cases=0,
+                passed_test_cases=0,
+                execution_time_ms=0.0,
+                browser_execution_metadata=sanitized_meta,
             )
+            if snapshot:
+                snapshot.answered_at = timezone.now()
+                snapshot.save(update_fields=["answered_at", "updated_at"])
 
-        eval_result = evaluate_submission(
-            programming_question=prog_q,
-            candidate=candidate,
-            attempt=attempt,
-            language=language,
-            source_code=source_code,
+        return Response(
+            {
+                "submission_id": str(submission.id),
+                "question_id": question_id,
+                "language": submission.language,
+                "status": submission.review_status,
+                "review_status": submission.review_status,
+                "verdict": submission.verdict,
+                "score_awarded": 0.0,
+                "score": 0.0,
+                "max_marks": max_marks,
+                "is_authoritative_score": False,
+                "requires_manual_evaluation": True,
+                "results": [],
+                "browser_execution_metadata": submission.browser_execution_metadata,
+                "created_at": submission.created_at.isoformat() if submission.created_at else None,
+                "message": "Solution submitted successfully and is pending evaluation.",
+            },
+            status=status.HTTP_201_CREATED,
         )
-
-        eval_result["status"] = eval_result.get("verdict")
-        eval_result["score"] = eval_result.get("score_awarded")
-        eval_result["passed_count"] = eval_result.get("passed_test_cases")
-        if eval_result.get("verdict") == "INTERNAL_ERROR":
-            return Response(eval_result, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        return Response(eval_result, status=status.HTTP_200_OK)
 
 
 

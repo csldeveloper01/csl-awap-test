@@ -502,7 +502,7 @@ class RemediationEndToEndTests(TestCase):
         self.assertEqual(res_run.data["verdict"], "ACCEPTED")
         self.assertEqual(res_run.data["passed_samples"], 1)
 
-        # 3. Test Submit View (Authoritative Evaluation)
+        # 3. Test Submit View (Browser-First Pending Manual Evaluation)
         res_submit = student_client.post(
             "/api/assessment/code/submit/",
             {
@@ -513,22 +513,13 @@ class RemediationEndToEndTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(res_submit.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_submit.data["verdict"], "ACCEPTED")
-        self.assertEqual(res_submit.data["passed_test_cases"], 2)
-        self.assertEqual(res_submit.data["score_awarded"], 10.0)
+        self.assertEqual(res_submit.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_submit.data["verdict"], "PENDING")
+        self.assertEqual(res_submit.data["review_status"], "PENDING_REVIEW")
+        self.assertEqual(res_submit.data["score_awarded"], 0.0)
+        self.assertEqual(res_submit.data["results"], [])
 
-        # Verify hidden test case output is strictly protected
-        results = res_submit.data["results"]
-        self.assertEqual(len(results), 2)
-        hidden_res = next(r for r in results if not r["is_public"])
-        self.assertIsNone(hidden_res["expected_output"])
-        self.assertIsNone(hidden_res["actual_output"])
-        self.assertIsNone(hidden_res["input_text"])
-        self.assertTrue(hidden_res["passed"])
-
-        # Check attempt updated scores
+        # Attempt coding_score stays 0 until manual review (never auto-graded from Judge0)
         attempt.refresh_from_db()
-        self.assertEqual(attempt.coding_score, 10)
-        self.assertEqual(attempt.total_score, 10)
-        self.assertEqual(attempt.percentage, 100.0)
+        self.assertEqual(attempt.coding_score, 0)
+        self.assertEqual(attempt.total_score, 0)

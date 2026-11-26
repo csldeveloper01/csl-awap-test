@@ -570,22 +570,42 @@ export const runCode = async (payload: CodeRunPayload): Promise<CodeRunResult> =
   return res.data;
 };
 
+export interface BrowserExecutionMetadataPayload {
+  runtime_name?: string;
+  runtime_version?: string;
+  browser_status?: string;
+  public_samples_attempted?: number;
+  public_samples_passed?: number;
+  execution_time_ms?: number;
+  is_authoritative?: boolean;
+  is_verified?: boolean;
+}
+
 export interface CodeSubmitPayload {
   attempt_id: string;
   question_id: number;
   language: string;
   source_code: string;
+  browser_execution_metadata?: BrowserExecutionMetadataPayload;
 }
 
 export interface CodeSubmitResult {
   submission_id: string;
+  status?: string;
+  review_status?: string;
   verdict: string;
-  score_awarded: number;
-  total_test_cases: number;
-  passed_test_cases: number;
-  execution_time_ms: number;
+  message?: string;
+  language?: string;
+  question_id?: number;
+  created_at?: string;
+  score_awarded?: number;
+  is_authoritative_score?: boolean;
+  browser_execution_metadata?: BrowserExecutionMetadataPayload;
+  total_test_cases?: number;
+  passed_test_cases?: number;
+  execution_time_ms?: number;
   compile_output?: string;
-  results: Array<{
+  results?: Array<{
     test_case_id: string;
     is_public: boolean;
     status: string;

@@ -68,6 +68,7 @@ export interface LanguageExecutionDriver {
   language: string;
   isSupported(): boolean;
   getUnsupportedReason?(): string;
+  getRuntimeState?(): BrowserRuntimeState;
   execute(req: BrowserExecutionRequest): Promise<BrowserExecutionResult>;
   cancel(): void;
 }

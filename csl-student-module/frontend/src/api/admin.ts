@@ -408,7 +408,22 @@ export interface AdminAttemptReview {
     language: string;
     source_code: string;
     verdict: string;
+    review_status?: string;
     score_awarded: number;
+    max_marks?: number;
+    reviewed_by?: string | null;
+    reviewed_at?: string | null;
+    review_notes?: string;
+    browser_execution_metadata?: {
+      is_authoritative?: boolean;
+      is_verified?: boolean;
+      runtime_name?: string;
+      runtime_version?: string;
+      browser_status?: string;
+      public_samples_attempted?: number;
+      public_samples_passed?: number;
+      execution_time_ms?: number;
+    };
     total_test_cases: number;
     passed_test_cases: number;
     execution_time_ms: number;
@@ -1257,6 +1272,29 @@ export async function getAdminLiveAttempts(params?: {
 
 export async function getAdminAttemptReview(attemptId: string): Promise<AdminAttemptReview> {
   const res = await adminApi.get<AdminAttemptReview>(`/attempts/${attemptId}/review/`);
+  return res.data;
+}
+
+export async function reviewAdminCodeSubmission(
+  submissionId: string,
+  payload: {
+    review_status: 'PENDING_REVIEW' | 'UNDER_REVIEW' | 'MANUALLY_ACCEPTED' | 'MANUALLY_REJECTED' | 'MANUALLY_SCORED';
+    score_awarded?: number;
+    review_notes?: string;
+  }
+): Promise<{
+  message: string;
+  submission: Record<string, any>;
+  attempt: {
+    id: string;
+    state: string;
+    coding_score: number;
+    total_score: number;
+    percentage: number;
+    is_manual_evaluation_pending: boolean;
+  };
+}> {
+  const res = await adminApi.post(`/code-submissions/${submissionId}/review/`, payload);
   return res.data;
 }
 

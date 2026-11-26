@@ -26,6 +26,7 @@ const adapterMod = await loadAdapterModule();
 const {
   normalizeCodeOutput,
   normalizeCanonicalLanguage,
+  extractJavaMainClass,
   BrowserCodeExecutionAdapter,
 } = adapterMod;
 
@@ -36,29 +37,52 @@ test('normalizeCodeOutput aligns CRLF/CR, trailing spaces, and leading/trailing 
   assert.equal(normalizeCodeOutput('42\n'), '42');
 });
 
-test('normalizeCanonicalLanguage maps python aliases cleanly', () => {
+test('normalizeCanonicalLanguage maps python and java aliases cleanly', () => {
   assert.equal(normalizeCanonicalLanguage('python3'), 'python');
+  assert.equal(normalizeCanonicalLanguage('Python 3'), 'python');
   assert.equal(normalizeCanonicalLanguage('PY'), 'python');
   assert.equal(normalizeCanonicalLanguage('Java '), 'java');
+  assert.equal(normalizeCanonicalLanguage('java17'), 'java');
+  assert.equal(normalizeCanonicalLanguage('Java 21'), 'java');
+  assert.equal(normalizeCanonicalLanguage('javascript'), 'javascript');
 });
 
-test('BrowserCodeExecutionAdapter reports Java honestly as BROWSER_RUNTIME_UNSUPPORTED without network calls', async () => {
-  const adapter = new BrowserCodeExecutionAdapter();
-  assert.equal(adapter.isBrowserExecutionSupported('java'), false);
-  const reason = adapter.getUnsupportedReason('java');
-  assert.match(reason, /199xVM|Java/i);
+test('extractJavaMainClass resolves public class or main class cleanly', () => {
+  assert.equal(extractJavaMainClass('public class Solution { public static void main(String[] a) {} }'), 'Solution');
+  assert.equal(extractJavaMainClass('import java.util.*;\nclass Helper {}\npublic class Main { public static void main(String[] args) {} }'), 'Main');
+  assert.equal(extractJavaMainClass('class Entry { public static void main(String[] a) {} }'), 'Entry');
+});
 
+test('BrowserCodeExecutionAdapter marks Java as supported via TeaVM WASM worker driver', async () => {
+  const adapter = new BrowserCodeExecutionAdapter();
+  const originalWorker = globalThis.Worker;
+  try {
+    // When Web Worker + WebAssembly exist (browser environment), both Python & Java are supported
+    globalThis.Worker = class {};
+    assert.equal(adapter.isBrowserExecutionSupported('java'), true);
+    assert.equal(adapter.isBrowserExecutionSupported('java17'), true);
+    assert.equal(adapter.isBrowserExecutionSupported('python'), true);
+    assert.equal(adapter.getUnsupportedReason('java'), '');
+    assert.equal(adapter.getRuntimeState('java'), 'IDLE');
+  } finally {
+    if (originalWorker === undefined) {
+      delete globalThis.Worker;
+    } else {
+      globalThis.Worker = originalWorker;
+    }
+  }
+
+  // In Node without Web Worker global, execution fails cleanly with RUNTIME_LOAD_ERROR instead of throwing
   const customRes = await adapter.runCustomInput({
     sourceCode: 'public class Main { public static void main(String[] a) {} }',
     language: 'java',
     stdin: '5',
   });
-  assert.equal(customRes.status, 'BROWSER_RUNTIME_UNSUPPORTED');
-  assert.equal(customRes.executionTimeMs, 0);
+  assert.equal(customRes.status, 'RUNTIME_LOAD_ERROR');
 
   const sampleRes = await adapter.runSampleTests(
     {
-      sourceCode: 'public class Main {}',
+      sourceCode: 'public class Main { public static void main(String[] a) {} }',
       language: 'java',
     },
     [{ id: 'tc1', input_text: '1', expected_output: '1' }]
@@ -70,11 +94,13 @@ test('BrowserCodeExecutionAdapter reports Java honestly as BROWSER_RUNTIME_UNSUP
 
 test('BrowserCodeExecutionAdapter rejects empty source code locally with COMPILATION_ERROR', async () => {
   const adapter = new BrowserCodeExecutionAdapter();
-  const res = await adapter.runCustomInput({
-    sourceCode: '   \n  ',
-    language: 'python',
-    stdin: '',
-  });
-  assert.equal(res.status, 'COMPILATION_ERROR');
-  assert.match(res.compilationErrors, /empty/i);
+  for (const language of ['python', 'java']) {
+    const res = await adapter.runCustomInput({
+      sourceCode: '   \n  ',
+      language,
+      stdin: '',
+    });
+    assert.equal(res.status, 'COMPILATION_ERROR');
+    assert.match(res.compilationErrors, /empty/i);
+  }
 });

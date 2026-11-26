@@ -10,6 +10,13 @@ import {
   normalizeCanonicalLanguage,
   sharedBrowserExecutionAdapter,
 } from '../../utils/codeExecution/BrowserCodeExecutionAdapter';
+import {
+  buildCodingDraftKey,
+  loadCodingDraft,
+  resetCodingDraft,
+  resolveDraftQuestionKey,
+  saveCodingDraft,
+} from '../../utils/codeExecution/draftStorage';
 import type {
   BrowserExecutionResult,
   BrowserRuntimeState,
@@ -135,14 +142,20 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     [details]
   );
 
-  const draftKey = `${question.question_order}_${language}`;
-  const sourceCode = codeDrafts[draftKey] ?? getInitialCode(language);
+  const draftQuestionKey = resolveDraftQuestionKey(question.question_id, question.question_order);
+  const draftKey = buildCodingDraftKey(attemptId, draftQuestionKey, language);
+
+  const persistedDraft = loadCodingDraft(attemptId, draftQuestionKey, language);
+  const sourceCode =
+    codeDrafts[draftKey] ??
+    (persistedDraft !== null ? persistedDraft : getInitialCode(language));
 
   const setSourceCode = useCallback(
     (next: string) => {
+      saveCodingDraft(attemptId, draftQuestionKey, language, next);
       setCodeDrafts((prev) => ({ ...prev, [draftKey]: next }));
     },
-    [draftKey]
+    [attemptId, draftQuestionKey, language, draftKey]
   );
 
   // Cohesive Light Stitch IDE default with 1-click Dark IDE toggle
@@ -214,14 +227,18 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     setLastRunKind(null);
     setSubmitResult(null);
     setSubmitError('');
-  }, [question.question_order]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [question.question_id, question.question_order]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (normalizeCanonicalLanguage(language) === 'python') {
-      sharedBrowserExecutionAdapter.warmup('python', (st, detail) => {
+    const canonical = normalizeCanonicalLanguage(language);
+    if (canonical === 'python' || canonical === 'java') {
+      sharedBrowserExecutionAdapter.warmup(canonical, (st, detail) => {
         setRuntimeState(st);
         setRuntimeDetail(detail || '');
       });
+    } else {
+      setRuntimeState('IDLE');
+      setRuntimeDetail('');
     }
   }, [language]);
 
@@ -301,7 +318,13 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
 
   const handleResetBoilerplate = () => {
     if (window.confirm('Reset code to initial boilerplate template?')) {
-      setSourceCode(getInitialCode(language));
+      const initial = resetCodingDraft(
+        attemptId,
+        draftQuestionKey,
+        language,
+        getInitialCode(language)
+      );
+      setCodeDrafts((prev) => ({ ...prev, [draftKey]: initial }));
     }
   };
 
@@ -356,7 +379,11 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     setActiveConsoleTab(useCustom ? 'output' : 'sample');
     setSubmitError('');
 
-    const timeoutMs = Math.max(2500, Math.round(((details?.time_limit_seconds || 2.0) + 2.0) * 1000));
+    const canonicalLang = normalizeCanonicalLanguage(language);
+    const timeoutMs =
+      canonicalLang === 'java'
+        ? Math.max(5000, Math.round(((details?.time_limit_seconds || 2.0) + 4.0) * 1000))
+        : Math.max(2500, Math.round(((details?.time_limit_seconds || 2.0) + 2.0) * 1000));
 
     try {
       if (useCustom) {
@@ -411,7 +438,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     setIsRunning(false);
   };
 
-  // ── AUTHORITATIVE SERVER SUBMIT SOLUTION (USES DB question_id ONLY) ──
+  // ── AUTHORITATIVE PERSISTENCE SUBMIT SOLUTION (BROWSER-FIRST WORKFLOW) ──
   const handleSubmit = async () => {
     if (!authoritativeQuestionId) {
       setSubmitError('Authoritative database question ID is missing on this snapshot. Refresh attempt state before submitting.');
@@ -430,12 +457,38 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     setConsoleOpen(true);
     setActiveConsoleTab('submission');
     setSubmitError('');
+
+    const canonical = normalizeCanonicalLanguage(language);
+    const totalRunMs =
+      lastRunKind === 'sample' && sampleSuiteResult
+        ? sampleSuiteResult.results.reduce((acc, r) => acc + (r.executionTimeMs || 0), 0)
+        : lastRunKind === 'custom' && customRunResult
+        ? customRunResult.executionTimeMs || 0
+        : 0;
+
+    const browserMeta = {
+      runtime_name: canonical === 'java' ? 'TeaVM Wasm (javac OpenJDK 25)' : canonical === 'python' ? 'Pyodide WebAssembly' : canonical,
+      runtime_version: canonical === 'java' ? 'teavm-wasm-0.14.1' : 'pyodide',
+      browser_status:
+        lastRunKind === 'sample' && sampleSuiteResult
+          ? sampleSuiteResult.overallStatus
+          : lastRunKind === 'custom' && customRunResult
+          ? customRunResult.status
+          : 'NOT_RUN_LOCALLY',
+      public_samples_attempted: sampleSuiteResult ? sampleSuiteResult.totalCount : 0,
+      public_samples_passed: sampleSuiteResult ? sampleSuiteResult.passedCount : 0,
+      execution_time_ms: Math.round(totalRunMs * 10) / 10,
+      is_authoritative: false,
+      is_verified: false,
+    };
+
     try {
       const res = await submitCode({
         attempt_id: attemptId,
         question_id: authoritativeQuestionId,
-        language: normalizeCanonicalLanguage(language),
+        language: canonical,
         source_code: sourceCode,
+        browser_execution_metadata: browserMeta,
       });
       setSubmitResult(res);
       onAnswerSaved?.(sourceCode);
@@ -443,7 +496,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
       setSubmitError(
         err?.response?.data?.detail ||
           err?.message ||
-          'Failed to submit solution for authoritative server evaluation.'
+          'Failed to submit solution. Your code draft remains safely saved locally.'
       );
     } finally {
       setIsSubmitting(false);
@@ -943,9 +996,9 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                 ))}
               </select>
 
-              {isPythonSelected && (
+              {(isPythonSelected || isJavaSelected) && (
                 <span
-                  data-testid="python-runtime-status"
+                  data-testid={isPythonSelected ? 'python-runtime-status' : 'java-runtime-status'}
                   style={{
                     fontSize: '11px',
                     fontWeight: 600,
@@ -972,15 +1025,25 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                         : t.accentBlueText,
                   }}
                 >
-                  {runtimeState === 'LOADING_RUNTIME'
-                    ? '⏳ Loading Python 3...'
+                  {isPythonSelected
+                    ? runtimeState === 'LOADING_RUNTIME'
+                      ? '⏳ Loading Python 3...'
+                      : runtimeState === 'READY'
+                      ? '● Python 3 Ready'
+                      : runtimeState === 'EXECUTING'
+                      ? '⚡ Running Python...'
+                      : runtimeState === 'ERROR'
+                      ? '⚠ Runtime Error'
+                      : '● Python 3 Worker'
+                    : runtimeState === 'LOADING_RUNTIME'
+                    ? '⏳ Loading Java (TeaVM)...'
                     : runtimeState === 'READY'
-                    ? '● Python 3 Ready'
+                    ? '● Java Browser Ready'
                     : runtimeState === 'EXECUTING'
-                    ? '⚡ Running...'
+                    ? '⚡ Compiling & Running Java...'
                     : runtimeState === 'ERROR'
-                    ? '⚠ Runtime Error'
-                    : '● Python 3 Worker'}
+                    ? '⚠ Java Load Error'
+                    : '● Java Worker'}
                 </span>
               )}
 
@@ -1070,11 +1133,9 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                 onClick={() => handleRun(activeConsoleTab === 'custom')}
                 disabled={isRunning || isSubmitting}
                 title={
-                  isJavaSelected
-                    ? 'Browser Java execution is disabled; click to inspect notice or use Submit Solution.'
-                    : activeConsoleTab === 'custom'
-                    ? 'Run with Custom Input (Ctrl+Enter)'
-                    : 'Run Sample Tests (Ctrl+Enter)'
+                  activeConsoleTab === 'custom'
+                    ? 'Run in browser with Custom Input (Ctrl+Enter)'
+                    : 'Run in browser against Sample Tests (Ctrl+Enter)'
                 }
                 style={{
                   backgroundColor: isRunning ? '#64748B' : t.runTeal,
@@ -1225,13 +1286,9 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                     {
                       id: 'submission',
                       label: submitResult
-                        ? `Submission (${submitResult.verdict})`
-                        : 'Submission Results',
-                      statusColor: submitResult
-                        ? submitResult.verdict === 'ACCEPTED'
-                          ? t.successText
-                          : t.dangerText
-                        : undefined,
+                        ? `Submission (${submitResult.review_status || submitResult.status || 'PENDING_REVIEW'})`
+                        : 'Submission Status',
+                      statusColor: submitResult ? t.warnText : undefined,
                     },
                   ] as Array<{ id: ConsoleTab; label: string; statusColor?: string }>
                 ).map((tab) => {
@@ -1318,7 +1375,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                 {/* TAB 1: SAMPLE TESTS */}
                 {activeConsoleTab === 'sample' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {isJavaSelected && (
+                    {runtimeState === 'ERROR' && runtimeDetail && (
                       <div
                         style={{
                           padding: '8px 12px',
@@ -1330,8 +1387,8 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                           fontSize: '12px',
                         }}
                       >
-                        Browser Java execution is disabled pending full compatibility &amp; GPL-2.0 clearance. Use{' '}
-                        <strong>Submit Solution</strong> for server-side Java evaluation.
+                        Browser runtime failed to initialize ({runtimeDetail}). You can still write your code and use{' '}
+                        <strong>Submit Solution</strong> safely.
                       </div>
                     )}
 
@@ -1359,7 +1416,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                           fontSize: '12.5px',
                         }}
                       >
-                        Sample Run Verdict: {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
+                        Public Sample Result (Local Browser): {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
                       </div>
                     )}
 
@@ -1755,75 +1812,60 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                       <div data-testid="coding-submit-result" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <div
                           style={{
-                            padding: '10px 14px',
+                            padding: '12px 14px',
                             borderRadius: '8px',
-                            backgroundColor: submitResult.verdict === 'ACCEPTED' ? t.successBg : t.dangerBg,
-                            border: `1px solid ${submitResult.verdict === 'ACCEPTED' ? t.successBorder : t.dangerBorder}`,
-                            color: submitResult.verdict === 'ACCEPTED' ? t.successText : t.dangerText,
+                            backgroundColor: t.successBg,
+                            border: `1px solid ${t.successBorder}`,
+                            color: t.successText,
                             fontFamily: "'Inter', sans-serif",
                           }}
                         >
-                          <div style={{ fontSize: '13.5px', fontWeight: 800 }}>
-                            Authoritative Verdict: {submitResult.verdict}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: '13.5px', fontWeight: 800 }}>
+                              ✓ Submission Received — Pending Manual Evaluation
+                            </div>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                                backgroundColor: t.warnBg,
+                                color: t.warnText,
+                                border: `1px solid ${t.warnBorder}`,
+                              }}
+                            >
+                              {submitResult.review_status || submitResult.status || 'PENDING_REVIEW'}
+                            </span>
                           </div>
-                          <div style={{ fontSize: '12px', marginTop: '3px', color: t.textSecondary }}>
-                            Score Awarded: <strong>{submitResult.score_awarded} pts</strong> • Passed:{' '}
-                            {submitResult.passed_test_cases} / {submitResult.total_test_cases} test cases (
-                            {submitResult.execution_time_ms.toFixed(1)} ms)
+                          <div style={{ fontSize: '12px', marginTop: '6px', color: t.textSecondary }}>
+                            Submission ID: <code style={{ fontWeight: 700 }}>{submitResult.submission_id}</code>
+                            {submitResult.language ? ` • Language: ${formatLanguageLabel(submitResult.language)}` : ''}
+                          </div>
+                          <div style={{ fontSize: '11.5px', marginTop: '4px', color: t.textMuted }}>
+                            {submitResult.message ||
+                              'Your source code has been persisted and queued for official administrator evaluation. Preliminary browser runs do not assign an official score.'}
                           </div>
                         </div>
 
-                        {submitResult.compile_output && (
-                          <pre
+                        {submitResult.browser_execution_metadata && (
+                          <div
                             style={{
-                              margin: 0,
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              backgroundColor: t.dangerBg,
-                              color: t.dangerText,
-                              border: `1px solid ${t.dangerBorder}`,
-                              whiteSpace: 'pre-wrap',
+                              padding: '8px 12px',
+                              borderRadius: '7px',
+                              backgroundColor: t.bgSurface,
+                              border: `1px solid ${t.border}`,
+                              fontSize: '11.5px',
+                              color: t.textSecondary,
+                              fontFamily: "'Inter', sans-serif",
                             }}
                           >
-                            {submitResult.compile_output}
-                          </pre>
-                        )}
-
-                        {submitResult.results && submitResult.results.length > 0 && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            {submitResult.results.map((r, idx) => (
-                              <div
-                                key={r.test_case_id || idx}
-                                style={{
-                                  padding: '8px 10px',
-                                  borderRadius: '7px',
-                                  backgroundColor: r.passed ? t.successBg : t.dangerBg,
-                                  border: `1px solid ${r.passed ? t.successBorder : t.dangerBorder}`,
-                                }}
-                              >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: "'Inter', sans-serif" }}>
-                                  <span style={{ fontWeight: 700, color: t.textMain }}>
-                                    {r.is_public ? `Sample Case ${idx + 1} (Public)` : `Evaluation Case ${idx + 1} (Hidden)`}
-                                  </span>
-                                  <span style={{ fontWeight: 800, color: r.passed ? t.successText : t.dangerText }}>
-                                    {r.passed ? '✓ PASSED' : `✗ ${r.status || 'FAILED'}`} ({r.execution_time_ms.toFixed(1)} ms)
-                                  </span>
-                                </div>
-                                {r.is_public && r.input_text !== null && r.input_text !== undefined && (
-                                  <div style={{ marginTop: '4px', fontSize: '11px', color: t.textSecondary }}>
-                                    Input: <code>{r.input_text}</code> | Expected: <code>{r.expected_output}</code>
-                                    {r.actual_output !== null && r.actual_output !== undefined && (
-                                      <span> | Output: <code>{r.actual_output.trim()}</code></span>
-                                    )}
-                                  </div>
-                                )}
-                                {!r.is_public && (
-                                  <div style={{ marginTop: '2px', fontSize: '10.5px', color: t.textMuted, fontStyle: 'italic', fontFamily: "'Inter', sans-serif" }}>
-                                    Confidential hidden evaluation case — inputs/outputs withheld
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                            <strong>Preliminary Local Browser Telemetry (Unverified):</strong>{' '}
+                            {submitResult.browser_execution_metadata.browser_status || 'N/A'}
+                            {typeof submitResult.browser_execution_metadata.public_samples_attempted === 'number' &&
+                            submitResult.browser_execution_metadata.public_samples_attempted > 0
+                              ? ` • Samples Passed: ${submitResult.browser_execution_metadata.public_samples_passed ?? 0}/${submitResult.browser_execution_metadata.public_samples_attempted}`
+                              : ''}
                           </div>
                         )}
                       </div>
@@ -1831,7 +1873,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
 
                     {!submitResult && !submitError && !isSubmitting && (
                       <div style={{ color: t.textMuted, fontFamily: "'Inter', sans-serif" }}>
-                        Click <strong>Submit Solution</strong> to evaluate your code against all public and hidden test cases.
+                        Click <strong>Submit Solution</strong> to save your code for official manual evaluation. Submission works even if you have not executed sample tests locally.
                       </div>
                     )}
                   </div>

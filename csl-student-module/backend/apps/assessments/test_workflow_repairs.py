@@ -1377,7 +1377,7 @@ class SnapshotGradingAndAuthBoundaryTests(BaseWorkflowRepairTestCase):
         self.prog.allowed_languages = ["java"]
         self.prog.save()
 
-        # Candidate submits Python solution matching FROZEN snapshot (3->6, 7->14)
+        # Candidate submits Python solution matching FROZEN snapshot allowed_languages
         sub_res = self.c1_client.post(
             "/api/assessment/code/submit/",
             {
@@ -1388,28 +1388,20 @@ class SnapshotGradingAndAuthBoundaryTests(BaseWorkflowRepairTestCase):
             },
             format="json",
         )
-        self.assertEqual(sub_res.status_code, 200, sub_res.data)
-        self.assertEqual(sub_res.data["verdict"], "ACCEPTED")
-        self.assertTrue(sub_res.data["graded_from_snapshot"])
-        self.assertEqual(sub_res.data["passed_test_cases"], 2)
-        self.assertEqual(sub_res.data["total_test_cases"], 2)
-        self.assertEqual(sub_res.data["score_awarded"], 20.0)
-
-        # Hidden test case confidential in candidate response even when live row deleted
-        hidden_items = [r for r in sub_res.data["results"] if not r["is_public"]]
-        self.assertEqual(len(hidden_items), 1)
-        self.assertIsNone(hidden_items[0]["expected_output"])
-        self.assertIsNone(hidden_items[0]["actual_output"])
-        self.assertIsNone(hidden_items[0]["input_text"])
+        self.assertEqual(sub_res.status_code, 201, sub_res.data)
+        self.assertEqual(sub_res.data["verdict"], "PENDING")
+        self.assertEqual(sub_res.data["review_status"], "PENDING_REVIEW")
+        self.assertEqual(sub_res.data["score_awarded"], 0.0)
+        self.assertEqual(sub_res.data["results"], [])
 
         self.attempt.refresh_from_db()
-        self.assertEqual(self.attempt.coding_score, 20)
-        self.assertEqual(CodeTestResult.objects.filter(submission__attempt=self.attempt).count(), 2)
+        self.assertEqual(self.attempt.coding_score, 0)
+        self.assertEqual(CodeTestResult.objects.filter(submission__attempt=self.attempt).count(), 0)
 
     @override_settings(DEBUG=False, TESTING=False, JUDGE0_API_URL="")
-    def test_sandbox_failure_returns_503_and_never_marks_accepted(self):
+    def test_submit_succeeds_without_judge0_or_local_sandbox(self):
         with patch("apps.assessments.coding_service.is_safe_local_execution_permitted", return_value=False):
-            fail_res = self.c1_client.post(
+            sub_res = self.c1_client.post(
                 "/api/assessment/code/submit/",
                 {
                     "attempt_id": str(self.attempt.id),
@@ -1419,7 +1411,8 @@ class SnapshotGradingAndAuthBoundaryTests(BaseWorkflowRepairTestCase):
                 },
                 format="json",
             )
-        self.assertEqual(fail_res.status_code, 503, fail_res.data)
-        self.assertEqual(fail_res.data["verdict"], "INTERNAL_ERROR")
-        self.assertEqual(fail_res.data["score_awarded"], 0.0)
+        self.assertEqual(sub_res.status_code, 201, sub_res.data)
+        self.assertEqual(sub_res.data["verdict"], "PENDING")
+        self.assertEqual(sub_res.data["review_status"], "PENDING_REVIEW")
+        self.assertEqual(sub_res.data["score_awarded"], 0.0)
 

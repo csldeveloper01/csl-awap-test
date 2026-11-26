@@ -427,7 +427,9 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                     </td>
                     <td className="csl-tabular" style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: tokens.textPrimary, fontSize: '14px' }}>
                       {res.delivery_mode === 'PDF_CODING' || res.is_manual_evaluation_pending ? (
-                        <span style={{ fontSize: '12px', color: tokens.warningText, fontWeight: 600 }}>Paper Eval</span>
+                        <span style={{ fontSize: '12px', color: tokens.warningText, fontWeight: 600 }}>
+                          {res.delivery_mode === 'PDF_CODING' ? 'Paper Eval' : 'Manual Eval'}
+                        </span>
                       ) : (
                         <>{res.total_score} <span style={{ fontSize: '11.5px', color: tokens.textMuted, fontWeight: 500 }}>/ {res.assessment_total_marks ?? 50}</span></>
                       )}

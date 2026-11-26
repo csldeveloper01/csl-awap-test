@@ -27,6 +27,7 @@ from .models import (
     ProctoringEvidence,
     ProgrammingQuestion,
     ProgrammingTestCase,
+    CodeSubmission,
     normalize_hex_color,
     default_export_score_thresholds,
 )
@@ -1404,7 +1405,14 @@ class AdminLiveAttemptSerializer(serializers.ModelSerializer):
         return obj.assessment.delivery_mode if obj.assessment else "MCQ"
 
     def get_is_manual_evaluation_pending(self, obj):
-        return obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+        if obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION:
+            return True
+        return obj.code_submissions.filter(
+            review_status__in=[
+                CodeSubmission.ReviewStatus.PENDING_REVIEW,
+                CodeSubmission.ReviewStatus.UNDER_REVIEW,
+            ]
+        ).exists()
 
     def get_assessment_title(self, obj):
         if obj.assessment:
@@ -1638,7 +1646,14 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
         return obj.assessment.delivery_mode if obj.assessment else "MCQ"
 
     def get_is_manual_evaluation_pending(self, obj):
-        return obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+        if obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION:
+            return True
+        return obj.code_submissions.filter(
+            review_status__in=[
+                CodeSubmission.ReviewStatus.PENDING_REVIEW,
+                CodeSubmission.ReviewStatus.UNDER_REVIEW,
+            ]
+        ).exists()
 
     def get_pdf_filename(self, obj):
         if obj.assessment and hasattr(obj.assessment, "pdf_document") and obj.assessment.pdf_document:
@@ -1674,7 +1689,9 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
     def get_answered_count(self, obj):
         return obj.question_snapshots.exclude(selected_option="").count()
     def get_code_submissions(self, obj):
-        submissions = obj.code_submissions.select_related("programming_question__question").prefetch_related("test_results__test_case").all()
+        submissions = obj.code_submissions.select_related(
+            "programming_question__question", "reviewed_by"
+        ).prefetch_related("test_results__test_case").all()
         return [
             {
                 "id": str(sub.id),
@@ -1683,7 +1700,17 @@ class AdminAttemptReviewSerializer(serializers.ModelSerializer):
                 "language": sub.language,
                 "source_code": sub.source_code,
                 "verdict": sub.verdict,
+                "review_status": sub.review_status,
                 "score_awarded": sub.score_awarded,
+                "max_marks": sub.max_marks,
+                "reviewed_by": (
+                    (sub.reviewed_by.get_full_name() or sub.reviewed_by.email or sub.reviewed_by.username)
+                    if sub.reviewed_by
+                    else None
+                ),
+                "reviewed_at": sub.reviewed_at.isoformat() if sub.reviewed_at else None,
+                "review_notes": sub.review_notes,
+                "browser_execution_metadata": sub.browser_execution_metadata or {},
                 "total_test_cases": sub.total_test_cases,
                 "passed_test_cases": sub.passed_test_cases,
                 "execution_time_ms": sub.execution_time_ms,
@@ -1762,7 +1789,14 @@ class AdminResultSerializer(serializers.ModelSerializer):
         return obj.assessment.delivery_mode if obj.assessment else "MCQ"
 
     def get_is_manual_evaluation_pending(self, obj):
-        return obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION
+        if obj.state == AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION:
+            return True
+        return obj.code_submissions.filter(
+            review_status__in=[
+                CodeSubmission.ReviewStatus.PENDING_REVIEW,
+                CodeSubmission.ReviewStatus.UNDER_REVIEW,
+            ]
+        ).exists()
 
     assessment_total_marks = serializers.SerializerMethodField()
     assessment_aptitude_count = serializers.SerializerMethodField()

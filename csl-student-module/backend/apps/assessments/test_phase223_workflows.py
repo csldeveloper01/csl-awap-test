@@ -572,7 +572,7 @@ class Phase223WorkflowTests(TestCase):
         self.assertEqual(run_res.data["stdout"].strip(), "30")
         self.assertEqual(run_res.data["status"], "ACCEPTED")
 
-        # 6. Submit final code for evaluation against all test cases
+        # 6. Submit final code for browser-first persistence (pending manual review, no Judge0 call)
         submit_res = cand_client.post(
             "/api/assessment/code/submit/",
             {
@@ -583,15 +583,17 @@ class Phase223WorkflowTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(submit_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(submit_res.data["status"], "ACCEPTED")
-        self.assertEqual(submit_res.data["score"], 1.0)
-        self.assertEqual(submit_res.data["passed_count"], 2)
-        self.assertEqual(submit_res.data["total_test_cases"], 2)
+        self.assertEqual(submit_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(submit_res.data["status"], CodeSubmission.ReviewStatus.PENDING_REVIEW)
+        self.assertEqual(submit_res.data["verdict"], "PENDING")
+        self.assertEqual(submit_res.data["review_status"], CodeSubmission.ReviewStatus.PENDING_REVIEW)
+        self.assertEqual(submit_res.data["score_awarded"], 0.0)
+        self.assertEqual(submit_res.data["max_marks"], float(q.marks))
 
-        # Verify CodeSubmission and CodeTestResult persistence
+        # Verify CodeSubmission persistence without fabricated auto test results
         submission = CodeSubmission.objects.filter(attempt=attempt, programming_question__question=q).first()
         self.assertIsNotNone(submission)
-        self.assertEqual(submission.verdict, "ACCEPTED")
-        self.assertEqual(submission.score_awarded, 1.0)
-        self.assertEqual(submission.test_results.count(), 2)
+        self.assertEqual(submission.verdict, "PENDING")
+        self.assertEqual(submission.review_status, CodeSubmission.ReviewStatus.PENDING_REVIEW)
+        self.assertEqual(submission.score_awarded, 0.0)
+        self.assertEqual(submission.test_results.count(), 0)

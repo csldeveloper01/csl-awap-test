@@ -5,6 +5,7 @@ import {
   getAdminAttemptReview,
   updateAdminAttemptReviewStatus,
   reviewAdminIntegrityEvent,
+  reviewAdminCodeSubmission,
   deleteAdminAttempt,
   fetchAdminAssessmentPdfBlob,
   type AdminAttemptReview,
@@ -37,6 +38,12 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
   const [savingEventReview, setSavingEventReview] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
+  // Coding submission manual evaluation state (keyed by submission ID)
+  const [codeReviewDrafts, setCodeReviewDrafts] = useState<
+    Record<string, { review_status: string; score_awarded: string; review_notes: string }>
+  >({});
+  const [savingCodeReviewId, setSavingCodeReviewId] = useState<string | null>(null);
+
   const handleDownloadPdf = async () => {
     if (!review?.assessment_id) return;
     try {
@@ -62,10 +69,59 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
       setLoading(true);
       const data = await getAdminAttemptReview(attemptId);
       setReview(data);
+      if (data.code_submissions) {
+        const nextDrafts: Record<string, { review_status: string; score_awarded: string; review_notes: string }> = {};
+        data.code_submissions.forEach((sub) => {
+          nextDrafts[sub.id] = {
+            review_status: sub.review_status || 'PENDING_REVIEW',
+            score_awarded: String(sub.score_awarded ?? 0),
+            review_notes: sub.review_notes || '',
+          };
+        });
+        setCodeReviewDrafts(nextDrafts);
+      }
     } catch {
       alert('Failed to load attempt snapshot and review data.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveCodeReview = async (
+    submissionId: string,
+    overrideStatus?: 'PENDING_REVIEW' | 'UNDER_REVIEW' | 'MANUALLY_ACCEPTED' | 'MANUALLY_REJECTED' | 'MANUALLY_SCORED',
+    overrideScore?: number
+  ) => {
+    const draft = codeReviewDrafts[submissionId] || {
+      review_status: 'PENDING_REVIEW',
+      score_awarded: '0',
+      review_notes: '',
+    };
+    const statusToSave = (overrideStatus || draft.review_status) as
+      | 'PENDING_REVIEW'
+      | 'UNDER_REVIEW'
+      | 'MANUALLY_ACCEPTED'
+      | 'MANUALLY_REJECTED'
+      | 'MANUALLY_SCORED';
+    const numericScore =
+      overrideScore !== undefined
+        ? overrideScore
+        : draft.score_awarded.trim() === ''
+        ? undefined
+        : Number(draft.score_awarded);
+
+    try {
+      setSavingCodeReviewId(submissionId);
+      await reviewAdminCodeSubmission(submissionId, {
+        review_status: statusToSave,
+        score_awarded: numericScore,
+        review_notes: draft.review_notes,
+      });
+      await loadReview();
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Failed to save coding submission evaluation.');
+    } finally {
+      setSavingCodeReviewId(null);
     }
   };
 
@@ -349,10 +405,12 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
               </div>
               {review.delivery_mode === 'PDF_CODING' || review.is_manual_evaluation_pending ? (
                 <>
-                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#D97706', margin: '6px 0' }}>
-                    Paper Eval
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: tokens.warningText, margin: '6px 0' }}>
+                    {review.delivery_mode === 'PDF_CODING' ? 'Paper Eval' : 'Manual Eval'}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#92400E', fontWeight: 700 }}>Pending Score</div>
+                  <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 700 }}>
+                    {review.delivery_mode === 'PDF_CODING' ? 'Pending Score' : `MCQ Score: ${review.aptitude_score} · Coding Pending`}
+                  </div>
                 </>
               ) : (
                 <>
@@ -604,43 +662,59 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
         </div>
       )}
 
-      {/* Coding Submissions & Automated Evaluation */}
+      {/* Coding Submissions & Administrator Manual Evaluation */}
       {review.code_submissions && review.code_submissions.length > 0 && (
         <div
+          className="csl-card"
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '16px',
-            border: '1.5px solid #E2E8F0',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '14px',
+            border: `1px solid ${tokens.border}`,
             padding: '24px',
             marginBottom: '20px',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              💻 Candidate Code Submissions & Test Case Breakdown
-            </h3>
-            <span style={{ fontSize: '12px', fontWeight: 700, color: '#64748B' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <h3 style={{ fontSize: '17px', fontWeight: 700, color: tokens.textPrimary, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                💻 Candidate Code Submissions &amp; Manual Evaluation
+              </h3>
+              <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: tokens.textMuted }}>
+                All chronological submissions are preserved. Browser sample execution telemetry is unverified until evaluated by an administrator.
+              </p>
+            </div>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary }}>
               {review.code_submissions.length} submission{review.code_submissions.length > 1 ? 's' : ''} recorded
             </span>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {review.code_submissions.map((sub, sIdx) => (
+            {review.code_submissions.map((sub, sIdx) => {
+              const draft = codeReviewDrafts[sub.id] || {
+                review_status: sub.review_status || 'PENDING_REVIEW',
+                score_awarded: String(sub.score_awarded ?? 0),
+                review_notes: sub.review_notes || '',
+              };
+              const maxMarks = sub.max_marks ?? 1;
+              const isSavingThis = savingCodeReviewId === sub.id;
+              const browserMeta = sub.browser_execution_metadata;
+
+              return (
               <div
                 key={sub.id || sIdx}
                 style={{
-                  border: '1px solid #CBD5E1',
+                  border: `1px solid ${tokens.border}`,
                   borderRadius: '12px',
                   overflow: 'hidden',
-                  backgroundColor: '#F8FAFC',
+                  backgroundColor: tokens.surfaceMuted,
                 }}
               >
                 <div
                   style={{
                     padding: '12px 18px',
-                    backgroundColor: '#0B2E6F',
-                    color: '#FFFFFF',
+                    backgroundColor: '#171717',
+                    color: '#F8FAFC',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
@@ -649,52 +723,68 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
                   }}
                 >
                   <div>
-                    <span style={{ fontWeight: 800, fontSize: '14px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '14px' }}>
                       {sub.question_title || `Programming Question #${sIdx + 1}`}
                     </span>
-                    <span style={{ marginLeft: '12px', fontSize: '12px', opacity: 0.85 }}>
+                    <span style={{ marginLeft: '12px', fontSize: '12px', color: '#CBD5E1' }}>
                       Language: <strong>{sub.language.toUpperCase()}</strong>
                     </span>
+                    {sub.created_at && (
+                      <span style={{ marginLeft: '12px', fontSize: '11px', color: '#94A3B8' }}>
+                        Submitted: {new Date(sub.created_at).toLocaleString()}
+                      </span>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        backgroundColor: sub.verdict === 'ACCEPTED' ? '#16A34A' : '#DC2626',
-                        color: '#FFFFFF',
-                      }}
-                    >
-                      {sub.verdict}
-                    </span>
-                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#FACC15' }}>
-                      {sub.score_awarded} pts
-                    </span>
-                    <span style={{ fontSize: '11px', opacity: 0.8 }}>
-                      Passed {sub.passed_test_cases}/{sub.total_test_cases} ({sub.execution_time_ms.toFixed(1)}ms)
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <StatusBadge status={sub.review_status || sub.verdict || 'PENDING_REVIEW'} size="sm" />
+                    <span className="csl-tabular" style={{ fontSize: '13px', fontWeight: 700, color: '#FACC15' }}>
+                      {sub.score_awarded} / {maxMarks} pts
                     </span>
                   </div>
                 </div>
 
-                <div style={{ padding: '16px 18px' }}>
+                <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {/* Non-Authoritative Browser Telemetry Notice */}
+                  {browserMeta && Object.keys(browserMeta).length > 0 && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        backgroundColor: tokens.warningBg,
+                        border: `1px solid ${tokens.warningBorder}`,
+                        color: tokens.warningText,
+                        fontSize: '12px',
+                      }}
+                    >
+                      <strong>Unverified Browser Run Telemetry (Non-Authoritative):</strong>{' '}
+                      Runtime: {browserMeta.runtime_name || 'Browser'} · Status: <strong>{browserMeta.browser_status || 'N/A'}</strong>
+                      {typeof browserMeta.public_samples_attempted === 'number' && browserMeta.public_samples_attempted > 0
+                        ? ` · Public Samples Passed: ${browserMeta.public_samples_passed ?? 0}/${browserMeta.public_samples_attempted}`
+                        : ''}
+                      {typeof browserMeta.execution_time_ms === 'number' && browserMeta.execution_time_ms > 0
+                        ? ` · Time: ${browserMeta.execution_time_ms}ms`
+                        : ''}
+                    </div>
+                  )}
+
                   {/* Source Code View */}
-                  <div style={{ marginBottom: '16px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
-                      Submitted Source Code:
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary }}>
+                        Submitted Source Code (Submission ID: <code>{sub.id}</code>):
+                      </span>
                     </div>
                     <pre
                       style={{
-                        backgroundColor: '#1E1E1E',
+                        backgroundColor: '#0F172A',
                         color: '#E2E8F0',
                         padding: '12px 16px',
                         borderRadius: '8px',
                         fontSize: '12px',
-                        fontFamily: 'Consolas, monospace',
+                        fontFamily: tokens.monoFamily,
                         margin: 0,
                         overflowX: 'auto',
-                        maxHeight: '260px',
+                        maxHeight: '280px',
                         whiteSpace: 'pre-wrap',
                       }}
                     >
@@ -702,82 +792,233 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
                     </pre>
                   </div>
 
+                  {/* Administrator Manual Evaluation Controls */}
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      borderRadius: '10px',
+                      backgroundColor: tokens.surfaceCard,
+                      border: `1px solid ${tokens.border}`,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <strong style={{ fontSize: '13px', color: tokens.textPrimary }}>
+                        Administrator Evaluation &amp; Scoring
+                      </strong>
+                      {sub.reviewed_by && sub.reviewed_at && (
+                        <span style={{ fontSize: '11.5px', color: tokens.textMuted }}>
+                          Last reviewed by <strong>{sub.reviewed_by}</strong> on {new Date(sub.reviewed_at).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', alignItems: 'end' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
+                          Review Status
+                        </label>
+                        <select
+                          value={draft.review_status}
+                          onChange={(e) =>
+                            setCodeReviewDrafts((prev) => ({
+                              ...prev,
+                              [sub.id]: { ...draft, review_status: e.target.value },
+                            }))
+                          }
+                          style={{
+                            width: '100%',
+                            padding: '7px 10px',
+                            borderRadius: '7px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.inputBg,
+                            color: tokens.textPrimary,
+                            fontSize: '12.5px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          <option value="PENDING_REVIEW">Pending Review</option>
+                          <option value="UNDER_REVIEW">Under Review</option>
+                          <option value="MANUALLY_ACCEPTED">Manually Accepted (Full Marks)</option>
+                          <option value="MANUALLY_SCORED">Manually Scored</option>
+                          <option value="MANUALLY_REJECTED">Manually Rejected (0 Marks)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
+                          Marks Awarded (Max: {maxMarks})
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={maxMarks}
+                          step="0.5"
+                          value={draft.score_awarded}
+                          onChange={(e) =>
+                            setCodeReviewDrafts((prev) => ({
+                              ...prev,
+                              [sub.id]: {
+                                ...draft,
+                                score_awarded: e.target.value,
+                                review_status: draft.review_status === 'PENDING_REVIEW' || draft.review_status === 'UNDER_REVIEW' ? 'MANUALLY_SCORED' : draft.review_status,
+                              },
+                            }))
+                          }
+                          style={{
+                            width: '100%',
+                            padding: '7px 10px',
+                            borderRadius: '7px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.inputBg,
+                            color: tokens.textPrimary,
+                            fontSize: '12.5px',
+                            fontFamily: tokens.monoFamily,
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          disabled={isSavingThis}
+                          onClick={() => handleSaveCodeReview(sub.id, 'UNDER_REVIEW', 0)}
+                          style={{
+                            padding: '7px 11px',
+                            borderRadius: '7px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.surfaceElevated,
+                            color: tokens.textPrimary,
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Under Review
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSavingThis}
+                          onClick={() => handleSaveCodeReview(sub.id, 'MANUALLY_ACCEPTED', maxMarks)}
+                          style={{
+                            padding: '7px 11px',
+                            borderRadius: '7px',
+                            border: 'none',
+                            backgroundColor: '#16A34A',
+                            color: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Accept ({maxMarks})
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSavingThis}
+                          onClick={() => handleSaveCodeReview(sub.id, 'MANUALLY_REJECTED', 0)}
+                          style={{
+                            padding: '7px 11px',
+                            borderRadius: '7px',
+                            border: 'none',
+                            backgroundColor: '#DC2626',
+                            color: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Reject (0)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: '220px' }}>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
+                          Review Notes (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={draft.review_notes}
+                          placeholder="Feedback on algorithm complexity, edge cases, style..."
+                          onChange={(e) =>
+                            setCodeReviewDrafts((prev) => ({
+                              ...prev,
+                              [sub.id]: { ...draft, review_notes: e.target.value },
+                            }))
+                          }
+                          style={{
+                            width: '100%',
+                            padding: '7px 10px',
+                            borderRadius: '7px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.inputBg,
+                            color: tokens.textPrimary,
+                            fontSize: '12.5px',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isSavingThis}
+                        onClick={() => handleSaveCodeReview(sub.id)}
+                        className="csl-btn-primary"
+                        style={{ padding: '8px 16px', fontSize: '12.5px' }}
+                      >
+                        {isSavingThis ? 'Saving...' : 'Save Evaluation'}
+                      </button>
+                    </div>
+                  </div>
+
                   {sub.compile_output && (
-                    <div style={{ marginBottom: '14px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', padding: '10px 14px', borderRadius: '8px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#DC2626' }}>Compilation / Diagnostic Output:</span>
-                      <pre style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#991B1B', whiteSpace: 'pre-wrap' }}>
+                    <div style={{ backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, padding: '10px 14px', borderRadius: '8px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: tokens.dangerText }}>Compilation / Diagnostic Output:</span>
+                      <pre style={{ margin: '4px 0 0 0', fontSize: '11px', color: tokens.dangerText, whiteSpace: 'pre-wrap' }}>
                         {sub.compile_output}
                       </pre>
                     </div>
                   )}
 
-                  {/* Full Test Results Breakdown (Public & Hidden) */}
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>
-                      Comprehensive Test Case Evaluation Breakdown:
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {sub.test_results?.map((tr, trIdx) => (
-                        <div
-                          key={tr.id || trIdx}
-                          style={{
-                            padding: '10px 14px',
-                            borderRadius: '8px',
-                            border: tr.passed ? '1px solid #A7F3D0' : '1px solid #FECACA',
-                            backgroundColor: tr.passed ? '#ECFDF5' : '#FEF2F2',
-                            fontSize: '12px',
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontWeight: 800, color: tr.passed ? '#065F46' : '#991B1B' }}>
-                              {tr.is_public ? `Sample Case ${trIdx + 1} (Public)` : `Test Case ${trIdx + 1} (Hidden Evaluation)`}
-                            </span>
-                            <span
-                              style={{
-                                fontWeight: 800,
-                                fontSize: '11px',
-                                color: tr.passed ? '#059669' : '#DC2626',
-                              }}
-                            >
-                              {tr.passed ? '✓ PASSED' : `✗ ${tr.status || 'FAILED'}`} ({tr.execution_time_ms.toFixed(1)}ms)
-                            </span>
-                          </div>
-
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', marginTop: '6px', fontSize: '11px', color: '#334155' }}>
-                            {tr.input_text !== undefined && (
-                              <div>
-                                <span style={{ fontWeight: 700, color: '#64748B' }}>Input: </span>
-                                <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
-                                  {tr.input_text || '(empty)'}
-                                </code>
-                              </div>
-                            )}
-                            <div>
-                              <span style={{ fontWeight: 700, color: '#64748B' }}>Expected: </span>
-                              <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
-                                {tr.expected_output}
-                              </code>
-                            </div>
-                            <div>
-                              <span style={{ fontWeight: 700, color: '#64748B' }}>Actual: </span>
-                              <code style={{ backgroundColor: '#FFFFFF', padding: '2px 6px', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
-                                {tr.actual_output !== undefined ? (tr.actual_output?.trim() || '(empty)') : 'N/A'}
-                              </code>
+                  {/* Legacy Stored Test Results Breakdown (if any historical records exist) */}
+                  {sub.test_results && sub.test_results.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '8px' }}>
+                        Historical Test Case Evaluation Breakdown:
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {sub.test_results.map((tr, trIdx) => (
+                          <div
+                            key={tr.id || trIdx}
+                            style={{
+                              padding: '10px 14px',
+                              borderRadius: '8px',
+                              border: `1px solid ${tr.passed ? tokens.successBorder : tokens.dangerBorder}`,
+                              backgroundColor: tr.passed ? tokens.successBg : tokens.dangerBg,
+                              fontSize: '12px',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                              <span style={{ fontWeight: 700, color: tr.passed ? tokens.successText : tokens.dangerText }}>
+                                {tr.is_public ? `Sample Case ${trIdx + 1} (Public)` : `Test Case ${trIdx + 1} (Hidden Evaluation)`}
+                              </span>
+                              <span style={{ fontWeight: 700, fontSize: '11px', color: tr.passed ? tokens.successText : tokens.dangerText }}>
+                                {tr.passed ? '✓ PASSED' : `✗ ${tr.status || 'FAILED'}`} ({tr.execution_time_ms.toFixed(1)}ms)
+                              </span>
                             </div>
                           </div>
-
-                          {tr.error_message && (
-                            <pre style={{ margin: '6px 0 0 0', color: '#DC2626', fontSize: '11px', whiteSpace: 'pre-wrap' }}>
-                              {tr.error_message}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

@@ -172,6 +172,11 @@ self.onmessage = async (event: MessageEvent<WorkerInboundMessage>) => {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       self.postMessage({
+        type: 'RUNTIME_STATE',
+        state: pyodideInstance ? 'READY' : 'ERROR',
+        detail: pyodideInstance ? undefined : errMsg,
+      });
+      self.postMessage({
         type: 'RUN_RESULT',
         requestId,
         result: {

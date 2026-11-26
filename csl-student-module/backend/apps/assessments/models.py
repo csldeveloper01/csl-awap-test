@@ -1352,6 +1352,7 @@ class AssessmentAuditLog(models.Model):
         PDF_UPLOADED = "PDF_UPLOADED", "Assessment PDF Uploaded"
         PDF_REPLACED = "PDF_REPLACED", "Assessment PDF Replaced"
         PDF_DELETED = "PDF_DELETED", "Assessment PDF Deleted"
+        CODE_SUBMISSION_REVIEWED = "CODE_SUBMISSION_REVIEWED", "Code Submission Reviewed"
         ATTEMPT_REVOKED = "ATTEMPT_REVOKED", "Attempt Revoked"
         COLLEGE_MERGED = "COLLEGE_MERGED", "College Merged"
         STUDENT_RECOVERY_USED = "STUDENT_RECOVERY_USED", "Student Self-Service Recovery Used"
@@ -1617,8 +1618,9 @@ class ProgrammingTestCase(models.Model):
 
 class CodeSubmission(models.Model):
     """
-    Tracks candidate code submissions evaluated against test cases.
-    Directly linked to AssessmentAttempt for authoritative score attribution.
+    Tracks candidate code submissions persisted during attempts.
+    Supports both legacy test-case evaluation records and the browser-first
+    submission + administrator manual review workflow.
     """
     class Verdict(models.TextChoices):
         PENDING = "PENDING", "Pending Execution"
@@ -1629,6 +1631,13 @@ class CodeSubmission(models.Model):
         TIME_LIMIT_EXCEEDED = "TIME_LIMIT_EXCEEDED", "Time Limit Exceeded"
         MEMORY_LIMIT_EXCEEDED = "MEMORY_LIMIT_EXCEEDED", "Memory Limit Exceeded"
         INTERNAL_ERROR = "INTERNAL_ERROR", "Internal Error"
+
+    class ReviewStatus(models.TextChoices):
+        PENDING_REVIEW = "PENDING_REVIEW", "Pending Review"
+        UNDER_REVIEW = "UNDER_REVIEW", "Under Review"
+        MANUALLY_ACCEPTED = "MANUALLY_ACCEPTED", "Manually Accepted"
+        MANUALLY_REJECTED = "MANUALLY_REJECTED", "Manually Rejected"
+        MANUALLY_SCORED = "MANUALLY_SCORED", "Manually Scored"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     attempt = models.ForeignKey(
@@ -1649,12 +1658,33 @@ class CodeSubmission(models.Model):
     language = models.CharField(max_length=50, help_text="e.g. python, java")
     source_code = models.TextField()
     verdict = models.CharField(max_length=30, choices=Verdict.choices, default=Verdict.PENDING, db_index=True)
+    review_status = models.CharField(
+        max_length=30,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING_REVIEW,
+        db_index=True,
+    )
     score_awarded = models.FloatField(default=0.0)
+    max_marks = models.FloatField(default=1.0)
     total_test_cases = models.PositiveIntegerField(default=0)
     passed_test_cases = models.PositiveIntegerField(default=0)
     execution_time_ms = models.FloatField(default=0.0)
     memory_used_kb = models.PositiveIntegerField(default=0)
     compile_output = models.TextField(blank=True, default="")
+    browser_execution_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Untrusted non-authoritative browser preliminary run telemetry",
+    )
+    reviewed_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_code_submissions",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

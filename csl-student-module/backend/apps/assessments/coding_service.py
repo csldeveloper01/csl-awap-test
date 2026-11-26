@@ -1,3 +1,15 @@
+"""
+LEGACY / QUARANTINED CODING EVALUATION SERVICE.
+
+In the browser-first coding architecture, student runtime execution happens in
+client-side Web Workers (Pyodide for Python, @live-codes/java-wasm TeaVM for Java),
+and `StudentCodeSubmitView` (`POST /api/assessment/code/submit/`) persists code
+submissions directly with `review_status="PENDING_REVIEW"` without calling Judge0
+or invoking `evaluate_submission()`.
+
+This module is retained only for isolated unit tests and legacy `/code/run/`
+reference compatibility and must NOT be invoked on active candidate submissions.
+"""
 import os
 import sys
 import time
