@@ -63,6 +63,7 @@ export function AssessmentExamPage() {
 
   // Active section tab for navigation filtering (dynamic section code)
   const [activeSectionTab, setActiveSectionTab] = useState<string>('');
+  const [codingPaletteOpen, setCodingPaletteOpen] = useState<boolean>(false);
   const [viewportWidth, setViewportWidth] = useState<number>(() =>
     typeof window !== 'undefined' ? window.innerWidth : 1280
   );
@@ -904,6 +905,11 @@ export function AssessmentExamPage() {
     ? effectiveSectionQuestions.findIndex((q) => q.question_order === currentQ.question_order) + 1
     : 0;
   const questionNumberInSection = currentSectionIndex > 0 ? currentSectionIndex : (currentQ?.question_order || 0);
+  const isCodingQuestion = Boolean(
+    currentQ &&
+      (currentQ.programming_details ||
+        (currentQ.section_type === 'CODING' && (!currentQ.options || currentQ.options.length === 0)))
+  );
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -950,36 +956,37 @@ export function AssessmentExamPage() {
       {/* ─── 1. TOP HEADER ─────────────────── */}
       <header
         style={{
-          height: '64px',
-          minHeight: '64px',
+          minHeight: '60px',
           backgroundColor: '#FFFFFF',
           borderBottom: '1px solid #E2E8F0',
-          padding: '0 24px',
+          padding: isCompactExamLayout ? '8px 14px' : '8px 20px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '10px',
           boxSizing: 'border-box',
           zIndex: 20,
         }}
       >
         {/* Left: CSL Typography Logo & Title */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
           <img
             src={cslTypographyLogo}
             alt="CSL Creator Space Lab"
-            style={{ height: '36px', width: 'auto', objectFit: 'contain' }}
+            style={{ height: isCompactExamLayout ? '30px' : '34px', width: 'auto', objectFit: 'contain' }}
           />
           <div
             style={{
-              height: '32px',
+              height: '28px',
               width: '1px',
               backgroundColor: '#E5E7EB',
             }}
           />
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h1
               style={{
-                fontSize: '17px',
+                fontSize: isCompactExamLayout ? '15px' : '16px',
                 fontWeight: 800,
                 color: '#0B2E6F',
                 margin: 0,
@@ -990,7 +997,7 @@ export function AssessmentExamPage() {
             </h1>
             <p
               style={{
-                fontSize: '12px',
+                fontSize: '11.5px',
                 color: '#6B7280',
                 margin: '2px 0 0 0',
                 fontWeight: 500,
@@ -1002,7 +1009,7 @@ export function AssessmentExamPage() {
         </div>
 
         {/* Center: Proctoring Status Badges (Mockup Shields) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isCompactExamLayout ? '10px' : '16px', flexWrap: 'wrap' }}>
           {/* Secure Mode */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div
@@ -1467,6 +1474,417 @@ export function AssessmentExamPage() {
             />
           )}
         </div>
+      ) : isCodingQuestion ? (
+      <div
+        data-testid="coding-exam-workbench"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          padding: isCompactExamLayout ? '8px 10px 10px' : '10px 16px 14px',
+          overflow: isCompactExamLayout ? 'auto' : 'hidden',
+          boxSizing: 'border-box',
+        }}
+      >
+        {/* Top Coding Navigation Strip (Replaces dual sidebars so coding workspace gets full width & height) */}
+        <div
+          style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '10px',
+            border: '1px solid #E2E8F0',
+            boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+            padding: '7px 12px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+            position: 'relative',
+            flexShrink: 0,
+          }}
+        >
+          {/* Left: Sections, Inline Question Pills, Progress */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
+            {sectionsList.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                {sectionsList.map((sec) => {
+                  const isActive = activeSectionTab === sec.code;
+                  const isCodingSec = sec.code.toUpperCase() === 'CODING';
+                  return (
+                    <button
+                      key={sec.code}
+                      type="button"
+                      onClick={() => {
+                        setActiveSectionTab(sec.code);
+                        const firstIdx = attempt.questions.findIndex((q) => q.section_type === sec.code);
+                        if (firstIdx !== -1 && currentQ.section_type !== sec.code) {
+                          setCurrentIndex(firstIdx);
+                        }
+                      }}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: '7px',
+                        border: isActive ? 'none' : '1px solid #CBD5E1',
+                        backgroundColor: isActive ? '#1455D9' : '#F8FAFC',
+                        color: isActive ? '#FFFFFF' : '#334155',
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                      }}
+                    >
+                      <span>{isCodingSec ? '</>' : '◎'}</span>
+                      <span>{sec.code}</span>
+                      <span style={{ opacity: 0.85, fontSize: '10.5px' }}>({sec.count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={{ width: '1px', height: '20px', backgroundColor: '#E2E8F0' }} />
+
+            {/* Inline Question Switcher Pills */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                overflowX: 'auto',
+                maxWidth: isCompactExamLayout ? '100%' : '420px',
+                padding: '1px 0',
+              }}
+            >
+              {effectiveSectionQuestions.map((q, secIdx) => {
+                const fullIndex = attempt.questions.findIndex((item) => item.question_order === q.question_order);
+                const isSelected = fullIndex === currentIndex;
+                const hasAnswer = !!answers[q.question_order];
+                const isMarked = !!markedForLater[q.question_order];
+                return (
+                  <button
+                    key={q.question_order}
+                    type="button"
+                    onClick={() => setCurrentIndex(fullIndex)}
+                    title={sectionsList.find((s) => s.code === q.section_type)?.name || `Question ${secIdx + 1}`}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '7px',
+                      fontSize: '12px',
+                      fontWeight: isSelected ? 700 : 600,
+                      border: isSelected
+                        ? '1.5px solid #1455D9'
+                        : hasAnswer
+                        ? '1px solid #86EFAC'
+                        : isMarked
+                        ? '1px solid #FDE68A'
+                        : '1px solid #E2E8F0',
+                      backgroundColor: isSelected
+                        ? '#EFF6FF'
+                        : hasAnswer
+                        ? '#ECFDF5'
+                        : isMarked
+                        ? '#FFFBEB'
+                        : '#FFFFFF',
+                      color: isSelected
+                        ? '#0B2E6F'
+                        : hasAnswer
+                        ? '#15803D'
+                        : isMarked
+                        ? '#B45309'
+                        : '#475569',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <span>Q{secIdx + 1}</span>
+                    {hasAnswer && <span style={{ fontSize: '10.5px', fontWeight: 800 }}>✓</span>}
+                    {!hasAnswer && isMarked && <span style={{ fontSize: '10px' }}>🔖</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            <span
+              style={{
+                fontSize: '11.5px',
+                color: '#64748B',
+                fontWeight: 600,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              Progress: <strong style={{ color: '#0B2E6F' }}>{sectionAnsweredCount}/{effectiveSectionQuestions.length}</strong>
+            </span>
+          </div>
+
+          {/* Right: Question Meta, Save Status, Mark, Overview Popover, Prev / Next */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
+              Question {questionNumberInSection} of {effectiveSectionQuestions.length}
+            </span>
+
+            <span
+              style={{
+                backgroundColor: '#FEF3C7',
+                color: '#B45309',
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '3px 9px',
+                borderRadius: '9999px',
+                border: '1px solid #FDE68A',
+              }}
+            >
+              1 Mark
+            </span>
+
+            {saveStatus[currentQ.question_order] === 'saving' && (
+              <span style={{ fontSize: '11px', color: '#D97706', fontWeight: 600 }}>● Saving...</span>
+            )}
+            {saveStatus[currentQ.question_order] === 'saved' && (
+              <span style={{ fontSize: '11px', color: '#16A34A', fontWeight: 700 }}>✓ Saved</span>
+            )}
+            {saveStatus[currentQ.question_order] === 'failed' && (
+              <button
+                type="button"
+                onClick={() => handleRetrySave(currentQ.question_order)}
+                style={{
+                  fontSize: '11px',
+                  color: '#DC2626',
+                  fontWeight: 600,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                ✕ Retry Save
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleToggleMarkForLater(currentQ.question_order)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: '7px',
+                border: markedForLater[currentQ.question_order]
+                  ? '1px solid #F59E0B'
+                  : '1px solid #CBD5E1',
+                backgroundColor: markedForLater[currentQ.question_order] ? '#FFFBEB' : '#FFFFFF',
+                color: markedForLater[currentQ.question_order] ? '#B45309' : '#475569',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <span>🔖</span>
+              <span>{markedForLater[currentQ.question_order] ? 'Marked' : 'Mark'}</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="coding-palette-toggle"
+              onClick={() => setCodingPaletteOpen((prev) => !prev)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: '7px',
+                border: codingPaletteOpen ? '1px solid #1455D9' : '1px solid #CBD5E1',
+                backgroundColor: codingPaletteOpen ? '#EFF6FF' : '#FFFFFF',
+                color: codingPaletteOpen ? '#1455D9' : '#334155',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              ▦ Overview
+            </button>
+
+            <div style={{ width: '1px', height: '20px', backgroundColor: '#E2E8F0' }} />
+
+            <button
+              type="button"
+              onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
+              disabled={currentIndex === 0}
+              style={{
+                padding: '5px 11px',
+                borderRadius: '7px',
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#334155',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: currentIndex === 0 ? 'not-allowed' : 'pointer',
+                opacity: currentIndex === 0 ? 0.45 : 1,
+              }}
+            >
+              ← Prev
+            </button>
+
+            {currentIndex < attempt.questions.length - 1 ? (
+              <button
+                type="button"
+                onClick={() => setCurrentIndex((prev) => prev + 1)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  backgroundColor: '#1455D9',
+                  color: '#FFFFFF',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Next →
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(true)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  backgroundColor: '#16A34A',
+                  color: '#FFFFFF',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Review &amp; Submit ✓
+              </button>
+            )}
+          </div>
+
+          {/* On-Demand Question Palette & Assessment Overview Popover */}
+          {codingPaletteOpen && (
+            <div
+              data-testid="coding-palette-popover"
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                width: '300px',
+                maxWidth: 'calc(100vw - 24px)',
+                backgroundColor: '#FFFFFF',
+                borderRadius: '12px',
+                border: '1px solid #E2E8F0',
+                boxShadow: '0 16px 36px rgba(15, 23, 42, 0.14)',
+                padding: '14px 16px',
+                zIndex: 60,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong style={{ fontSize: '13.5px', color: '#0B2E6F' }}>Question Palette</strong>
+                <button
+                  type="button"
+                  onClick={() => setCodingPaletteOpen(false)}
+                  aria-label="Close overview"
+                  style={{ background: 'none', border: 'none', fontSize: '15px', cursor: 'pointer', color: '#64748B' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(5, 1fr)',
+                  gap: '6px',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                }}
+              >
+                {effectiveSectionQuestions.map((q, secIdx) => {
+                  const fullIndex = attempt.questions.findIndex((item) => item.question_order === q.question_order);
+                  const isCurrent = fullIndex === currentIndex;
+                  const isAnswered = !!answers[q.question_order];
+                  const isMarked = !!markedForLater[q.question_order];
+                  return (
+                    <button
+                      key={q.question_order}
+                      type="button"
+                      onClick={() => {
+                        setCurrentIndex(fullIndex);
+                        setCodingPaletteOpen(false);
+                      }}
+                      style={{
+                        height: '32px',
+                        borderRadius: '7px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        fontFamily: 'monospace',
+                        border: isCurrent
+                          ? '2px solid #1455D9'
+                          : isAnswered
+                          ? '1px solid #86EFAC'
+                          : isMarked
+                          ? '1px solid #93C5FD'
+                          : '1px solid #E2E8F0',
+                        backgroundColor: isAnswered ? '#DCFCE7' : isMarked ? '#EFF6FF' : '#FFFFFF',
+                        color: isAnswered ? '#166534' : isMarked ? '#1D4ED8' : '#475569',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {secIdx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div
+                style={{
+                  borderTop: '1px solid #E2E8F0',
+                  paddingTop: '10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  fontSize: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B' }}>
+                  <span>Total Questions</span>
+                  <strong style={{ color: '#0B2E6F' }}>{attempt?.questions?.length || attempt?.total_questions || 0}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B' }}>
+                  <span>Answered Overall</span>
+                  <strong style={{ color: '#16A34A' }}>{answeredCount}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B' }}>
+                  <span>Time Remaining</span>
+                  <strong style={{ color: '#0B2E6F' }}>{timerDisplay}</strong>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Full-Width Split Coding IDE */}
+        <div style={{ flex: 1, minHeight: isCompactExamLayout ? '560px' : 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <CodingPlaygroundPane
+            attemptId={attemptId || attempt.id}
+            question={currentQ}
+            proctoringSessionId={proctoringSession?.id}
+            onAnswerSaved={() => {
+              setAnswers((prev) => ({ ...prev, [currentQ.question_order]: 'SUBMITTED' }));
+              setSaveStatus((prev) => ({ ...prev, [currentQ.question_order]: 'saved' }));
+            }}
+          />
+        </div>
+      </div>
       ) : (
       <div
         style={{
@@ -2442,7 +2860,7 @@ export function AssessmentExamPage() {
                     Answered: <strong style={{ color: '#16A34A' }}>{answeredCount}</strong>
                   </div>
                   <div>
-                    Pending: <strong style={{ color: '#D97706' }}>{50 - answeredCount}</strong>
+                    Pending: <strong style={{ color: '#D97706' }}>{Math.max(0, (attempt?.questions?.length || attempt?.total_questions || 0) - answeredCount)}</strong>
                   </div>
                   <div>
                     Bookmarked:{' '}

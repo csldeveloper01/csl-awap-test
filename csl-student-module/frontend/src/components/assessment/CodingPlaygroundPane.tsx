@@ -24,6 +24,7 @@ interface CodingPlaygroundPaneProps {
 }
 
 type ConsoleTab = 'output' | 'custom' | 'sample' | 'submission';
+type MaximizedPane = 'none' | 'problem' | 'editor';
 
 const DEFAULT_BOILERPLATES: Record<string, string> = {
   python:
@@ -65,6 +66,39 @@ function toMonacoLanguage(lang: string): string {
   return 'python';
 }
 
+function getIdeTokens(ideDark: boolean) {
+  return {
+    bgSurface: ideDark ? '#111827' : '#FFFFFF',
+    bgHeader: ideDark ? '#182234' : '#F8FAFC',
+    bgSubtle: ideDark ? '#0B1220' : '#F8FAFC',
+    bgCode: ideDark ? '#090F1A' : '#F1F5F9',
+    bgInput: ideDark ? '#1E293B' : '#FFFFFF',
+    border: ideDark ? '#2B394F' : '#E2E8F0',
+    borderStrong: ideDark ? '#3B4D6B' : '#CBD5E1',
+    textMain: ideDark ? '#F1F5F9' : '#0F172A',
+    textSecondary: ideDark ? '#CBD5E1' : '#334155',
+    textMuted: ideDark ? '#94A3B8' : '#64748B',
+    accentBlue: ideDark ? '#3B82F6' : '#1455D9',
+    accentBlueHover: ideDark ? '#2563EB' : '#0B2E6F',
+    accentBlueSoft: ideDark ? 'rgba(59, 130, 246, 0.16)' : '#EFF6FF',
+    accentBlueText: ideDark ? '#93C5FD' : '#1455D9',
+    runTeal: '#0D9488',
+    runTealHover: '#0F766E',
+    successBg: ideDark ? 'rgba(16, 185, 129, 0.14)' : '#ECFDF5',
+    successBorder: ideDark ? 'rgba(16, 185, 129, 0.4)' : '#86EFAC',
+    successText: ideDark ? '#34D399' : '#15803D',
+    dangerBg: ideDark ? 'rgba(239, 68, 68, 0.14)' : '#FEF2F2',
+    dangerBorder: ideDark ? 'rgba(239, 68, 68, 0.4)' : '#FCA5A5',
+    dangerText: ideDark ? '#FCA5A5' : '#B91C1C',
+    warnBg: ideDark ? 'rgba(245, 158, 11, 0.14)' : '#FFFBEB',
+    warnBorder: ideDark ? 'rgba(245, 158, 11, 0.4)' : '#FDE68A',
+    warnText: ideDark ? '#FCD34D' : '#92400E',
+    shadow: ideDark
+      ? '0 2px 10px rgba(0, 0, 0, 0.35)'
+      : '0 1px 3px rgba(15, 23, 42, 0.06)',
+  };
+}
+
 export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   attemptId,
   question,
@@ -77,7 +111,6 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
       ? question.question_id
       : null;
 
-  // Compute supported languages cleanly: normalize python3 -> python; prioritize Python 3 & Java
   const rawAllowed =
     details?.allowed_languages && details.allowed_languages.length > 0
       ? details.allowed_languages
@@ -112,12 +145,18 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     [draftKey]
   );
 
-  const [ideDark, setIdeDark] = useState<boolean>(true);
+  // Cohesive Light Stitch IDE default with 1-click Dark IDE toggle
+  const [ideDark, setIdeDark] = useState<boolean>(false);
   const [activeConsoleTab, setActiveConsoleTab] = useState<ConsoleTab>('sample');
+  const [selectedSampleIdx, setSelectedSampleIdx] = useState<number>(0);
   const [customInput, setCustomInput] = useState<string>('');
   const [consoleOpen, setConsoleOpen] = useState<boolean>(true);
-  const [consoleHeight, setConsoleHeight] = useState<number>(220);
-  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(false);
+  const [consoleHeight, setConsoleHeight] = useState<number>(215);
+  const [splitPercent, setSplitPercent] = useState<number>(40);
+  const [maximizedPane, setMaximizedPane] = useState<MaximizedPane>('none');
+  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 980 : false
+  );
 
   const [runtimeState, setRuntimeState] = useState<BrowserRuntimeState>('IDLE');
   const [runtimeDetail, setRuntimeDetail] = useState<string>('');
@@ -135,14 +174,21 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   const rootRef = useRef<HTMLDivElement>(null);
   const rightPaneRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<{ layout: () => void } | null>(null);
+  const runShortcutRef = useRef<() => void>(() => {});
+  const submitShortcutRef = useRef<() => void>(() => {});
 
   // Track responsive layout cleanly without nested scrollbars
   useEffect(() => {
     const el = rootRef.current;
+    const syncCompact = (w?: number) => {
+      const containerW = w ?? el?.getBoundingClientRect().width ?? window.innerWidth;
+      setIsCompactViewport(window.innerWidth < 980 || Math.round(containerW) < 960);
+    };
+    syncCompact();
     if (!el || typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setIsCompactViewport(entry.contentRect.width < 920);
+        syncCompact(entry.contentRect.width);
         editorRef.current?.layout();
       }
     });
@@ -150,18 +196,19 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     return () => obs.disconnect();
   }, []);
 
-  // Trigger Monaco relayout whenever console height or collapse state changes
+  // Trigger Monaco relayout whenever split, maximize, console height, or collapse state changes
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
       editorRef.current?.layout();
     });
     return () => window.cancelAnimationFrame(id);
-  }, [consoleHeight, consoleOpen, isCompactViewport]);
+  }, [consoleHeight, consoleOpen, splitPercent, maximizedPane, isCompactViewport]);
 
-  // Reset language/results cleanly on question switch & warm up Pyodide
+  // Reset per-question execution results & selected sample on question switch
   useEffect(() => {
     const firstLang = selectableLanguages[0] || 'python';
     setLanguage(firstLang);
+    setSelectedSampleIdx(0);
     setCustomRunResult(null);
     setSampleSuiteResult(null);
     setLastRunKind(null);
@@ -210,6 +257,21 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
       }
     });
 
+    // Keyboard shortcuts: Ctrl/Cmd + Enter => Run, Ctrl/Cmd + Shift + Enter => Submit
+    try {
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+        runShortcutRef.current();
+      });
+      editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter,
+        () => {
+          submitShortcutRef.current();
+        }
+      );
+    } catch {
+      // ignore shortcut registration errors
+    }
+
     const domNode = editor.getDomNode();
     if (domNode) {
       domNode.addEventListener(
@@ -243,11 +305,33 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     }
   };
 
-  const handleStartResize = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleStartSplitResize = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const container = rootRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    const onMouseMove = (moveEvt: MouseEvent) => {
+      const rawPct = ((moveEvt.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.min(62, Math.max(26, rawPct));
+      setSplitPercent(clamped);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      editorRef.current?.layout();
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleStartConsoleResize = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     const startY = e.clientY;
     const startHeight = consoleHeight;
-    const maxHeight = Math.max(260, (rightPaneRef.current?.clientHeight || 560) - 170);
+    const maxHeight = Math.max(280, (rightPaneRef.current?.clientHeight || 600) - 180);
 
     const onMouseMove = (moveEvt: MouseEvent) => {
       const delta = startY - moveEvt.clientY;
@@ -366,920 +450,1397 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     }
   };
 
+  runShortcutRef.current = () => {
+    if (!isRunning && !isSubmitting) {
+      handleRun(activeConsoleTab === 'custom');
+    }
+  };
+  submitShortcutRef.current = () => {
+    if (!isRunning && !isSubmitting) {
+      handleSubmit();
+    }
+  };
+
+  const handleTrySampleInCustomInput = (stdinText: string) => {
+    setCustomInput(stdinText || '');
+    setConsoleOpen(true);
+    setActiveConsoleTab('custom');
+  };
+
   const isPythonSelected = normalizeCanonicalLanguage(language) === 'python';
   const isJavaSelected = normalizeCanonicalLanguage(language) === 'java';
+  const t = getIdeTokens(ideDark);
+  const sampleCases = details?.sample_test_cases || [];
+  const activeSampleIdx = Math.min(selectedSampleIdx, Math.max(0, sampleCases.length - 1));
 
-  const paneBg = ideDark ? '#0F172A' : '#FFFFFF';
-  const paneCard = ideDark ? '#111827' : '#FFFFFF';
-  const paneHeaderBg = ideDark ? '#1E293B' : '#F8FAFC';
-  const paneBorder = ideDark ? '#334155' : '#E2E8F0';
-  const textMain = ideDark ? '#F1F5F9' : '#0F172A';
-  const textSub = ideDark ? '#94A3B8' : '#475569';
-  const codeBlockBg = ideDark ? '#0B1120' : '#F8FAFC';
+  const showProblemPane = maximizedPane !== 'editor';
+  const showEditorPane = maximizedPane !== 'problem';
 
   return (
     <div
       ref={rootRef}
       data-testid="coding-workspace"
       style={{
-        display: 'grid',
-        gridTemplateColumns: isCompactViewport ? '1fr' : 'minmax(320px, 41%) minmax(0, 59%)',
-        gridTemplateRows: isCompactViewport ? 'minmax(220px, 42%) minmax(340px, 58%)' : '1fr',
+        display: 'flex',
+        flexDirection: isCompactViewport ? 'column' : 'row',
         flex: 1,
         minHeight: 0,
         height: '100%',
-        gap: '12px',
+        gap: isCompactViewport ? '10px' : '0px',
         boxSizing: 'border-box',
         fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       }}
     >
-      {/* ─── LEFT PANE: INDEPENDENTLY SCROLLABLE PROBLEM STATEMENT ─── */}
-      <div
-        data-testid="coding-problem-pane"
-        style={{
-          backgroundColor: paneCard,
-          borderRadius: '12px',
-          border: `1px solid ${paneBorder}`,
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          overflow: 'hidden',
-        }}
-      >
-        <div
+      {/* ─── LEFT PANE: EDITORIAL PROBLEM STATEMENT ─── */}
+      {showProblemPane && (
+        <section
+          data-testid="coding-problem-pane"
           style={{
-            padding: '12px 16px',
-            borderBottom: `1px solid ${paneBorder}`,
-            backgroundColor: paneHeaderBg,
+            width: isCompactViewport
+              ? '100%'
+              : maximizedPane === 'problem'
+              ? '100%'
+              : `${splitPercent}%`,
+            minWidth: isCompactViewport ? 0 : maximizedPane === 'problem' ? 0 : '300px',
+            height: isCompactViewport ? '42%' : '100%',
+            minHeight: isCompactViewport ? '220px' : 0,
+            backgroundColor: t.bgSurface,
+            borderRadius: '12px',
+            border: `1px solid ${t.border}`,
+            boxShadow: t.shadow,
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: '8px',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
           }}
         >
-          <div>
-            <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: textMain }}>
-              {question.prompt}
-            </h2>
-            <span style={{ fontSize: '11.5px', color: textSub }}>
-              Time limit: {details?.time_limit_seconds || 2.0}s • Memory: {details?.memory_limit_mb || 256}MB
-            </span>
-          </div>
-          <span
+          {/* Problem Header */}
+          <div
             style={{
-              fontSize: '11px',
-              fontWeight: 700,
-              padding: '3px 9px',
-              borderRadius: '9999px',
-              backgroundColor: ideDark ? 'rgba(59, 130, 246, 0.2)' : '#EFF6FF',
-              color: ideDark ? '#93C5FD' : '#1455B8',
+              padding: '12px 18px',
+              borderBottom: `1px solid ${t.border}`,
+              backgroundColor: t.bgHeader,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: '12px',
             }}
           >
-            {selectableLanguages.map(formatLanguageLabel).join(' / ')}
-          </span>
-        </div>
-
-        <div
-          style={{
-            padding: '16px',
-            overflowY: 'auto',
-            flex: 1,
-            minHeight: 0,
-            fontSize: '13.5px',
-            lineHeight: 1.65,
-            color: textMain,
-          }}
-        >
-          <div style={{ whiteSpace: 'pre-wrap', marginBottom: '16px', userSelect: 'none' }}>
-            {details?.problem_statement || question.prompt}
-          </div>
-
-          {details?.constraints && (
-            <div style={{ marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '12.5px', fontWeight: 800, color: textMain, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Constraints
-              </h3>
-              <pre
-                style={{
-                  backgroundColor: codeBlockBg,
-                  color: textMain,
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  margin: 0,
-                  border: `1px solid ${paneBorder}`,
-                  whiteSpace: 'pre-wrap',
-                  fontFamily: "'JetBrains Mono', Consolas, monospace",
-                }}
-              >
-                {details.constraints}
-              </pre>
-            </div>
-          )}
-
-          {details?.input_format && (
-            <div style={{ marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '12.5px', fontWeight: 800, color: textMain, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Input Format
-              </h3>
-              <div
-                style={{
-                  backgroundColor: codeBlockBg,
-                  color: textMain,
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  fontSize: '12.5px',
-                  border: `1px solid ${paneBorder}`,
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {details.input_format}
-              </div>
-            </div>
-          )}
-
-          {details?.output_format && (
-            <div style={{ marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '12.5px', fontWeight: 800, color: textMain, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Output Format
-              </h3>
-              <div
-                style={{
-                  backgroundColor: codeBlockBg,
-                  color: textMain,
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  fontSize: '12.5px',
-                  border: `1px solid ${paneBorder}`,
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {details.output_format}
-              </div>
-            </div>
-          )}
-
-          {details?.sample_test_cases && details.sample_test_cases.length > 0 && (
-            <div>
-              <h3 style={{ fontSize: '12.5px', fontWeight: 800, color: textMain, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Public Sample Test Cases
-              </h3>
-              {details.sample_test_cases.map((sample, idx) => (
-                <div
-                  key={sample.id || idx}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h2
                   style={{
-                    marginBottom: '12px',
-                    border: `1px solid ${paneBorder}`,
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    backgroundColor: codeBlockBg,
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: t.textMain,
+                    lineHeight: 1.3,
+                    letterSpacing: '-0.01em',
                   }}
                 >
-                  <div
-                    style={{
-                      backgroundColor: paneHeaderBg,
-                      padding: '6px 10px',
-                      fontSize: '11.5px',
-                      fontWeight: 700,
-                      color: textSub,
-                      borderBottom: `1px solid ${paneBorder}`,
-                    }}
-                  >
-                    Sample Case {idx + 1}
-                  </div>
-                  <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div>
-                      <div style={{ fontSize: '11px', fontWeight: 700, color: textSub, marginBottom: '2px' }}>Input:</div>
-                      <pre
-                        style={{
-                          backgroundColor: paneBg,
-                          color: textMain,
-                          padding: '6px 8px',
-                          borderRadius: '6px',
-                          margin: 0,
-                          fontSize: '11.5px',
-                          fontFamily: "'JetBrains Mono', Consolas, monospace",
-                          whiteSpace: 'pre-wrap',
-                          border: `1px solid ${paneBorder}`,
-                        }}
-                      >
-                        {sample.input_text || '(empty)'}
-                      </pre>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '11px', fontWeight: 700, color: textSub, marginBottom: '2px' }}>Expected Output:</div>
-                      <pre
-                        style={{
-                          backgroundColor: paneBg,
-                          color: textMain,
-                          padding: '6px 8px',
-                          borderRadius: '6px',
-                          margin: 0,
-                          fontSize: '11.5px',
-                          fontFamily: "'JetBrains Mono', Consolas, monospace",
-                          whiteSpace: 'pre-wrap',
-                          border: `1px solid ${paneBorder}`,
-                        }}
-                      >
-                        {sample.expected_output}
-                      </pre>
-                    </div>
-                    {sample.explanation && (
-                      <p style={{ margin: '2px 0 0 0', fontSize: '11.5px', color: textSub, fontStyle: 'italic' }}>
-                        Explanation: {sample.explanation}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ─── RIGHT PANE: MONACO EDITOR + RESIZABLE CONSOLE ─── */}
-      <div
-        ref={rightPaneRef}
-        data-testid="coding-editor-pane"
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          backgroundColor: ideDark ? '#111827' : '#FFFFFF',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          border: `1px solid ${paneBorder}`,
-        }}
-      >
-        {/* Editor Toolbar */}
-        <div
-          style={{
-            padding: '8px 14px',
-            backgroundColor: ideDark ? '#1E293B' : '#F8FAFC',
-            borderBottom: `1px solid ${paneBorder}`,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: '8px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <select
-              data-testid="coding-language-select"
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              style={{
-                backgroundColor: ideDark ? '#0F172A' : '#FFFFFF',
-                color: textMain,
-                border: `1px solid ${paneBorder}`,
-                borderRadius: '7px',
-                padding: '5px 10px',
-                fontSize: '12.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              {selectableLanguages.map((l) => (
-                <option key={l} value={l}>
-                  {formatLanguageLabel(l)}
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={handleResetBoilerplate}
-              style={{
-                backgroundColor: 'transparent',
-                border: `1px solid ${paneBorder}`,
-                color: textSub,
-                borderRadius: '7px',
-                padding: '4px 10px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              ↺ Reset
-            </button>
-
-            <button
-              type="button"
-              data-testid="coding-theme-toggle"
-              onClick={() => setIdeDark((v) => !v)}
-              style={{
-                backgroundColor: 'transparent',
-                border: `1px solid ${paneBorder}`,
-                color: textSub,
-                borderRadius: '7px',
-                padding: '4px 9px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {ideDark ? '☀️ Light' : '🌙 Dark'}
-            </button>
-
-            {isPythonSelected && (
-              <span
-                data-testid="python-runtime-status"
+                  {question.prompt}
+                </h2>
+              </div>
+              <div
                 style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  padding: '3px 8px',
-                  borderRadius: '9999px',
-                  backgroundColor:
-                    runtimeState === 'ERROR'
-                      ? 'rgba(239, 68, 68, 0.16)'
-                      : runtimeState === 'READY'
-                      ? 'rgba(16, 185, 129, 0.16)'
-                      : 'rgba(59, 130, 246, 0.16)',
-                  color:
-                    runtimeState === 'ERROR'
-                      ? '#F87171'
-                      : runtimeState === 'READY'
-                      ? '#34D399'
-                      : '#60A5FA',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginTop: '6px',
+                  flexWrap: 'wrap',
+                  fontSize: '11.5px',
+                  color: t.textMuted,
+                  fontWeight: 500,
                 }}
               >
-                {runtimeState === 'LOADING_RUNTIME'
-                  ? '⏳ Loading Python 3...'
-                  : runtimeState === 'READY'
-                  ? '● Python 3 Browser Ready'
-                  : runtimeState === 'EXECUTING'
-                  ? '⚡ Running in Worker...'
-                  : runtimeState === 'ERROR'
-                  ? '⚠ Pyodide Load Error'
-                  : 'Python 3 Worker'}
-              </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span>⏱</span> Time Limit: <strong style={{ color: t.textSecondary }}>{details?.time_limit_seconds || 2.0}s</strong>
+                </span>
+                <span style={{ color: t.borderStrong }}>•</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span>💾</span> Memory: <strong style={{ color: t.textSecondary }}>{details?.memory_limit_mb || 256} MB</strong>
+                </span>
+                <span style={{ color: t.borderStrong }}>•</span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '1px 8px',
+                    borderRadius: '9999px',
+                    backgroundColor: t.accentBlueSoft,
+                    color: t.accentBlueText,
+                  }}
+                >
+                  {selectableLanguages.map(formatLanguageLabel).join(' / ')}
+                </span>
+              </div>
+            </div>
+
+            {!isCompactViewport && (
+              <button
+                type="button"
+                onClick={() => setMaximizedPane((p) => (p === 'problem' ? 'none' : 'problem'))}
+                title={maximizedPane === 'problem' ? 'Restore split view' : 'Expand problem view'}
+                aria-label={maximizedPane === 'problem' ? 'Restore split view' : 'Expand problem view'}
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '6px',
+                  border: `1px solid ${t.border}`,
+                  backgroundColor: t.bgSurface,
+                  color: t.textMuted,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  fontSize: '13px',
+                }}
+              >
+                {maximizedPane === 'problem' ? '↙' : '⛶'}
+              </button>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            {isRunning && (
-              <button
-                type="button"
-                data-testid="coding-cancel-btn"
-                onClick={handleCancelRun}
+          {/* Scrollable Editorial Body */}
+          <div
+            style={{
+              padding: '18px 20px',
+              overflowY: 'auto',
+              flex: 1,
+              minHeight: 0,
+              fontSize: '13.5px',
+              lineHeight: 1.7,
+              color: t.textMain,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px',
+            }}
+          >
+            {/* Statement */}
+            <div style={{ whiteSpace: 'pre-wrap', userSelect: 'none', color: t.textMain }}>
+              {details?.problem_statement || question.prompt}
+            </div>
+
+            {/* Input & Output Formats with clean editorial left rail */}
+            {(details?.input_format || details?.output_format) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {details?.input_format && (
+                  <div
+                    style={{
+                      paddingLeft: '12px',
+                      borderLeft: `3px solid ${t.accentBlue}`,
+                    }}
+                  >
+                    <h3
+                      style={{
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        color: t.textMuted,
+                        margin: '0 0 4px 0',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      Input Format
+                    </h3>
+                    <div
+                      style={{
+                        fontSize: '13px',
+                        color: t.textSecondary,
+                        whiteSpace: 'pre-wrap',
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      {details.input_format}
+                    </div>
+                  </div>
+                )}
+
+                {details?.output_format && (
+                  <div
+                    style={{
+                      paddingLeft: '12px',
+                      borderLeft: `3px solid ${t.runTeal}`,
+                    }}
+                  >
+                    <h3
+                      style={{
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        color: t.textMuted,
+                        margin: '0 0 4px 0',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      Output Format
+                    </h3>
+                    <div
+                      style={{
+                        fontSize: '13px',
+                        color: t.textSecondary,
+                        whiteSpace: 'pre-wrap',
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      {details.output_format}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Constraints */}
+            {details?.constraints && (
+              <div>
+                <h3
+                  style={{
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    color: t.textMuted,
+                    margin: '0 0 6px 0',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  Constraints
+                </h3>
+                <pre
+                  style={{
+                    backgroundColor: t.bgCode,
+                    color: t.textMain,
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    margin: 0,
+                    border: `1px solid ${t.border}`,
+                    whiteSpace: 'pre-wrap',
+                    fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
+                    lineHeight: 1.55,
+                  }}
+                >
+                  {details.constraints}
+                </pre>
+              </div>
+            )}
+
+            {/* Sample Examples */}
+            {sampleCases.length > 0 && (
+              <div>
+                <h3
+                  style={{
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    color: t.textMuted,
+                    margin: '0 0 10px 0',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  Sample Test Cases ({sampleCases.length})
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {sampleCases.map((sample, idx) => (
+                    <div
+                      key={sample.id || idx}
+                      style={{
+                        border: `1px solid ${t.border}`,
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        backgroundColor: t.bgSubtle,
+                      }}
+                    >
+                      <div
+                        style={{
+                          backgroundColor: t.bgHeader,
+                          padding: '7px 12px',
+                          borderBottom: `1px solid ${t.border}`,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: t.textMain }}>
+                          Example {idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleTrySampleInCustomInput(sample.input_text || '')}
+                          style={{
+                            border: `1px solid ${t.border}`,
+                            backgroundColor: t.bgSurface,
+                            color: t.accentBlueText,
+                            borderRadius: '6px',
+                            padding: '2px 8px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Use as Custom Input ↗
+                        </button>
+                      </div>
+
+                      <div
+                        style={{
+                          padding: '12px',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                          gap: '10px',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: t.textMuted, marginBottom: '4px' }}>
+                            Input
+                          </div>
+                          <pre
+                            style={{
+                              backgroundColor: t.bgSurface,
+                              color: t.textMain,
+                              padding: '8px 10px',
+                              borderRadius: '7px',
+                              margin: 0,
+                              fontSize: '12px',
+                              fontFamily: "'JetBrains Mono', Consolas, monospace",
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              border: `1px solid ${t.border}`,
+                            }}
+                          >
+                            {sample.input_text || '(No input)'}
+                          </pre>
+                        </div>
+
+                        <div>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: t.textMuted, marginBottom: '4px' }}>
+                            Expected Output
+                          </div>
+                          <pre
+                            style={{
+                              backgroundColor: t.bgSurface,
+                              color: t.textMain,
+                              padding: '8px 10px',
+                              borderRadius: '7px',
+                              margin: 0,
+                              fontSize: '12px',
+                              fontFamily: "'JetBrains Mono', Consolas, monospace",
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              border: `1px solid ${t.border}`,
+                            }}
+                          >
+                            {sample.expected_output}
+                          </pre>
+                        </div>
+                      </div>
+
+                      {sample.explanation && (
+                        <div
+                          style={{
+                            padding: '8px 12px',
+                            borderTop: `1px solid ${t.border}`,
+                            fontSize: '12px',
+                            color: t.textMuted,
+                            backgroundColor: t.bgSurface,
+                          }}
+                        >
+                          <strong style={{ color: t.textSecondary }}>Explanation:</strong> {sample.explanation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* ─── HORIZONTAL SPLIT RESIZER HANDLE ─── */}
+      {!isCompactViewport && maximizedPane === 'none' && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize problem and editor panes"
+          data-testid="coding-split-resizer"
+          onMouseDown={handleStartSplitResize}
+          title="Drag to resize problem & editor split"
+          style={{
+            width: '10px',
+            flexShrink: 0,
+            cursor: 'col-resize',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            style={{
+              width: '3px',
+              height: '44px',
+              borderRadius: '9999px',
+              backgroundColor: t.borderStrong,
+            }}
+          />
+        </div>
+      )}
+
+      {/* ─── RIGHT PANE: MONACO CODE EDITOR + TABBED RUN CONSOLE ─── */}
+      {showEditorPane && (
+        <section
+          ref={rightPaneRef}
+          data-testid="coding-editor-pane"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: isCompactViewport ? '58%' : '100%',
+            minHeight: isCompactViewport ? '340px' : 0,
+            display: 'flex',
+            flexDirection: 'column',
+            backgroundColor: t.bgSurface,
+            borderRadius: '12px',
+            overflow: 'hidden',
+            border: `1px solid ${t.border}`,
+            boxShadow: t.shadow,
+            boxSizing: 'border-box',
+          }}
+        >
+          {/* Sleek Single-Row IDE Toolbar */}
+          <div
+            style={{
+              padding: '8px 14px',
+              backgroundColor: t.bgHeader,
+              borderBottom: `1px solid ${t.border}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '8px',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <select
+                data-testid="coding-language-select"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
                 style={{
-                  backgroundColor: '#DC2626',
-                  color: '#FFFFFF',
-                  border: 'none',
+                  backgroundColor: t.bgInput,
+                  color: t.textMain,
+                  border: `1px solid ${t.borderStrong}`,
                   borderRadius: '7px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
+                  padding: '5px 10px',
+                  fontSize: '12.5px',
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
               >
-                ■ Stop
+                {selectableLanguages.map((l) => (
+                  <option key={l} value={l}>
+                    {formatLanguageLabel(l)}
+                  </option>
+                ))}
+              </select>
+
+              {isPythonSelected && (
+                <span
+                  data-testid="python-runtime-status"
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '4px 9px',
+                    borderRadius: '9999px',
+                    border: `1px solid ${
+                      runtimeState === 'ERROR'
+                        ? t.dangerBorder
+                        : runtimeState === 'READY'
+                        ? t.successBorder
+                        : t.border
+                    }`,
+                    backgroundColor:
+                      runtimeState === 'ERROR'
+                        ? t.dangerBg
+                        : runtimeState === 'READY'
+                        ? t.successBg
+                        : t.accentBlueSoft,
+                    color:
+                      runtimeState === 'ERROR'
+                        ? t.dangerText
+                        : runtimeState === 'READY'
+                        ? t.successText
+                        : t.accentBlueText,
+                  }}
+                >
+                  {runtimeState === 'LOADING_RUNTIME'
+                    ? '⏳ Loading Python 3...'
+                    : runtimeState === 'READY'
+                    ? '● Python 3 Ready'
+                    : runtimeState === 'EXECUTING'
+                    ? '⚡ Running...'
+                    : runtimeState === 'ERROR'
+                    ? '⚠ Runtime Error'
+                    : '● Python 3 Worker'}
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={handleResetBoilerplate}
+                title="Reset code to initial template"
+                style={{
+                  backgroundColor: t.bgSurface,
+                  border: `1px solid ${t.border}`,
+                  color: t.textSecondary,
+                  borderRadius: '7px',
+                  padding: '5px 10px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ↺ Reset
               </button>
-            )}
 
-            <button
-              type="button"
-              data-testid="coding-run-btn"
-              onClick={() => handleRun(activeConsoleTab === 'custom')}
-              disabled={isRunning || isSubmitting}
-              title={
-                isJavaSelected
-                  ? 'Browser Java execution is disabled pending compatibility verification; click to see details or use Submit Solution.'
-                  : activeConsoleTab === 'custom'
-                  ? 'Run Python 3 in browser against Custom Input'
-                  : 'Run Python 3 in browser against Public Sample Tests'
-              }
-              style={{
-                backgroundColor: isRunning ? '#475569' : '#0D9488',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: '7px',
-                padding: '6px 14px',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: isRunning ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-              }}
-            >
-              {isRunning
-                ? 'Running...'
-                : activeConsoleTab === 'custom'
-                ? '▶ Run Custom Input'
-                : '▶ Run Code'}
-            </button>
+              <button
+                type="button"
+                data-testid="coding-theme-toggle"
+                onClick={() => setIdeDark((v) => !v)}
+                title={ideDark ? 'Switch IDE to Light Theme' : 'Switch IDE to Dark Theme'}
+                style={{
+                  backgroundColor: t.bgSurface,
+                  border: `1px solid ${t.border}`,
+                  color: t.textSecondary,
+                  borderRadius: '7px',
+                  padding: '5px 10px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {ideDark ? '☀ Light IDE' : '☾ Dark IDE'}
+              </button>
 
-            <button
-              type="button"
-              data-testid="coding-submit-btn"
-              onClick={handleSubmit}
-              disabled={isRunning || isSubmitting}
-              style={{
-                backgroundColor: isSubmitting ? '#475569' : '#1455B8',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: '7px',
-                padding: '6px 16px',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: isSubmitting ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {isSubmitting ? 'Grading...' : '✓ Submit Solution'}
-            </button>
-          </div>
-        </div>
-
-        {/* Monaco Editor Region */}
-        <div style={{ flex: 1, minHeight: '160px', position: 'relative' }}>
-          <Editor
-            height="100%"
-            onMount={handleEditorDidMount}
-            language={toMonacoLanguage(language)}
-            value={sourceCode}
-            onChange={(val) => setSourceCode(val || '')}
-            theme={ideDark ? 'vs-dark' : 'light'}
-            options={{
-              minimap: { enabled: false },
-              fontSize: 13.5,
-              fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              tabSize: 4,
-              formatOnType: true,
-              lineNumbers: 'on',
-              wordWrap: 'on',
-            }}
-          />
-        </div>
-
-        {/* Resizable Drag Splitter */}
-        {consoleOpen && (
-          <div
-            data-testid="coding-console-resizer"
-            onMouseDown={handleStartResize}
-            title="Drag to resize execution console"
-            style={{
-              height: '6px',
-              cursor: 'row-resize',
-              backgroundColor: ideDark ? '#1E293B' : '#E2E8F0',
-              borderTop: `1px solid ${paneBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <div style={{ width: '36px', height: '2px', borderRadius: '9999px', backgroundColor: ideDark ? '#475569' : '#94A3B8' }} />
-          </div>
-        )}
-
-        {/* Resizable & Collapsible Console */}
-        <div
-          data-testid="coding-execution-console"
-          style={{
-            height: consoleOpen ? `${consoleHeight}px` : '38px',
-            minHeight: consoleOpen ? '130px' : '38px',
-            backgroundColor: ideDark ? '#0B1120' : '#F8FAFC',
-            borderTop: `1px solid ${paneBorder}`,
-            display: 'flex',
-            flexDirection: 'column',
-            transition: 'height 0.12s ease',
-          }}
-        >
-          {/* Console Tab Header Row */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              borderBottom: consoleOpen ? `1px solid ${paneBorder}` : 'none',
-              backgroundColor: ideDark ? '#1E293B' : '#F1F5F9',
-              paddingRight: '10px',
-            }}
-          >
-            <div style={{ display: 'flex', overflowX: 'auto' }}>
-              {(
-                [
-                  { id: 'output', label: 'Output' },
-                  { id: 'custom', label: 'Custom Input' },
-                  {
-                    id: 'sample',
-                    label: sampleSuiteResult
-                      ? `Sample Tests (${sampleSuiteResult.passedCount}/${sampleSuiteResult.totalCount})`
-                      : `Sample Tests (${details?.sample_test_cases?.length || 0})`,
-                  },
-                  {
-                    id: 'submission',
-                    label: submitResult
-                      ? `Submission Results (${submitResult.verdict})`
-                      : 'Submission Results',
-                  },
-                ] as const
-              ).map((tab) => {
-                const active = activeConsoleTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    data-testid={`console-tab-${tab.id}`}
-                    onClick={() => {
-                      setActiveConsoleTab(tab.id);
-                      setConsoleOpen(true);
-                    }}
-                    style={{
-                      padding: '8px 13px',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      color: active ? (ideDark ? '#38BDF8' : '#1455B8') : textSub,
-                      backgroundColor: active ? (ideDark ? '#0B1120' : '#FFFFFF') : 'transparent',
-                      border: 'none',
-                      borderTop: active
-                        ? `2px solid ${ideDark ? '#38BDF8' : '#1455B8'}`
-                        : '2px solid transparent',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {tab.label}
-                  </button>
-                );
-              })}
+              {!isCompactViewport && (
+                <button
+                  type="button"
+                  onClick={() => setMaximizedPane((p) => (p === 'editor' ? 'none' : 'editor'))}
+                  title={maximizedPane === 'editor' ? 'Restore split view' : 'Maximize editor'}
+                  aria-label={maximizedPane === 'editor' ? 'Restore split view' : 'Maximize editor'}
+                  style={{
+                    backgroundColor: t.bgSurface,
+                    border: `1px solid ${t.border}`,
+                    color: t.textMuted,
+                    borderRadius: '7px',
+                    padding: '5px 8px',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {maximizedPane === 'editor' ? '↙ Split' : '⛶ Focus'}
+                </button>
+              )}
             </div>
 
-            <button
-              type="button"
-              data-testid="toggle-console-btn"
-              onClick={() => setConsoleOpen((o) => !o)}
-              style={{
-                background: 'none',
-                border: `1px solid ${paneBorder}`,
-                color: textSub,
-                borderRadius: '5px',
-                padding: '2px 8px',
-                fontSize: '11px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              {consoleOpen ? '▾ Collapse' : '▴ Expand'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {isRunning && (
+                <button
+                  type="button"
+                  data-testid="coding-cancel-btn"
+                  onClick={handleCancelRun}
+                  style={{
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '7px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ■ Stop
+                </button>
+              )}
+
+              <button
+                type="button"
+                data-testid="coding-run-btn"
+                onClick={() => handleRun(activeConsoleTab === 'custom')}
+                disabled={isRunning || isSubmitting}
+                title={
+                  isJavaSelected
+                    ? 'Browser Java execution is disabled; click to inspect notice or use Submit Solution.'
+                    : activeConsoleTab === 'custom'
+                    ? 'Run with Custom Input (Ctrl+Enter)'
+                    : 'Run Sample Tests (Ctrl+Enter)'
+                }
+                style={{
+                  backgroundColor: isRunning ? '#64748B' : t.runTeal,
+                  color: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: '7px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: isRunning ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                }}
+              >
+                {isRunning
+                  ? 'Running...'
+                  : activeConsoleTab === 'custom'
+                  ? '▶ Run Custom'
+                  : '▶ Run Code'}
+              </button>
+
+              <button
+                type="button"
+                data-testid="coding-submit-btn"
+                onClick={handleSubmit}
+                disabled={isRunning || isSubmitting}
+                title="Submit Solution for Grading (Ctrl+Shift+Enter)"
+                style={{
+                  backgroundColor: isSubmitting ? '#64748B' : t.accentBlue,
+                  color: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: '7px',
+                  padding: '6px 16px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                  boxShadow: isSubmitting ? 'none' : '0 2px 6px rgba(20, 85, 217, 0.25)',
+                }}
+              >
+                {isSubmitting ? 'Grading...' : '✓ Submit Solution'}
+              </button>
+            </div>
           </div>
 
-          {/* Console Tab Body */}
+          {/* Generous Monaco Editor Surface */}
+          <div style={{ flex: 1, minHeight: '200px', position: 'relative' }}>
+            <Editor
+              height="100%"
+              onMount={handleEditorDidMount}
+              language={toMonacoLanguage(language)}
+              value={sourceCode}
+              onChange={(val) => setSourceCode(val || '')}
+              theme={ideDark ? 'vs-dark' : 'light'}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13.5,
+                lineHeight: 21,
+                fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
+                padding: { top: 12, bottom: 12 },
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                tabSize: 4,
+                formatOnType: true,
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                renderLineHighlight: 'all',
+                bracketPairColorization: { enabled: true },
+                smoothScrolling: true,
+              }}
+            />
+          </div>
+
+          {/* Vertical Drag Splitter for Console */}
           {consoleOpen && (
             <div
+              data-testid="coding-console-resizer"
+              onMouseDown={handleStartConsoleResize}
+              title="Drag to resize test console"
               style={{
-                flex: 1,
-                minHeight: 0,
-                padding: '12px 14px',
-                overflowY: 'auto',
-                color: textMain,
-                fontSize: '12px',
-                fontFamily: "'JetBrains Mono', Consolas, monospace",
+                height: '6px',
+                cursor: 'row-resize',
+                backgroundColor: t.bgHeader,
+                borderTop: `1px solid ${t.border}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              {activeConsoleTab === 'custom' && (
-                <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '11px', color: textSub }}>
-                      Standard Input (stdin) for browser execution:
-                    </span>
+              <div
+                style={{
+                  width: '40px',
+                  height: '2px',
+                  borderRadius: '9999px',
+                  backgroundColor: t.borderStrong,
+                }}
+              />
+            </div>
+          )}
+
+          {/* Resizable & Collapsible Test / Execution Console */}
+          <div
+            data-testid="coding-execution-console"
+            style={{
+              height: consoleOpen ? `${consoleHeight}px` : '38px',
+              minHeight: consoleOpen ? '130px' : '38px',
+              backgroundColor: t.bgSubtle,
+              borderTop: `1px solid ${t.border}`,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {/* Console Tabs Header */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                borderBottom: consoleOpen ? `1px solid ${t.border}` : 'none',
+                backgroundColor: t.bgHeader,
+                paddingRight: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', overflowX: 'auto' }}>
+                {(
+                  [
+                    {
+                      id: 'sample',
+                      label: sampleSuiteResult
+                        ? `Sample Tests (${sampleSuiteResult.passedCount}/${sampleSuiteResult.totalCount})`
+                        : `Sample Tests (${sampleCases.length})`,
+                      statusColor: sampleSuiteResult
+                        ? sampleSuiteResult.overallStatus === 'ACCEPTED'
+                          ? t.successText
+                          : t.dangerText
+                        : undefined,
+                    },
+                    { id: 'custom', label: 'Custom Input' },
+                    {
+                      id: 'output',
+                      label: 'Output',
+                      statusColor: customRunResult
+                        ? customRunResult.status === 'ACCEPTED'
+                          ? t.successText
+                          : t.dangerText
+                        : undefined,
+                    },
+                    {
+                      id: 'submission',
+                      label: submitResult
+                        ? `Submission (${submitResult.verdict})`
+                        : 'Submission Results',
+                      statusColor: submitResult
+                        ? submitResult.verdict === 'ACCEPTED'
+                          ? t.successText
+                          : t.dangerText
+                        : undefined,
+                    },
+                  ] as Array<{ id: ConsoleTab; label: string; statusColor?: string }>
+                ).map((tab) => {
+                  const active = activeConsoleTab === tab.id;
+                  return (
                     <button
+                      key={tab.id}
                       type="button"
-                      onClick={() => handleRun(true)}
-                      disabled={isRunning || isSubmitting}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        backgroundColor: '#0D9488',
-                        color: '#FFFFFF',
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
+                      data-testid={`console-tab-${tab.id}`}
+                      onClick={() => {
+                        setActiveConsoleTab(tab.id);
+                        setConsoleOpen(true);
                       }}
-                    >
-                      ▶ Execute with Input
-                    </button>
-                  </div>
-                  <textarea
-                    data-testid="custom-stdin-textarea"
-                    value={customInput}
-                    onChange={(e) => setCustomInput(e.target.value)}
-                    placeholder="Enter custom stdin lines here..."
-                    style={{
-                      flex: 1,
-                      minHeight: '72px',
-                      backgroundColor: ideDark ? '#1E293B' : '#FFFFFF',
-                      color: textMain,
-                      border: `1px solid ${paneBorder}`,
-                      borderRadius: '7px',
-                      padding: '8px 10px',
-                      fontFamily: "'JetBrains Mono', Consolas, monospace",
-                      fontSize: '12px',
-                      resize: 'none',
-                    }}
-                  />
-                </div>
-              )}
-
-              {activeConsoleTab === 'sample' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {isJavaSelected && (
-                    <div
                       style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        backgroundColor: 'rgba(245, 184, 61, 0.14)',
-                        border: '1px solid rgba(245, 184, 61, 0.45)',
-                        color: ideDark ? '#FCD34D' : '#92400E',
-                        fontFamily: "'Inter', sans-serif",
+                        padding: '9px 14px',
                         fontSize: '12px',
+                        fontWeight: active ? 700 : 600,
+                        color: active ? t.accentBlueText : t.textMuted,
+                        backgroundColor: active ? t.bgSubtle : 'transparent',
+                        border: 'none',
+                        borderTop: active
+                          ? `2px solid ${t.accentBlue}`
+                          : '2px solid transparent',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
                       }}
                     >
-                      Browser Java execution is disabled pending full compatibility &amp; GPL-2.0 clearance. Use{' '}
-                      <strong>Submit Solution</strong> for server-side Java evaluation.
-                    </div>
-                  )}
-
-                  {sampleSuiteResult && lastRunKind === 'sample' && (
-                    <div
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: '7px',
-                        backgroundColor:
-                          sampleSuiteResult.overallStatus === 'ACCEPTED'
-                            ? 'rgba(16, 185, 129, 0.15)'
-                            : 'rgba(239, 68, 68, 0.15)',
-                        border: `1px solid ${sampleSuiteResult.overallStatus === 'ACCEPTED' ? '#10B981' : '#EF4444'}`,
-                        fontFamily: "'Inter', sans-serif",
-                        fontWeight: 700,
-                      }}
-                    >
-                      Sample Run Verdict: {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
-                    </div>
-                  )}
-
-                  {(details?.sample_test_cases || []).length === 0 ? (
-                    <div style={{ color: textSub }}>
-                      No public sample cases attached. Use Custom Input or Submit Solution.
-                    </div>
-                  ) : (
-                    (details?.sample_test_cases || []).map((stc, idx) => {
-                      const matchedRes = sampleSuiteResult?.results?.find(
-                        (r) => r.index === idx + 1 || r.testCaseId === String(stc.id)
-                      );
-                      return (
-                        <div
-                          key={stc.id || idx}
+                      {tab.statusColor && (
+                        <span
                           style={{
-                            padding: '8px 10px',
-                            borderRadius: '7px',
-                            border: `1px solid ${
-                              matchedRes
-                                ? matchedRes.passed
-                                  ? '#10B981'
-                                  : '#EF4444'
-                                : paneBorder
-                            }`,
-                            backgroundColor: ideDark ? '#111827' : '#FFFFFF',
+                            width: '7px',
+                            height: '7px',
+                            borderRadius: '50%',
+                            backgroundColor: tab.statusColor,
                           }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                            <strong style={{ color: textMain }}>Sample Case {idx + 1}</strong>
-                            {matchedRes && (
-                              <span style={{ fontWeight: 800, color: matchedRes.passed ? '#10B981' : '#EF4444' }}>
-                                {matchedRes.passed ? '✓ PASSED' : `✗ ${matchedRes.status}`} ({matchedRes.executionTimeMs.toFixed(1)}ms)
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: '11.5px', color: textSub, whiteSpace: 'pre-wrap' }}>
-                            <div>Input: {stc.input_text || '(empty)'}</div>
-                            <div>Expected: {stc.expected_output}</div>
-                            {matchedRes && <div>Actual: {matchedRes.actualOutput || '(empty)'}</div>}
-                            {matchedRes?.stderr && (
-                              <pre style={{ margin: '4px 0 0 0', color: '#F87171', whiteSpace: 'pre-wrap' }}>
-                                {matchedRes.stderr}
-                              </pre>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
+                        />
+                      )}
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
-              {activeConsoleTab === 'output' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {runtimeDetail && runtimeState === 'ERROR' && (
-                    <div style={{ padding: '8px 10px', borderRadius: '6px', backgroundColor: 'rgba(239, 68, 68, 0.14)', color: '#F87171' }}>
-                      Runtime Error: {runtimeDetail}
-                    </div>
-                  )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: t.textMuted }}>
+                  Ctrl+Enter to Run
+                </span>
+                <button
+                  type="button"
+                  data-testid="toggle-console-btn"
+                  onClick={() => setConsoleOpen((o) => !o)}
+                  style={{
+                    backgroundColor: t.bgSurface,
+                    border: `1px solid ${t.border}`,
+                    color: t.textSecondary,
+                    borderRadius: '6px',
+                    padding: '3px 9px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {consoleOpen ? '▾ Hide' : '▴ Console'}
+                </button>
+              </div>
+            </div>
 
-                  {lastRunKind === 'custom' && customRunResult && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* Console Tab Body */}
+            {consoleOpen && (
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  padding: '12px 14px',
+                  overflowY: 'auto',
+                  color: t.textMain,
+                  fontSize: '12px',
+                  fontFamily: "'JetBrains Mono', Consolas, monospace",
+                }}
+              >
+                {/* TAB 1: SAMPLE TESTS */}
+                {activeConsoleTab === 'sample' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {isJavaSelected && (
                       <div
-                        data-testid="browser-run-verdict"
                         style={{
                           padding: '8px 12px',
                           borderRadius: '7px',
-                          fontWeight: 700,
+                          backgroundColor: t.warnBg,
+                          border: `1px solid ${t.warnBorder}`,
+                          color: t.warnText,
                           fontFamily: "'Inter', sans-serif",
-                          backgroundColor:
-                            customRunResult.status === 'ACCEPTED'
-                              ? 'rgba(16, 185, 129, 0.15)'
-                              : customRunResult.status === 'BROWSER_RUNTIME_UNSUPPORTED'
-                              ? 'rgba(245, 184, 61, 0.16)'
-                              : 'rgba(239, 68, 68, 0.15)',
-                          color:
-                            customRunResult.status === 'ACCEPTED'
-                              ? '#10B981'
-                              : customRunResult.status === 'BROWSER_RUNTIME_UNSUPPORTED'
-                              ? '#F59E0B'
-                              : '#EF4444',
+                          fontSize: '12px',
                         }}
                       >
-                        Status: {customRunResult.status} ({customRunResult.executionTimeMs.toFixed(1)}ms)
+                        Browser Java execution is disabled pending full compatibility &amp; GPL-2.0 clearance. Use{' '}
+                        <strong>Submit Solution</strong> for server-side Java evaluation.
                       </div>
+                    )}
 
-                      {customRunResult.stdout && (
-                        <div>
-                          <div style={{ fontWeight: 700, color: '#38BDF8', marginBottom: '3px' }}>Stdout:</div>
-                          <pre
-                            data-testid="browser-run-stdout"
-                            style={{
-                              margin: 0,
-                              padding: '8px',
-                              borderRadius: '6px',
-                              backgroundColor: ideDark ? '#1E293B' : '#FFFFFF',
-                              border: `1px solid ${paneBorder}`,
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {customRunResult.stdout}
-                          </pre>
-                        </div>
-                      )}
-
-                      {(customRunResult.compilationErrors || customRunResult.runtimeErrors || customRunResult.stderr) && (
-                        <div>
-                          <div style={{ fontWeight: 700, color: '#F87171', marginBottom: '3px' }}>Diagnostics / Stderr:</div>
-                          <pre
-                            data-testid="browser-run-stderr"
-                            style={{
-                              margin: 0,
-                              padding: '8px',
-                              borderRadius: '6px',
-                              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                              color: '#FCA5A5',
-                              border: '1px solid rgba(239, 68, 68, 0.35)',
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {customRunResult.compilationErrors || customRunResult.runtimeErrors || customRunResult.stderr}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {lastRunKind === 'sample' && sampleSuiteResult && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {sampleSuiteResult && lastRunKind === 'sample' && (
                       <div
                         data-testid="browser-sample-verdict"
                         style={{
                           padding: '8px 12px',
-                          borderRadius: '7px',
-                          fontWeight: 700,
-                          fontFamily: "'Inter', sans-serif",
+                          borderRadius: '8px',
                           backgroundColor:
                             sampleSuiteResult.overallStatus === 'ACCEPTED'
-                              ? 'rgba(16, 185, 129, 0.15)'
-                              : 'rgba(239, 68, 68, 0.15)',
-                          color: sampleSuiteResult.overallStatus === 'ACCEPTED' ? '#10B981' : '#EF4444',
+                              ? t.successBg
+                              : t.dangerBg,
+                          border: `1px solid ${
+                            sampleSuiteResult.overallStatus === 'ACCEPTED'
+                              ? t.successBorder
+                              : t.dangerBorder
+                          }`,
+                          color:
+                            sampleSuiteResult.overallStatus === 'ACCEPTED'
+                              ? t.successText
+                              : t.dangerText,
+                          fontFamily: "'Inter', sans-serif",
+                          fontWeight: 700,
+                          fontSize: '12.5px',
                         }}
                       >
-                        Browser Sample Suite: {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
+                        Sample Run Verdict: {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
                       </div>
+                    )}
 
-                      {(sampleSuiteResult.compilationErrors || sampleSuiteResult.runtimeErrors || sampleSuiteResult.unsupportedReason) && (
-                        <pre style={{ margin: 0, padding: '8px', borderRadius: '6px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#FCA5A5', whiteSpace: 'pre-wrap' }}>
-                          {sampleSuiteResult.compilationErrors || sampleSuiteResult.runtimeErrors || sampleSuiteResult.unsupportedReason}
-                        </pre>
-                      )}
+                    {sampleCases.length === 0 ? (
+                      <div style={{ color: t.textMuted, fontFamily: "'Inter', sans-serif" }}>
+                        No public sample cases attached. Use <strong>Custom Input</strong> or <strong>Submit Solution</strong>.
+                      </div>
+                    ) : (
+                      <>
+                        {/* Case Selector Pills */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          {sampleCases.map((stc, idx) => {
+                            const matchedRes = sampleSuiteResult?.results?.find(
+                              (r) => r.index === idx + 1 || r.testCaseId === String(stc.id)
+                            );
+                            const isCaseActive = idx === activeSampleIdx;
+                            return (
+                              <button
+                                key={stc.id || idx}
+                                type="button"
+                                onClick={() => setSelectedSampleIdx(idx)}
+                                style={{
+                                  padding: '4px 11px',
+                                  borderRadius: '7px',
+                                  fontFamily: "'Inter', sans-serif",
+                                  fontSize: '11.5px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  border: `1px solid ${
+                                    isCaseActive
+                                      ? t.accentBlue
+                                      : matchedRes
+                                      ? matchedRes.passed
+                                        ? t.successBorder
+                                        : t.dangerBorder
+                                      : t.border
+                                  }`,
+                                  backgroundColor: isCaseActive
+                                    ? t.accentBlueSoft
+                                    : t.bgSurface,
+                                  color: isCaseActive
+                                    ? t.accentBlueText
+                                    : matchedRes
+                                    ? matchedRes.passed
+                                      ? t.successText
+                                      : t.dangerText
+                                    : t.textSecondary,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}
+                              >
+                                {matchedRes && (
+                                  <span>{matchedRes.passed ? '✓' : '✗'}</span>
+                                )}
+                                <span>Case {idx + 1}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Active Sample Case Detail */}
+                        {(() => {
+                          const stc = sampleCases[activeSampleIdx];
+                          if (!stc) return null;
+                          const matchedRes = sampleSuiteResult?.results?.find(
+                            (r) =>
+                              r.index === activeSampleIdx + 1 ||
+                              r.testCaseId === String(stc.id)
+                          );
+                          return (
+                            <div
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '8px',
+                                border: `1px solid ${
+                                  matchedRes
+                                    ? matchedRes.passed
+                                      ? t.successBorder
+                                      : t.dangerBorder
+                                    : t.border
+                                }`,
+                                backgroundColor: t.bgSurface,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px',
+                              }}
+                            >
+                              {matchedRes && (
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    fontFamily: "'Inter', sans-serif",
+                                    fontSize: '12px',
+                                    fontWeight: 700,
+                                    color: matchedRes.passed ? t.successText : t.dangerText,
+                                  }}
+                                >
+                                  <span>
+                                    Case {activeSampleIdx + 1}: {matchedRes.passed ? '✓ PASSED' : `✗ ${matchedRes.status}`}
+                                  </span>
+                                  <span>{matchedRes.executionTimeMs.toFixed(1)} ms</span>
+                                </div>
+                              )}
+
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div>
+                                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: t.textMuted, marginBottom: '3px', fontFamily: "'Inter', sans-serif" }}>
+                                    INPUT
+                                  </div>
+                                  <pre style={{ margin: 0, padding: '7px 9px', borderRadius: '6px', backgroundColor: t.bgCode, border: `1px solid ${t.border}`, whiteSpace: 'pre-wrap' }}>
+                                    {stc.input_text || '(empty)'}
+                                  </pre>
+                                </div>
+
+                                <div>
+                                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: t.textMuted, marginBottom: '3px', fontFamily: "'Inter', sans-serif" }}>
+                                    EXPECTED OUTPUT
+                                  </div>
+                                  <pre style={{ margin: 0, padding: '7px 9px', borderRadius: '6px', backgroundColor: t.bgCode, border: `1px solid ${t.border}`, whiteSpace: 'pre-wrap' }}>
+                                    {stc.expected_output}
+                                  </pre>
+                                </div>
+
+                                {matchedRes && (
+                                  <div>
+                                    <div style={{ fontSize: '10.5px', fontWeight: 700, color: t.textMuted, marginBottom: '3px', fontFamily: "'Inter', sans-serif" }}>
+                                      YOUR OUTPUT
+                                    </div>
+                                    <pre
+                                      style={{
+                                        margin: 0,
+                                        padding: '7px 9px',
+                                        borderRadius: '6px',
+                                        backgroundColor: matchedRes.passed ? t.successBg : t.dangerBg,
+                                        border: `1px solid ${matchedRes.passed ? t.successBorder : t.dangerBorder}`,
+                                        whiteSpace: 'pre-wrap',
+                                      }}
+                                    >
+                                      {matchedRes.actualOutput || '(empty)'}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+
+                              {matchedRes?.stderr && (
+                                <pre
+                                  style={{
+                                    margin: 0,
+                                    padding: '7px 9px',
+                                    borderRadius: '6px',
+                                    backgroundColor: t.dangerBg,
+                                    color: t.dangerText,
+                                    border: `1px solid ${t.dangerBorder}`,
+                                    whiteSpace: 'pre-wrap',
+                                  }}
+                                >
+                                  {matchedRes.stderr}
+                                </pre>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 2: CUSTOM INPUT */}
+                {activeConsoleTab === 'custom' && (
+                  <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '11.5px', color: t.textMuted, fontFamily: "'Inter', sans-serif" }}>
+                        Custom Standard Input (stdin) for browser execution:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRun(true)}
+                        disabled={isRunning || isSubmitting}
+                        style={{
+                          padding: '5px 12px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          backgroundColor: t.runTeal,
+                          color: '#FFFFFF',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          fontFamily: "'Inter', sans-serif",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ▶ Execute with Input
+                      </button>
                     </div>
-                  )}
-
-                  {!customRunResult && !sampleSuiteResult && !isRunning && (
-                    <div style={{ color: textSub }}>
-                      Ready. Click &quot;Run Code&quot; for Python 3 browser execution or switch to &quot;Custom Input&quot; to supply stdin.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {activeConsoleTab === 'submission' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {submitError && (
-                    <div
-                      data-testid="coding-submit-error"
+                    <textarea
+                      data-testid="custom-stdin-textarea"
+                      value={customInput}
+                      onChange={(e) => setCustomInput(e.target.value)}
+                      placeholder="Enter custom stdin lines here..."
                       style={{
-                        padding: '10px 12px',
-                        borderRadius: '7px',
-                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                        border: '1px solid #EF4444',
-                        color: '#FCA5A5',
+                        flex: 1,
+                        minHeight: '78px',
+                        backgroundColor: t.bgInput,
+                        color: t.textMain,
+                        border: `1px solid ${t.borderStrong}`,
+                        borderRadius: '8px',
+                        padding: '8px 10px',
+                        fontFamily: "'JetBrains Mono', Consolas, monospace",
+                        fontSize: '12px',
+                        resize: 'none',
                       }}
-                    >
-                      {submitError}
-                    </div>
-                  )}
+                    />
+                  </div>
+                )}
 
-                  {submitResult && (
-                    <div data-testid="coding-submit-result" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* TAB 3: OUTPUT */}
+                {activeConsoleTab === 'output' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {runtimeDetail && runtimeState === 'ERROR' && (
                       <div
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '7px',
+                          backgroundColor: t.dangerBg,
+                          border: `1px solid ${t.dangerBorder}`,
+                          color: t.dangerText,
+                        }}
+                      >
+                        Runtime Error: {runtimeDetail}
+                      </div>
+                    )}
+
+                    {lastRunKind === 'custom' && customRunResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div
+                          data-testid="browser-run-verdict"
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '7px',
+                            fontWeight: 700,
+                            fontFamily: "'Inter', sans-serif",
+                            backgroundColor:
+                              customRunResult.status === 'ACCEPTED'
+                                ? t.successBg
+                                : customRunResult.status === 'BROWSER_RUNTIME_UNSUPPORTED'
+                                ? t.warnBg
+                                : t.dangerBg,
+                            border: `1px solid ${
+                              customRunResult.status === 'ACCEPTED'
+                                ? t.successBorder
+                                : customRunResult.status === 'BROWSER_RUNTIME_UNSUPPORTED'
+                                ? t.warnBorder
+                                : t.dangerBorder
+                            }`,
+                            color:
+                              customRunResult.status === 'ACCEPTED'
+                                ? t.successText
+                                : customRunResult.status === 'BROWSER_RUNTIME_UNSUPPORTED'
+                                ? t.warnText
+                                : t.dangerText,
+                          }}
+                        >
+                          Status: {customRunResult.status} ({customRunResult.executionTimeMs.toFixed(1)} ms)
+                        </div>
+
+                        {customRunResult.stdout && (
+                          <div>
+                            <div style={{ fontWeight: 700, color: t.accentBlueText, marginBottom: '4px', fontFamily: "'Inter', sans-serif" }}>
+                              Stdout:
+                            </div>
+                            <pre
+                              data-testid="browser-run-stdout"
+                              style={{
+                                margin: 0,
+                                padding: '9px 11px',
+                                borderRadius: '7px',
+                                backgroundColor: t.bgSurface,
+                                border: `1px solid ${t.border}`,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {customRunResult.stdout}
+                            </pre>
+                          </div>
+                        )}
+
+                        {(customRunResult.compilationErrors || customRunResult.runtimeErrors || customRunResult.stderr) && (
+                          <div>
+                            <div style={{ fontWeight: 700, color: t.dangerText, marginBottom: '4px', fontFamily: "'Inter', sans-serif" }}>
+                              Diagnostics / Stderr:
+                            </div>
+                            <pre
+                              data-testid="browser-run-stderr"
+                              style={{
+                                margin: 0,
+                                padding: '9px 11px',
+                                borderRadius: '7px',
+                                backgroundColor: t.dangerBg,
+                                color: t.dangerText,
+                                border: `1px solid ${t.dangerBorder}`,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {customRunResult.compilationErrors || customRunResult.runtimeErrors || customRunResult.stderr}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {lastRunKind === 'sample' && sampleSuiteResult && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div
+                          data-testid="browser-sample-verdict"
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '7px',
+                            fontWeight: 700,
+                            fontFamily: "'Inter', sans-serif",
+                            backgroundColor:
+                              sampleSuiteResult.overallStatus === 'ACCEPTED'
+                                ? t.successBg
+                                : t.dangerBg,
+                            border: `1px solid ${
+                              sampleSuiteResult.overallStatus === 'ACCEPTED'
+                                ? t.successBorder
+                                : t.dangerBorder
+                            }`,
+                            color:
+                              sampleSuiteResult.overallStatus === 'ACCEPTED'
+                                ? t.successText
+                                : t.dangerText,
+                          }}
+                        >
+                          Browser Sample Suite: {sampleSuiteResult.overallStatus} ({sampleSuiteResult.passedCount}/{sampleSuiteResult.totalCount} passed)
+                        </div>
+
+                        {(sampleSuiteResult.compilationErrors || sampleSuiteResult.runtimeErrors || sampleSuiteResult.unsupportedReason) && (
+                          <pre
+                            style={{
+                              margin: 0,
+                              padding: '9px 11px',
+                              borderRadius: '7px',
+                              backgroundColor: t.dangerBg,
+                              color: t.dangerText,
+                              border: `1px solid ${t.dangerBorder}`,
+                              whiteSpace: 'pre-wrap',
+                            }}
+                          >
+                            {sampleSuiteResult.compilationErrors || sampleSuiteResult.runtimeErrors || sampleSuiteResult.unsupportedReason}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+
+                    {!customRunResult && !sampleSuiteResult && !isRunning && (
+                      <div style={{ color: t.textMuted, fontFamily: "'Inter', sans-serif" }}>
+                        Ready. Click <strong>Run Code</strong> to execute Python 3 against Sample Tests, or switch to <strong>Custom Input</strong> to test your own input.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 4: SUBMISSION RESULTS */}
+                {activeConsoleTab === 'submission' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {submitError && (
+                      <div
+                        data-testid="coding-submit-error"
                         style={{
                           padding: '10px 12px',
                           borderRadius: '8px',
-                          backgroundColor: submitResult.verdict === 'ACCEPTED' ? '#064E3B' : '#7F1D1D',
-                          color: '#FFFFFF',
+                          backgroundColor: t.dangerBg,
+                          border: `1px solid ${t.dangerBorder}`,
+                          color: t.dangerText,
                           fontFamily: "'Inter', sans-serif",
                         }}
                       >
-                        <div style={{ fontSize: '14px', fontWeight: 800 }}>
-                          Authoritative Verdict: {submitResult.verdict}
-                        </div>
-                        <div style={{ fontSize: '12px', marginTop: '3px' }}>
-                          Score Awarded: <strong>{submitResult.score_awarded} pts</strong> • Passed:{' '}
-                          {submitResult.passed_test_cases} / {submitResult.total_test_cases} test cases (
-                          {submitResult.execution_time_ms.toFixed(1)}ms)
-                        </div>
+                        {submitError}
                       </div>
+                    )}
 
-                      {submitResult.compile_output && (
-                        <pre style={{ margin: 0, padding: '8px', borderRadius: '6px', backgroundColor: 'rgba(239, 68, 68, 0.14)', color: '#FCA5A5', whiteSpace: 'pre-wrap' }}>
-                          {submitResult.compile_output}
-                        </pre>
-                      )}
-
-                      {submitResult.results && submitResult.results.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          {submitResult.results.map((r, idx) => (
-                            <div
-                              key={r.test_case_id || idx}
-                              style={{
-                                padding: '8px 10px',
-                                borderRadius: '6px',
-                                backgroundColor: r.passed ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                                border: `1px solid ${r.passed ? '#059669' : '#DC2626'}`,
-                              }}
-                            >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontWeight: 700, color: textMain }}>
-                                  {r.is_public ? `Sample Case ${idx + 1} (Public)` : `Evaluation Case ${idx + 1} (Hidden)`}
-                                </span>
-                                <span style={{ fontWeight: 800, color: r.passed ? '#10B981' : '#EF4444' }}>
-                                  {r.passed ? '✓ PASSED' : `✗ ${r.status || 'FAILED'}`} ({r.execution_time_ms.toFixed(1)}ms)
-                                </span>
-                              </div>
-                              {r.is_public && r.input_text !== null && r.input_text !== undefined && (
-                                <div style={{ marginTop: '4px', fontSize: '11px', color: textSub }}>
-                                  Input: <code>{r.input_text}</code> | Expected: <code>{r.expected_output}</code>
-                                  {r.actual_output !== null && r.actual_output !== undefined && (
-                                    <span> | Output: <code>{r.actual_output.trim()}</code></span>
-                                  )}
-                                </div>
-                              )}
-                              {!r.is_public && (
-                                <div style={{ marginTop: '2px', fontSize: '10.5px', color: textSub, fontStyle: 'italic' }}>
-                                  Confidential hidden evaluation case — inputs/outputs withheld
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                    {submitResult && (
+                      <div data-testid="coding-submit-result" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: '8px',
+                            backgroundColor: submitResult.verdict === 'ACCEPTED' ? t.successBg : t.dangerBg,
+                            border: `1px solid ${submitResult.verdict === 'ACCEPTED' ? t.successBorder : t.dangerBorder}`,
+                            color: submitResult.verdict === 'ACCEPTED' ? t.successText : t.dangerText,
+                            fontFamily: "'Inter', sans-serif",
+                          }}
+                        >
+                          <div style={{ fontSize: '13.5px', fontWeight: 800 }}>
+                            Authoritative Verdict: {submitResult.verdict}
+                          </div>
+                          <div style={{ fontSize: '12px', marginTop: '3px', color: t.textSecondary }}>
+                            Score Awarded: <strong>{submitResult.score_awarded} pts</strong> • Passed:{' '}
+                            {submitResult.passed_test_cases} / {submitResult.total_test_cases} test cases (
+                            {submitResult.execution_time_ms.toFixed(1)} ms)
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  )}
 
-                  {!submitResult && !submitError && !isSubmitting && (
-                    <div style={{ color: textSub }}>
-                      Click &quot;Submit Solution&quot; to run authoritative evaluation against public and hidden test cases.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+                        {submitResult.compile_output && (
+                          <pre
+                            style={{
+                              margin: 0,
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              backgroundColor: t.dangerBg,
+                              color: t.dangerText,
+                              border: `1px solid ${t.dangerBorder}`,
+                              whiteSpace: 'pre-wrap',
+                            }}
+                          >
+                            {submitResult.compile_output}
+                          </pre>
+                        )}
+
+                        {submitResult.results && submitResult.results.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {submitResult.results.map((r, idx) => (
+                              <div
+                                key={r.test_case_id || idx}
+                                style={{
+                                  padding: '8px 10px',
+                                  borderRadius: '7px',
+                                  backgroundColor: r.passed ? t.successBg : t.dangerBg,
+                                  border: `1px solid ${r.passed ? t.successBorder : t.dangerBorder}`,
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: "'Inter', sans-serif" }}>
+                                  <span style={{ fontWeight: 700, color: t.textMain }}>
+                                    {r.is_public ? `Sample Case ${idx + 1} (Public)` : `Evaluation Case ${idx + 1} (Hidden)`}
+                                  </span>
+                                  <span style={{ fontWeight: 800, color: r.passed ? t.successText : t.dangerText }}>
+                                    {r.passed ? '✓ PASSED' : `✗ ${r.status || 'FAILED'}`} ({r.execution_time_ms.toFixed(1)} ms)
+                                  </span>
+                                </div>
+                                {r.is_public && r.input_text !== null && r.input_text !== undefined && (
+                                  <div style={{ marginTop: '4px', fontSize: '11px', color: t.textSecondary }}>
+                                    Input: <code>{r.input_text}</code> | Expected: <code>{r.expected_output}</code>
+                                    {r.actual_output !== null && r.actual_output !== undefined && (
+                                      <span> | Output: <code>{r.actual_output.trim()}</code></span>
+                                    )}
+                                  </div>
+                                )}
+                                {!r.is_public && (
+                                  <div style={{ marginTop: '2px', fontSize: '10.5px', color: t.textMuted, fontStyle: 'italic', fontFamily: "'Inter', sans-serif" }}>
+                                    Confidential hidden evaluation case — inputs/outputs withheld
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {!submitResult && !submitError && !isSubmitting && (
+                      <div style={{ color: t.textMuted, fontFamily: "'Inter', sans-serif" }}>
+                        Click <strong>Submit Solution</strong> to evaluate your code against all public and hidden test cases.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Paste Deterrence Warning Modal */}
       {showPasteWarning && (
@@ -1287,7 +1848,8 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backgroundColor: 'rgba(15, 23, 42, 0.72)',
+            backdropFilter: 'blur(3px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1296,22 +1858,22 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
         >
           <div
             style={{
-              backgroundColor: '#1E293B',
+              backgroundColor: t.bgSurface,
               border: '2px solid #EF4444',
               borderRadius: '14px',
               padding: '24px 28px',
               maxWidth: '460px',
               width: '90%',
               textAlign: 'center',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
             }}
           >
             <div style={{ fontSize: '36px', marginBottom: '12px' }}>🛡️</div>
             <span
               style={{
                 display: 'inline-block',
-                backgroundColor: 'rgba(239, 68, 68, 0.2)',
-                color: '#EF4444',
+                backgroundColor: t.dangerBg,
+                color: t.dangerText,
                 padding: '4px 10px',
                 borderRadius: '6px',
                 fontSize: '11px',
@@ -1322,10 +1884,10 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
             >
               CSL SENTINEL
             </span>
-            <h3 style={{ margin: '0 0 10px 0', color: '#F87171', fontSize: '17px', fontWeight: 800, letterSpacing: '0.02em' }}>
+            <h3 style={{ margin: '0 0 10px 0', color: t.dangerText, fontSize: '17px', fontWeight: 800, letterSpacing: '0.02em' }}>
               AI PROCTORING ENABLED — CLIPBOARD RESTRICTION ACTIVE
             </h3>
-            <p style={{ margin: '0 0 20px 0', color: '#CBD5E1', fontSize: '13px', lineHeight: 1.6 }}>
+            <p style={{ margin: '0 0 20px 0', color: t.textSecondary, fontSize: '13px', lineHeight: 1.6 }}>
               External clipboard pasting is strictly prohibited during the assessment to preserve examination integrity.
               Please construct and type your solution directly within the Monaco Editor.
             </p>
