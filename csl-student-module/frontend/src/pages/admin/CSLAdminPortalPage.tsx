@@ -920,10 +920,17 @@ export function CSLAdminPortalPage() {
               {adminInitials}
             </div>
 
-            <button
+              <button
               type="button"
               data-testid="admin-theme-toggle"
-              onClick={toggleTheme}
+              onClick={(e) => {
+                const btn = e.currentTarget;
+                btn.classList.remove('csl-theme-btn-animate');
+                void btn.offsetWidth;
+                btn.classList.add('csl-theme-btn-animate');
+                window.setTimeout(() => btn.classList.remove('csl-theme-btn-animate'), 620);
+                toggleTheme(e);
+              }}
               title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               style={{

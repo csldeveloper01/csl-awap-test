@@ -1,5 +1,4 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { flushSync } from 'react-dom';
 
 export type AdminThemeMode = 'light' | 'dark';
 
@@ -7,7 +6,41 @@ const STORAGE_KEY = 'csl_admin_theme';
 const THEME_EVENT = 'csl-admin-theme-change';
 const ANIMATIONS_STORAGE_KEY = 'csl_advanced_animations';
 const ANIMATIONS_EVENT = 'csl-advanced-animations-change';
-export const THEME_RIPPLE_DURATION_MS = 600;
+export const THEME_RIPPLE_SWAP_DELAY_MS = 400;
+export const THEME_RIPPLE_CLEANUP_MS = 1200;
+export const THEME_RIPPLE_DURATION_MS = 1000;
+
+export const THEME_RIPPLE_CIRCLES = [
+  { size: 150, opacity: '12', delay: 50, duration: 1000 },
+  { size: 100, opacity: '20', delay: 0, duration: 800 },
+  { size: 60, opacity: '15', delay: 100, duration: 900 },
+] as const;
+
+let activeRippleContainer: HTMLDivElement | null = null;
+let activeFlipTimer: ReturnType<typeof setTimeout> | null = null;
+let activeCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+let activeCircleTimers: Array<ReturnType<typeof setTimeout>> = [];
+let pendingThemeTarget: AdminThemeMode | null = null;
+
+function clearActiveThemeTransition(): void {
+  if (activeFlipTimer !== null) {
+    window.clearTimeout(activeFlipTimer);
+    activeFlipTimer = null;
+  }
+  if (activeCleanupTimer !== null) {
+    window.clearTimeout(activeCleanupTimer);
+    activeCleanupTimer = null;
+  }
+  for (const tid of activeCircleTimers) {
+    window.clearTimeout(tid);
+  }
+  activeCircleTimers = [];
+  if (activeRippleContainer) {
+    activeRippleContainer.remove();
+    activeRippleContainer = null;
+  }
+  pendingThemeTarget = null;
+}
 
 export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -31,6 +64,7 @@ function applyThemeToRoot(mode: AdminThemeMode): void {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.cslTheme = mode;
   document.documentElement.classList.toggle('dark', mode === 'dark');
+  document.documentElement.classList.add('csl-dark-transition');
 }
 
 function applyAnimationsToRoot(enabled: boolean): void {
@@ -63,26 +97,73 @@ export function setStoredAdvancedAnimations(enabled: boolean): void {
   window.dispatchEvent(new CustomEvent<boolean>(ANIMATIONS_EVENT, { detail: enabled }));
 }
 
-function playFallbackClipRipple(originX: number, originY: number, radius: number, nextBg: string): void {
+/**
+ * Recreates the RAISE Centre multi-circle ripple expanding from the button center,
+ * while swapping the actual theme at 400ms and tearing down the container at 1200ms.
+ */
+export function playRaiseCentreRippleEffect(
+  originX: number,
+  originY: number,
+  currentlyDark: boolean
+): void {
   if (typeof document === 'undefined' || !document.body) return;
-  const overlay = document.createElement('div');
-  overlay.setAttribute('aria-hidden', 'true');
-  overlay.style.position = 'fixed';
-  overlay.style.inset = '0';
-  overlay.style.pointerEvents = 'none';
-  overlay.style.zIndex = '99999';
-  overlay.style.background = `radial-gradient(circle at ${originX}px ${originY}px, ${nextBg}38 0%, ${nextBg}18 48%, transparent 72%)`;
-  overlay.style.clipPath = `circle(0px at ${originX}px ${originY}px)`;
-  overlay.style.transition = `clip-path ${THEME_RIPPLE_DURATION_MS}ms cubic-bezier(0.22, 1, 0.36, 1), opacity ${THEME_RIPPLE_DURATION_MS}ms ease-out`;
-  overlay.style.opacity = '0.9';
-  document.body.appendChild(overlay);
-  window.requestAnimationFrame(() => {
-    overlay.style.clipPath = `circle(${radius}px at ${originX}px ${originY}px)`;
-    overlay.style.opacity = '0';
+
+  const viewportWidth = Math.max(window.innerWidth, document.documentElement?.clientWidth || 0);
+  const viewportHeight = Math.max(window.innerHeight, document.documentElement?.clientHeight || 0);
+  const maxRadius = computeRippleMaxRadius(originX, originY, viewportWidth, viewportHeight);
+
+  const rippleContainer = document.createElement('div');
+  rippleContainer.className = 'ripple-container csl-ripple-container';
+  rippleContainer.setAttribute('aria-hidden', 'true');
+  rippleContainer.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 9999;
+    overflow: hidden;
+  `;
+
+  // Tint determined BEFORE the dark-mode flip: '#f8f9fa' when leaving dark mode, '#000000' when entering dark mode
+  const baseColor = currentlyDark ? '#f8f9fa' : '#000000';
+
+  const circlePairs = THEME_RIPPLE_CIRCLES.map((ripple) => {
+    const circle = document.createElement('div');
+    circle.setAttribute('data-ripple-size', String(ripple.size));
+    circle.setAttribute('data-ripple-duration', String(ripple.duration));
+    circle.style.cssText = `
+      position: absolute;
+      border-radius: 50%;
+      background: radial-gradient(circle, ${baseColor}${ripple.opacity} 0%, transparent 70%);
+      transform: translate(-50%, -50%) scale(0);
+      left: ${originX}px;
+      top: ${originY}px;
+      width: ${ripple.size}px;
+      height: ${ripple.size}px;
+      transition: transform ${ripple.duration}ms cubic-bezier(0.4, 0.0, 0.2, 1);
+      will-change: transform;
+    `;
+    rippleContainer.appendChild(circle);
+    return { circle, ripple };
   });
-  window.setTimeout(() => {
-    overlay.remove();
-  }, THEME_RIPPLE_DURATION_MS + 60);
+
+  document.body.appendChild(rippleContainer);
+  activeRippleContainer = rippleContainer;
+
+  // Allow initial scale(0) frame to paint cleanly before triggering staggered expansion
+  window.requestAnimationFrame(() => {
+    for (const { circle, ripple } of circlePairs) {
+      const targetScale = Math.max(50, Math.ceil((maxRadius * 2) / ripple.size) + 2);
+      const tid = window.setTimeout(() => {
+        if (activeRippleContainer === rippleContainer) {
+          circle.style.transform = `translate(-50%, -50%) scale(${targetScale})`;
+        }
+      }, ripple.delay);
+      activeCircleTimers.push(tid);
+    }
+  });
 }
 
 export function useAdvancedAnimations() {
@@ -147,8 +228,12 @@ export function useAdminTheme() {
   }, []);
 
   const toggleTheme = (event?: MouseEvent<HTMLElement>) => {
-    const next: AdminThemeMode = theme === 'dark' ? 'light' : 'dark';
+    const baseTheme = pendingThemeTarget ?? theme;
+    const currentlyDark = baseTheme === 'dark';
+    const next: AdminThemeMode = currentlyDark ? 'light' : 'dark';
     const shouldAnimate = advancedAnimationsEnabled && !prefersReducedMotion();
+
+    clearActiveThemeTransition();
 
     if (!shouldAnimate || typeof window === 'undefined' || typeof document === 'undefined') {
       setStoredAdminTheme(next);
@@ -158,34 +243,27 @@ export function useAdminTheme() {
     const rect = event?.currentTarget?.getBoundingClientRect?.();
     const originX = rect ? Math.round(rect.left + rect.width / 2) : Math.max(0, window.innerWidth - 28);
     const originY = rect ? Math.round(rect.top + rect.height / 2) : 28;
-    const width = Math.max(window.innerWidth, document.documentElement?.clientWidth || 0);
-    const height = Math.max(window.innerHeight, document.documentElement?.clientHeight || 0);
-    const radius = computeRippleMaxRadius(originX, originY, width, height);
 
-    document.documentElement.style.setProperty('--csl-ripple-x', `${originX}px`);
-    document.documentElement.style.setProperty('--csl-ripple-y', `${originY}px`);
-    document.documentElement.style.setProperty('--csl-ripple-r', `${radius}px`);
+    pendingThemeTarget = next;
+    playRaiseCentreRippleEffect(originX, originY, currentlyDark);
 
-    const docWithTransition = document as Document & {
-      startViewTransition?: (cb: () => void) => { finished?: Promise<void> };
-    };
+    activeFlipTimer = window.setTimeout(() => {
+      activeFlipTimer = null;
+      pendingThemeTarget = null;
+      setStoredAdminTheme(next);
+    }, THEME_RIPPLE_SWAP_DELAY_MS);
 
-    if (typeof docWithTransition.startViewTransition === 'function') {
-      try {
-        docWithTransition.startViewTransition(() => {
-          flushSync(() => {
-            setStoredAdminTheme(next);
-          });
-        });
-        return;
-      } catch {
-        // Fallback to manual ripple below if ViewTransition throws
+    activeCleanupTimer = window.setTimeout(() => {
+      activeCleanupTimer = null;
+      for (const tid of activeCircleTimers) {
+        window.clearTimeout(tid);
       }
-    }
-
-    const nextBg = next === 'dark' ? '#101318' : '#F5F7FA';
-    setStoredAdminTheme(next);
-    playFallbackClipRipple(originX, originY, radius, nextBg);
+      activeCircleTimers = [];
+      if (activeRippleContainer) {
+        activeRippleContainer.remove();
+        activeRippleContainer = null;
+      }
+    }, THEME_RIPPLE_CLEANUP_MS);
   };
 
   return {

@@ -246,7 +246,14 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
       setRuntimeState('IDLE');
       setRuntimeDetail('');
     }
-  }, [language]);
+    // Pre-warm Java quietly in background when both languages are allowed so switching to Java is instant
+    if (canonical !== 'java' && selectableLanguages.includes('java')) {
+      const timer = window.setTimeout(() => {
+        sharedBrowserExecutionAdapter.warmup('java');
+      }, 1200);
+      return () => window.clearTimeout(timer);
+    }
+  }, [language]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const triggerPasteRestrictionNotice = () => {
     setShowPasteWarning(true);

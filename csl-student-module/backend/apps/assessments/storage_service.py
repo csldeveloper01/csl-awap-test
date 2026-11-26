@@ -2,6 +2,7 @@ import os
 import uuid
 import re
 import logging
+from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -208,17 +209,27 @@ class ProctoringEvidenceStorageService:
         return AssessmentPdfStorageService.is_configured()
 
     @classmethod
-    def save_snapshot(cls, session_id: Any, raw_bytes: bytes, filename_prefix: str = "snapshot") -> Dict[str, Any]:
+    def save_snapshot(
+        cls,
+        session_id: Any,
+        raw_bytes: bytes,
+        filename_prefix: str = "snapshot",
+        file_extension: str = "jpg",
+        content_type: str = "image/jpeg",
+    ) -> Dict[str, Any]:
         """
-        Saves snapshot frame (JPEG) to S3 or local disk.
+        Saves validated snapshot frame to S3 or local disk with sanitized filename.
         Returns:
         {
             "storage_path": str,
             "storage_type": "S3" | "LOCAL",
         }
         """
+        import re
+        safe_prefix = re.sub(r"[^a-z0-9_-]", "", str(filename_prefix or "snapshot").lower())[:32] or "snapshot"
+        safe_ext = re.sub(r"[^a-z0-9]", "", str(file_extension or "jpg").lower())[:8] or "jpg"
         unique_token = uuid.uuid4().hex[:16]
-        object_key = f"proctoring/{session_id}/{filename_prefix}_{unique_token}.jpg"
+        object_key = f"proctoring/{session_id}/{safe_prefix}_{unique_token}.{safe_ext}"
 
         if cls.is_configured():
             cfg = AssessmentPdfStorageService.get_config()
@@ -229,7 +240,7 @@ class ProctoringEvidenceStorageService:
                     Bucket=bucket,
                     Key=object_key,
                     Body=raw_bytes,
-                    ContentType="image/jpeg",
+                    ContentType=content_type or "image/jpeg",
                     Metadata={
                         "session_id": str(session_id),
                         "token": unique_token,
@@ -245,10 +256,15 @@ class ProctoringEvidenceStorageService:
 
         # Local storage fallback
         from django.conf import settings
-        local_dir = os.path.join(settings.MEDIA_ROOT, "proctoring_evidence", str(session_id))
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        local_dir = (media_root / "proctoring_evidence" / str(session_id)).resolve()
+        if not local_dir.is_relative_to(media_root):
+            raise ValueError("Invalid proctoring storage directory path.")
         os.makedirs(local_dir, exist_ok=True)
-        local_file_name = f"{filename_prefix}_{unique_token}.jpg"
-        full_local_path = os.path.join(local_dir, local_file_name)
+        local_file_name = f"{safe_prefix}_{unique_token}.{safe_ext}"
+        full_local_path = (local_dir / local_file_name).resolve()
+        if not full_local_path.is_relative_to(local_dir):
+            raise ValueError("Invalid proctoring storage file path.")
         with open(full_local_path, "wb") as f:
             f.write(raw_bytes)
         rel_path = f"proctoring_evidence/{session_id}/{local_file_name}"
@@ -261,8 +277,11 @@ class ProctoringEvidenceStorageService:
     @classmethod
     def get_snapshot_bytes(cls, storage_path: str, storage_type: str = "LOCAL") -> bytes:
         """
-        Retrieves snapshot bytes from S3 or local storage.
+        Retrieves snapshot bytes from S3 or local storage safely (preventing path traversal).
         """
+        if not storage_path or not isinstance(storage_path, str):
+            return b""
+
         if storage_type == "S3" and cls.is_configured():
             cfg = AssessmentPdfStorageService.get_config()
             bucket = cfg["bucket"]
@@ -277,10 +296,14 @@ class ProctoringEvidenceStorageService:
                 logger.error("Failed to read snapshot from S3 (%s): %s", storage_path, exc)
                 return b""
 
-        # Local fallback
+        # Local fallback with strict MEDIA_ROOT containment check
         from django.conf import settings
-        full_path = os.path.join(settings.MEDIA_ROOT, storage_path)
-        if os.path.exists(full_path):
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        full_path = (media_root / storage_path.lstrip("/\\")).resolve()
+        if not full_path.is_relative_to(media_root):
+            logger.warning("Blocked directory traversal attempt on proctoring snapshot read: %s", storage_path)
+            return b""
+        if full_path.is_file():
             with open(full_path, "rb") as f:
                 return f.read()
         return b""

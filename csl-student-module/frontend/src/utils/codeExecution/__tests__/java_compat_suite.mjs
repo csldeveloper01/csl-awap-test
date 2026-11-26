@@ -29,6 +29,20 @@ function createPublicWorkerHarness() {
     });
   };
 
+  const activeTimers = new Set();
+  const trackTimeout = (fn, ms, ...args) => {
+    const id = setTimeout(() => {
+      activeTimers.delete(id);
+      fn(...args);
+    }, ms);
+    activeTimers.add(id);
+    return id;
+  };
+  const untrackTimeout = (id) => {
+    activeTimers.delete(id);
+    clearTimeout(id);
+  };
+
   const sandbox = {
     URL,
     TextEncoder,
@@ -59,8 +73,8 @@ function createPublicWorkerHarness() {
     Number,
     Boolean,
     JSON,
-    setTimeout,
-    clearTimeout,
+    setTimeout: trackTimeout,
+    clearTimeout: untrackTimeout,
     console,
     performance,
     fetch: localFetch,
@@ -281,4 +295,144 @@ test('Java TeaVM WASM worker passes 25-case compatibility suite + CSL sample cod
   });
   assert.equal(runtimeErr.ok, false);
   assert.notEqual(runtimeErr.exitCode, 0);
+});
+
+test('Patched worker-java.js correlates requestIds, emits phase events, supports warmup, and enforces execution timeoutMs', async () => {
+  const workerSource = fs.readFileSync(workerScriptPath, 'utf8');
+  const events = [];
+  const activeTimers = new Set();
+  const trackTimeout = (fn, ms, ...args) => {
+    const id = setTimeout(() => {
+      activeTimers.delete(id);
+      fn(...args);
+    }, ms);
+    activeTimers.add(id);
+    return id;
+  };
+  const untrackTimeout = (id) => {
+    activeTimers.delete(id);
+    clearTimeout(id);
+  };
+
+  const sandbox = {
+    URL,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    Int8Array,
+    ArrayBuffer,
+    WebAssembly,
+    Response,
+    Promise,
+    Map,
+    WeakMap,
+    WeakRef,
+    FinalizationRegistry,
+    WeakSet,
+    Symbol,
+    Proxy,
+    Reflect,
+    Math,
+    Date,
+    Error,
+    TypeError,
+    BigInt,
+    Function,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    JSON,
+    setTimeout: trackTimeout,
+    clearTimeout: untrackTimeout,
+    console,
+    performance,
+    fetch: async (url) => {
+      const cleanPath = String(url).replace('https://local.csl.test/java-wasm/', '');
+      const fullPath = path.join(publicJavaWasmDir, cleanPath);
+      const buf = fs.readFileSync(fullPath);
+      return new Response(buf, {
+        status: 200,
+        headers: {
+          'Content-Type': cleanPath.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream',
+        },
+      });
+    },
+    indexedDB: undefined,
+    require: () => {
+      throw new Error('Unexpected CommonJS require');
+    },
+    self: {
+      location: { href: 'https://local.csl.test/java-wasm/worker-java.js' },
+      postMessage(msg) {
+        events.push(msg);
+      },
+      onmessage: null,
+    },
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(workerSource, sandbox);
+
+  const waitFor = (pred) =>
+    new Promise((resolve) => {
+      const check = () => {
+        const match = events.find(pred);
+        if (match) return resolve(match);
+        setTimeout(check, 20);
+      };
+      check();
+    });
+
+  sandbox.self.onmessage({
+    data: { cmd: 'init', requestId: 'init_1', baseUrl: 'https://local.csl.test/java-wasm/teavm/', persistFiles: false },
+  });
+  const initMsg = await waitFor((m) => m.type === 'initialized' && m.requestId === 'init_1');
+  assert.equal(initMsg.requestId, 'init_1');
+
+  sandbox.self.onmessage({ data: { cmd: 'warmup', requestId: 'warm_1' } });
+  const warmMsg = await waitFor((m) => m.type === 'warmed' && m.requestId === 'warm_1');
+  assert.equal(warmMsg.ok, true);
+
+  sandbox.self.onmessage({
+    data: {
+      cmd: 'run',
+      requestId: 'run_phases_1',
+      mainClass: 'Main',
+      source: 'public class Main { public static void main(String[] a) { System.out.println("PHASE_OK"); } }',
+      input: '',
+      timeoutMs: 2500,
+      emitPhases: true,
+    },
+  });
+  const resMsg = await waitFor((m) => m.type === 'result' && m.requestId === 'run_phases_1');
+  assert.equal(resMsg.ok, true);
+  assert.equal(resMsg.stdout.trim(), 'PHASE_OK');
+
+  const phases = events
+    .filter((m) => m.type === 'phase' && m.requestId === 'run_phases_1')
+    .map((m) => m.phase);
+  assert.deepEqual(phases, ['COMPILING', 'GENERATING_WASM', 'INSTANTIATING', 'RUNNING']);
+
+  // Cooperative timeout loop (Thread.sleep yields inside TeaVM event loop) exits cleanly at timeoutMs
+  sandbox.self.onmessage({
+    data: {
+      cmd: 'run',
+      requestId: 'run_tle_1',
+      mainClass: 'Main',
+      source: 'public class Main { public static void main(String[] a) throws Exception { while (true) { Thread.sleep(50); } } }',
+      input: '',
+      timeoutMs: 600,
+      emitPhases: true,
+    },
+  });
+  const tleMsg = await waitFor((m) => m.type === 'result' && m.requestId === 'run_tle_1');
+  assert.equal(tleMsg.ok, false);
+  assert.equal(tleMsg.phase, 'TIME_LIMIT_EXCEEDED');
+
+  for (const tid of activeTimers) {
+    clearTimeout(tid);
+  }
+  activeTimers.clear();
 });

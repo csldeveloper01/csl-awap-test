@@ -63,6 +63,11 @@ from .tokens import (
     verify_attempt_ownership,
     is_simulation_or_admin_subject,
 )
+from .throttles import (
+    CandidateAuthBurstThrottle,
+    CandidateRecoveryThrottle,
+    CandidatePublicReadThrottle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +79,11 @@ class StudentCollegesListView(APIView):
     are never blocked from display by unverified/inactive status.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidatePublicReadThrottle]
 
     def get(self, request):
-        search = (request.query_params.get("search") or "").strip()
-        drive_code = (request.query_params.get("drive_code") or request.query_params.get("code") or "").strip()
+        search = (request.query_params.get("search") or "").strip()[:100]
+        drive_code = (request.query_params.get("drive_code") or request.query_params.get("code") or "").strip()[:64]
         include_inactive = request.query_params.get("include_inactive", "").lower() in ("true", "1")
 
         qs = College.objects.all() if include_inactive else College.objects.exclude(is_active=False)
@@ -103,7 +109,7 @@ class StudentCollegesListView(APIView):
                 Q(city__icontains=search)
             )
 
-        colleges = qs.order_by("name")
+        colleges = qs.order_by("name")[:1000]
         return Response(StudentCollegeOptionSerializer(colleges, many=True).data)
 
 
@@ -113,6 +119,7 @@ class CandidateEligibleAssessmentsView(APIView):
     """
     authentication_classes = [CandidateAssessmentAuthentication]
     permission_classes = [AllowAny]
+    throttle_classes = [CandidatePublicReadThrottle]
 
     def get(self, request):
         candidate = get_authorized_candidate(request)
@@ -243,6 +250,7 @@ class StudentAttemptRecoveryView(APIView):
     - Increments recovery_count atomically and updates session metadata.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidateRecoveryThrottle]
 
     def post(self, request):
         reg_no = (request.data.get("register_number") or "").strip().upper()
@@ -555,6 +563,7 @@ class CandidateRegisterView(APIView):
     Returns secure, signed assessment token for subsequent requests.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidateAuthBurstThrottle]
 
     def post(self, request):
         serializer = CandidateRegistrationSerializer(data=request.data)
@@ -826,7 +835,7 @@ class CandidateRegisterView(APIView):
 
                 token = generate_candidate_token(
                     str(existing_candidate.id),
-                    str(active_attempt.id if active_attempt else (last_completed.id if (already_completed and last_completed) else None)),
+                    str(active_attempt.id) if active_attempt else (str(last_completed.id) if (already_completed and last_completed) else None),
                 )
 
                 remaining_secs = 0
@@ -1020,6 +1029,7 @@ class ResolveAccessCodeView(APIView):
     Validates an invite access code or token and returns the corresponding Drive or Assessment.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidateAuthBurstThrottle]
 
     def post(self, request):
         code = request.data.get("code", "").strip()
@@ -1830,6 +1840,7 @@ class StudentInstitutionRequestView(APIView):
     Preserves directory integrity without automatically injecting unverified entities.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidateAuthBurstThrottle]
 
     def post(self, request):
         institution_name = (request.data.get("institution_name") or "").strip()
@@ -2066,7 +2077,7 @@ class StudentCodeEvaluationCasesView(APIView):
             return Response({"detail": "Invalid question_id."}, status=status.HTTP_400_BAD_REQUEST)
 
         attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
-        if attempt.candidate_id != candidate.id:
+        if not verify_attempt_ownership(request, attempt):
             return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
         if attempt.state in AssessmentAttempt.TERMINAL_STATES or attempt.is_expired():
             return Response({"detail": "Attempt is no longer active."}, status=status.HTTP_403_FORBIDDEN)
@@ -2168,164 +2179,183 @@ class StudentCodeSubmitView(APIView):
 
         if not isinstance(source_code, str) or not source_code.strip():
             return Response({"detail": "Source code cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
-
-        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
-        if attempt.candidate_id != candidate.id:
-            return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
-        if attempt.state in AssessmentAttempt.TERMINAL_STATES:
-            return Response({"detail": f"Attempt is {attempt.state}; code submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
-        if attempt.is_expired():
-            return Response({"detail": "Assessment time has expired. Submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Validate question belongs to this attempt
-        snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
-        has_legacy_question = bool(
-            not attempt.question_snapshots.exists()
-            and attempt.assessment_id
-            and attempt.assessment.questions.filter(id=question_id).exists()
-        )
-        if not snapshot and not has_legacy_question:
-            return Response(
-                {"detail": f"Question ID {question_id} does not belong to attempt {attempt.id}."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if len(source_code.encode("utf-8", errors="ignore")) > 200_000:
+            return Response({"detail": "Source code exceeds the 200KB maximum payload limit."}, status=status.HTTP_400_BAD_REQUEST)
+        if isinstance(raw_tc_results, list) and len(raw_tc_results) > 500:
+            return Response({"detail": "Test case result payload exceeds maximum allowed entries."}, status=status.HTTP_400_BAD_REQUEST)
 
         from django.db import transaction
+        from django.db.models import Max
         from django.utils import timezone
         from .models import ProgrammingQuestion, CodeSubmission, CodeTestResult, QuestionBank
         from .services import recalculate_attempt_coding_scores
 
-        prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
-        is_coding_snapshot = bool(
-            snapshot
-            and (
-                (snapshot.section_type or "").strip().upper() == "CODING"
-                or bool(snapshot.programming_data)
-            )
-        )
-        is_coding_question_bank = bool(
-            prog_q
-            or (snapshot and snapshot.question and snapshot.question.section_type == QuestionBank.SectionType.CODING)
-            or QuestionBank.objects.filter(id=question_id, section_type=QuestionBank.SectionType.CODING).exists()
-        )
-        if not (is_coding_snapshot or is_coding_question_bank) or not prog_q:
-            return Response(
-                {"detail": "The specified question is not a coding problem or lacks programming configuration."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        allowed_languages = (
-            snapshot.programming_data.get("allowed_languages")
-            if (snapshot and snapshot.programming_data)
-            else (prog_q.allowed_languages if prog_q else ["python", "java"])
-        )
-        normalized_allowed = [self._normalize_lang(l) for l in (allowed_languages or [])]
-        if normalized_allowed and language not in normalized_allowed:
-            return Response(
-                {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Determine question max marks from frozen allocation or QuestionBank
-        max_marks = float(getattr(prog_q.question, "marks", 1) or 1)
-        if attempt.assessment_id:
-            sec_code = (snapshot.section_type if snapshot else "CODING") or "CODING"
-            alloc = attempt.assessment.section_allocations.filter(section__code__iexact=sec_code).first()
-            if alloc and alloc.marks_per_question:
-                max_marks = float(alloc.marks_per_question)
-
-        # Sanitize optional browser execution metadata and explicitly mark untrusted
-        sanitized_meta = {}
-        if isinstance(raw_browser_meta, dict):
-            for key in (
-                "runtime_name",
-                "runtime_version",
-                "browser_status",
-                "public_samples_attempted",
-                "public_samples_passed",
-                "execution_time_ms",
-            ):
-                if key in raw_browser_meta:
-                    sanitized_meta[key] = raw_browser_meta[key]
-        if sanitized_meta or isinstance(raw_browser_meta, dict):
-            sanitized_meta["is_authoritative"] = False
-            sanitized_meta["is_verified"] = False
-            sanitized_meta["untrusted_telemetry"] = True
-            sanitized_meta["recorded_at"] = timezone.now().isoformat()
-
-        # Determine whether client supplied a browser-side automatic evaluation summary
-        has_browser_evaluation = isinstance(raw_eval_summary, dict) or isinstance(raw_tc_results, list)
-        eval_dict = raw_eval_summary if isinstance(raw_eval_summary, dict) else {}
-        tc_items = raw_tc_results if isinstance(raw_tc_results, list) else []
-
-        valid_verdicts = set(CodeSubmission.Verdict.values)
-        raw_verdict = str(eval_dict.get("verdict") or eval_dict.get("overall_status") or "").strip().upper()
-
-        if has_browser_evaluation:
-            verdict = raw_verdict if raw_verdict in valid_verdicts else CodeSubmission.Verdict.PENDING
-            review_status = CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED
-
-            # Strict server-side score bound enforcement: never allow client-submitted score to exceed max_marks or go < 0
-            try:
-                client_raw_score = float(eval_dict.get("score_awarded", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                client_raw_score = 0.0
-            validated_score = round(min(max(0.0, client_raw_score), max_marks), 2)
-            score_clamped = client_raw_score > max_marks or client_raw_score < 0.0
-
-            try:
-                total_cases = max(0, int(eval_dict.get("total_test_cases", len(tc_items)) or 0))
-            except (TypeError, ValueError):
-                total_cases = len(tc_items)
-            try:
-                passed_cases = max(0, min(total_cases or len(tc_items), int(eval_dict.get("passed_count", 0) or 0)))
-            except (TypeError, ValueError):
-                passed_cases = 0
-            try:
-                exec_ms = max(0.0, float(eval_dict.get("execution_time_ms", 0.0) or 0.0))
-            except (TypeError, ValueError):
-                exec_ms = 0.0
-
-            compile_out = str(eval_dict.get("compilation_errors") or "")[:4000]
-            sanitized_eval_summary = {
-                "total_test_cases": total_cases,
-                "passed_count": passed_cases,
-                "failed_count": max(0, total_cases - passed_cases),
-                "score_awarded": validated_score,
-                "client_submitted_score_raw": client_raw_score,
-                "score_clamped": score_clamped,
-                "max_marks": max_marks,
-                "comparison_mode": str(eval_dict.get("comparison_mode") or "TRIMMED")[:32],
-                "verdict": verdict,
-                "execution_time_ms": exec_ms,
-                "engine_version": engine_version or str(eval_dict.get("engine_version") or "browser-wasm-v1")[:80],
-                "untrusted_browser_evaluation": True,
-                "is_authoritative": False,
-                "security_note": "Candidate-controlled browsers can manipulate local execution and evaluation results.",
-                "recorded_at": timezone.now().isoformat(),
-            }
-            if not engine_version:
-                engine_version = sanitized_eval_summary["engine_version"]
-        else:
-            verdict = CodeSubmission.Verdict.PENDING
-            review_status = CodeSubmission.ReviewStatus.PENDING_REVIEW
-            validated_score = 0.0
-            total_cases = 0
-            passed_cases = 0
-            exec_ms = 0.0
-            compile_out = ""
-            sanitized_eval_summary = {}
-
-        # Lookup existing test case objects for safe relational linking without leaking hidden test details back
-        tc_by_id = {str(tc.id): tc for tc in prog_q.test_cases.all()}
-        public_ids = {
-            str(tc.get("id"))
-            for tc in ((snapshot.programming_data or {}).get("test_cases", []) if snapshot else [])
-            if tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE"
-        } or {str(tc.id) for tc in prog_q.test_cases.filter(is_public=True)}
-
         with transaction.atomic():
-            seq_num = CodeSubmission.objects.filter(attempt=attempt, programming_question=prog_q).count() + 1
+            attempt = (
+                AssessmentAttempt.objects.select_for_update()
+                .filter(id=attempt_id)
+                .first()
+            )
+            if not attempt:
+                return Response({"detail": "Assessment attempt not found."}, status=status.HTTP_404_NOT_FOUND)
+            if not verify_attempt_ownership(request, attempt):
+                return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
+            if attempt.state in AssessmentAttempt.TERMINAL_STATES:
+                return Response({"detail": f"Attempt is {attempt.state}; code submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+            if attempt.is_expired():
+                return Response({"detail": "Assessment time has expired. Submission is no longer permitted."}, status=status.HTTP_403_FORBIDDEN)
+
+            # Validate question belongs to this attempt
+            snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
+            has_legacy_question = bool(
+                not attempt.question_snapshots.exists()
+                and attempt.assessment_id
+                and attempt.assessment.questions.filter(id=question_id).exists()
+            )
+            if not snapshot and not has_legacy_question:
+                return Response(
+                    {"detail": f"Question ID {question_id} does not belong to attempt {attempt.id}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
+            is_coding_snapshot = bool(
+                snapshot
+                and (
+                    (snapshot.section_type or "").strip().upper() == "CODING"
+                    or bool(snapshot.programming_data)
+                )
+            )
+            is_coding_question_bank = bool(
+                prog_q
+                or (snapshot and snapshot.question and snapshot.question.section_type == QuestionBank.SectionType.CODING)
+                or QuestionBank.objects.filter(id=question_id, section_type=QuestionBank.SectionType.CODING).exists()
+            )
+            if not (is_coding_snapshot or is_coding_question_bank) or not prog_q:
+                return Response(
+                    {"detail": "The specified question is not a coding problem or lacks programming configuration."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            allowed_languages = (
+                snapshot.programming_data.get("allowed_languages")
+                if (snapshot and snapshot.programming_data)
+                else (prog_q.allowed_languages if prog_q else ["python", "java"])
+            )
+            normalized_allowed = [self._normalize_lang(l) for l in (allowed_languages or [])]
+            if normalized_allowed and language not in normalized_allowed:
+                return Response(
+                    {"detail": f"Language '{language}' is not permitted for this problem. Allowed languages: {', '.join(allowed_languages)}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Determine question max marks from frozen allocation or QuestionBank
+            max_marks = float(getattr(prog_q.question, "marks", 1) or 1)
+            if attempt.assessment_id:
+                sec_code = (snapshot.section_type if snapshot else "CODING") or "CODING"
+                alloc = attempt.assessment.section_allocations.filter(section__code__iexact=sec_code).first()
+                if alloc and alloc.marks_per_question:
+                    max_marks = float(alloc.marks_per_question)
+
+            # Sanitize optional browser execution metadata and explicitly mark untrusted
+            sanitized_meta = {}
+            if isinstance(raw_browser_meta, dict):
+                for key in (
+                    "runtime_name",
+                    "runtime_version",
+                    "browser_status",
+                    "public_samples_attempted",
+                    "public_samples_passed",
+                    "execution_time_ms",
+                ):
+                    if key in raw_browser_meta:
+                        sanitized_meta[key] = raw_browser_meta[key]
+            if sanitized_meta or isinstance(raw_browser_meta, dict):
+                sanitized_meta["is_authoritative"] = False
+                sanitized_meta["is_verified"] = False
+                sanitized_meta["untrusted_telemetry"] = True
+                sanitized_meta["recorded_at"] = timezone.now().isoformat()
+
+            # Determine whether client supplied a browser-side automatic evaluation summary
+            has_browser_evaluation = isinstance(raw_eval_summary, dict) or isinstance(raw_tc_results, list)
+            eval_dict = raw_eval_summary if isinstance(raw_eval_summary, dict) else {}
+            tc_items = raw_tc_results if isinstance(raw_tc_results, list) else []
+
+            valid_verdicts = set(CodeSubmission.Verdict.values)
+            raw_verdict = str(eval_dict.get("verdict") or eval_dict.get("overall_status") or "").strip().upper()
+
+            if has_browser_evaluation:
+                verdict = raw_verdict if raw_verdict in valid_verdicts else CodeSubmission.Verdict.PENDING
+                review_status = CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED
+
+                # Strict server-side score bound enforcement: never allow client-submitted score to exceed max_marks or go < 0
+                try:
+                    client_raw_score = float(eval_dict.get("score_awarded", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    client_raw_score = 0.0
+                if client_raw_score != client_raw_score:  # NaN guard
+                    client_raw_score = 0.0
+                validated_score = round(min(max(0.0, client_raw_score), max_marks), 2)
+                score_clamped = client_raw_score > max_marks or client_raw_score < 0.0
+
+                try:
+                    total_cases = max(0, min(500, int(eval_dict.get("total_test_cases", len(tc_items)) or 0)))
+                except (TypeError, ValueError):
+                    total_cases = len(tc_items)
+                try:
+                    passed_cases = max(0, min(total_cases or len(tc_items), int(eval_dict.get("passed_count", 0) or 0)))
+                except (TypeError, ValueError):
+                    passed_cases = 0
+                try:
+                    exec_ms = max(0.0, float(eval_dict.get("execution_time_ms", 0.0) or 0.0))
+                except (TypeError, ValueError):
+                    exec_ms = 0.0
+
+                compile_out = str(eval_dict.get("compilation_errors") or "")[:4000]
+                sanitized_eval_summary = {
+                    "total_test_cases": total_cases,
+                    "passed_count": passed_cases,
+                    "failed_count": max(0, total_cases - passed_cases),
+                    "score_awarded": validated_score,
+                    "client_submitted_score_raw": client_raw_score,
+                    "score_clamped": score_clamped,
+                    "max_marks": max_marks,
+                    "comparison_mode": str(eval_dict.get("comparison_mode") or "TRIMMED")[:32],
+                    "verdict": verdict,
+                    "execution_time_ms": exec_ms,
+                    "engine_version": engine_version or str(eval_dict.get("engine_version") or "browser-wasm-v1")[:80],
+                    "untrusted_browser_evaluation": True,
+                    "is_authoritative": False,
+                    "security_note": "Candidate-controlled browsers can manipulate local execution and evaluation results.",
+                    "recorded_at": timezone.now().isoformat(),
+                }
+                if not engine_version:
+                    engine_version = sanitized_eval_summary["engine_version"]
+            else:
+                verdict = CodeSubmission.Verdict.PENDING
+                review_status = CodeSubmission.ReviewStatus.PENDING_REVIEW
+                validated_score = 0.0
+                total_cases = 0
+                passed_cases = 0
+                exec_ms = 0.0
+                compile_out = ""
+                sanitized_eval_summary = {}
+
+            # Lookup existing test case objects for safe relational linking without leaking hidden test details back
+            tc_by_id = {str(tc.id): tc for tc in prog_q.test_cases.all()}
+            public_ids = {
+                str(tc.get("id"))
+                for tc in ((snapshot.programming_data or {}).get("test_cases", []) if snapshot else [])
+                if tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE"
+            } or {str(tc.id) for tc in prog_q.test_cases.filter(is_public=True)}
+
+            max_seq = (
+                CodeSubmission.objects.filter(attempt=attempt, programming_question=prog_q)
+                .aggregate(max_seq=Max("submission_sequence"))
+                .get("max_seq")
+                or 0
+            )
+            seq_num = max_seq + 1
             submission = CodeSubmission.objects.create(
                 attempt=attempt,
                 candidate=candidate,
@@ -2442,6 +2472,7 @@ class CandidateLoginView(APIView):
     or previous attempt state with a valid assessment token.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [CandidateRecoveryThrottle]
 
     def post(self, request):
         identifier = (
@@ -3003,37 +3034,121 @@ class ProctoringEvidenceUploadView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, session_id):
+        import base64
+        import io
+        import json
+        from PIL import Image, UnidentifiedImageError
+
         session = get_object_or_404(ProctoringSession, id=session_id)
         auth_error = _authorize_proctoring_attempt(request, session.assessment_session)
         if auth_error is not None:
             return auth_error
 
+        MAX_EVIDENCE_BYTES = 2 * 1024 * 1024  # 2 MB
+        MAX_BASE64_CHARS = 3 * 1024 * 1024    # ~3 MB base64 cap before decoding
+        ALLOWED_IMAGE_FORMATS = {
+            "JPEG": ("jpg", "image/jpeg"),
+            "PNG": ("png", "image/png"),
+            "WEBP": ("webp", "image/webp"),
+        }
+
         raw_bytes = None
         if "frame" in request.FILES:
-            raw_bytes = request.FILES["frame"].read()
+            upload_obj = request.FILES["frame"]
+            if getattr(upload_obj, "size", 0) and upload_obj.size > MAX_EVIDENCE_BYTES:
+                return Response(
+                    {"detail": "Image frame exceeds the 2MB maximum evidence size limit."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            raw_bytes = upload_obj.read(MAX_EVIDENCE_BYTES + 1)
         elif "frame_base64" in request.data:
-            import base64
-            b64_str = request.data["frame_base64"]
+            b64_str = request.data.get("frame_base64")
+            if not isinstance(b64_str, str):
+                return Response({"detail": "Invalid base64 frame format."}, status=status.HTTP_400_BAD_REQUEST)
             if "," in b64_str:
                 b64_str = b64_str.split(",", 1)[1]
+            if len(b64_str) > MAX_BASE64_CHARS:
+                return Response(
+                    {"detail": "Encoded image frame exceeds the 2MB maximum evidence size limit."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
-                raw_bytes = base64.b64decode(b64_str)
+                raw_bytes = base64.b64decode(b64_str, validate=True)
             except Exception:
                 return Response({"detail": "Invalid base64 frame encoding."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not raw_bytes:
             return Response({"detail": "No image frame provided."}, status=status.HTTP_400_BAD_REQUEST)
 
-        evidence_type = request.data.get("evidence_type", ProctoringEvidence.EvidenceType.WEBCAM_SNAPSHOT)
+        if len(raw_bytes) > MAX_EVIDENCE_BYTES:
+            return Response(
+                {"detail": "Decoded image frame exceeds the 2MB maximum evidence size limit."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Decode and validate real raster image (prevents arbitrary binary / SVG / XSS / bomb uploads)
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as img:
+                img_format = (img.format or "").upper()
+                width, height = img.size
+                img.verify()
+        except (UnidentifiedImageError, Exception):
+            return Response(
+                {"detail": "Uploaded frame is not a valid supported image (JPEG, PNG, or WEBP required)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if img_format not in ALLOWED_IMAGE_FORMATS:
+            return Response(
+                {"detail": f"Unsupported image format '{img_format}'. Allowed formats: JPEG, PNG, WEBP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if width < 1 or height < 1 or width > 3840 or height > 2160:
+            return Response(
+                {"detail": f"Image dimensions {width}x{height} exceed allowed bounds (max 3840x2160)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        file_ext, mime_type = ALLOWED_IMAGE_FORMATS[img_format]
+
+        evidence_type = str(
+            request.data.get("evidence_type") or ProctoringEvidence.EvidenceType.WEBCAM_SNAPSHOT
+        ).strip().upper()
+        if evidence_type not in set(ProctoringEvidence.EvidenceType.values):
+            return Response(
+                {"detail": f"Invalid evidence_type '{evidence_type}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         related_event_id = request.data.get("related_event_id")
         related_event = None
         if related_event_id:
-            related_event = session.events.filter(id=related_event_id).first()
+            try:
+                related_event = session.events.filter(id=related_event_id).first()
+            except Exception:
+                related_event = None
+
+        raw_meta = request.data.get("metadata", {})
+        if isinstance(raw_meta, str):
+            try:
+                raw_meta = json.loads(raw_meta)
+            except Exception:
+                raw_meta = {}
+        if not isinstance(raw_meta, dict):
+            raw_meta = {}
+        if len(json.dumps(raw_meta)) > 16_384:
+            return Response(
+                {"detail": "Evidence metadata exceeds maximum 16KB size limit."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         saved = ProctoringEvidenceStorageService.save_snapshot(
             session_id=session.id,
             raw_bytes=raw_bytes,
             filename_prefix=evidence_type.lower(),
+            file_extension=file_ext,
+            content_type=mime_type,
         )
 
         evidence = ProctoringEvidence.objects.create(
@@ -3042,7 +3157,13 @@ class ProctoringEvidenceUploadView(APIView):
             evidence_type=evidence_type,
             storage_path=saved["storage_path"],
             storage_type=saved["storage_type"],
-            metadata=request.data.get("metadata", {}),
+            metadata={
+                **raw_meta,
+                "validated_format": img_format,
+                "width": width,
+                "height": height,
+                "size_bytes": len(raw_bytes),
+            },
         )
 
         return Response({

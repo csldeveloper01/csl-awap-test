@@ -172,17 +172,21 @@ export function AssessmentInstructionsPage() {
     setLoading(true);
 
     try {
-      // 1. Request browser fullscreen on this explicit user gesture
+      // 1. Request browser fullscreen on this explicit user gesture (bounded so sandboxed webviews cannot deadlock)
       if (!document.fullscreenElement) {
         try {
           const docEl = document.documentElement as any;
-          if (docEl.requestFullscreen) {
-            await docEl.requestFullscreen();
-          } else if (docEl.webkitRequestFullscreen) {
-            await docEl.webkitRequestFullscreen();
-          } else if (docEl.msRequestFullscreen) {
-            await docEl.msRequestFullscreen();
-          }
+          const fsPromise = docEl.requestFullscreen
+            ? docEl.requestFullscreen()
+            : docEl.webkitRequestFullscreen
+              ? docEl.webkitRequestFullscreen()
+              : docEl.msRequestFullscreen
+                ? docEl.msRequestFullscreen()
+                : Promise.resolve();
+          await Promise.race([
+            Promise.resolve(fsPromise),
+            new Promise<void>((resolve) => window.setTimeout(resolve, 1200)),
+          ]);
         } catch (fsErr) {
           console.warn('Initial requestFullscreen was delayed or restricted by browser:', fsErr);
         }

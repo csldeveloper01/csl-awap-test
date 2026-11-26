@@ -101,14 +101,22 @@ def get_authorized_candidate(request):
 
 def verify_attempt_ownership(request, attempt: AssessmentAttempt, allow_staff: bool = False):
     """
-    Verifies that the request's authenticated candidate owns the given attempt.
+    Verifies that the request's authenticated candidate owns the given attempt AND,
+    when the token is bound to a specific attempt_id, that it matches the target attempt.
     Staff bypass is disabled by default so admins are never silently treated as candidate
     subjects on active exam or Sentinel proctoring endpoints. Read-only admin views that
     intentionally share a candidate route must pass allow_staff=True explicitly.
     """
     candidate = get_authorized_candidate(request)
     if candidate:
-        return str(attempt.candidate_id) == str(candidate.id)
+        if str(attempt.candidate_id) != str(candidate.id):
+            return False
+        bound_attempt_id = getattr(request, "authenticated_attempt_id", None)
+        if bound_attempt_id is not None:
+            bound_str = str(bound_attempt_id).strip()
+            if bound_str and bound_str != "None" and bound_str != str(attempt.id):
+                return False
+        return True
 
     if allow_staff:
         user = getattr(request, "user", None)

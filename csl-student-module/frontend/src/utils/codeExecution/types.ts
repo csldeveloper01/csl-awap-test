@@ -24,6 +24,14 @@ export interface BrowserExecutionRequest {
   onRuntimeStateChange?: (state: BrowserRuntimeState, detail?: string) => void;
 }
 
+export interface BrowserPhaseTimings {
+  initMs?: number;
+  compileMs?: number;
+  generateMs?: number;
+  executionMs?: number;
+  totalMs?: number;
+}
+
 export interface BrowserExecutionResult {
   status: BrowserExecutionStatus;
   stdout: string;
@@ -31,6 +39,7 @@ export interface BrowserExecutionResult {
   compilationErrors: string;
   runtimeErrors: string;
   executionTimeMs: number;
+  phaseTimings?: BrowserPhaseTimings;
   truncated?: boolean;
   unsupportedReason?: string;
 }

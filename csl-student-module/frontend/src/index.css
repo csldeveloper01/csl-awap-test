@@ -386,28 +386,29 @@ html.dark textarea {
   }
 }
 
-/* Global Circular Theme Ripple & Motion Controls */
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
+/* Global Circular Theme Ripple & Motion Controls (RAISE Centre Spec) */
+.csl-dark-transition,
+[data-csl-animations="enabled"] .csl-card {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
-::view-transition-new(root) {
-  z-index: 9999;
-}
-
-[data-csl-animations="enabled"]::view-transition-new(root) {
-  animation: csl-theme-ripple 600ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes csl-theme-ripple {
-  from {
-    clip-path: circle(0px at var(--csl-ripple-x, 98%) var(--csl-ripple-y, 28px));
+@keyframes csl-circle-move {
+  0% {
+    transform: scale(1) rotate(0deg);
+    opacity: 0.8;
   }
-  to {
-    clip-path: circle(var(--csl-ripple-r, 150vmax) at var(--csl-ripple-x, 98%) var(--csl-ripple-y, 28px));
+  50% {
+    transform: scale(0.75) rotate(180deg);
+    opacity: 1;
   }
+  100% {
+    transform: scale(1) rotate(360deg);
+    opacity: 0.8;
+  }
+}
+
+[data-csl-animations="enabled"] .csl-theme-btn-animate {
+  animation: csl-circle-move 0.6s ease-in-out;
 }
 
 /* Sweeping Skeleton Shimmer + Static Fallback */

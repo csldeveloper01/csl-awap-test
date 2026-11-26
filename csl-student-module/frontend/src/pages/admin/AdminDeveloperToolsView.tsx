@@ -92,6 +92,11 @@ export const AdminDeveloperToolsView: React.FC<AdminDeveloperToolsViewProps> = (
     }
   }, [terminalEntries, autoScroll]);
 
+  useEffect(() => {
+    if (!isAuthorizedAdmin) return;
+    adapterRef.current?.warmup(language, (st, detail) => updateRuntimeStatus(language, st, detail));
+  }, [isAuthorizedAdmin, language]);
+
   const activeCode = drafts[language];
   const pySupported = useMemo(() => adapterRef.current?.isBrowserExecutionSupported('python') ?? false, []);
   const javaSupported = useMemo(() => adapterRef.current?.isBrowserExecutionSupported('java') ?? false, []);
@@ -149,12 +154,15 @@ export const AdminDeveloperToolsView: React.FC<AdminDeveloperToolsViewProps> = (
   };
 
   const handleResetEditor = () => {
-    setDrafts((prev) => ({ ...prev, [language]: TEMPLATES[language].code }));
+    const nextCode = TEMPLATES[language].code;
+    setDrafts((prev) => ({ ...prev, [language]: nextCode }));
     setStdin(TEMPLATES[language].stdin);
+    editorRef.current?.setValue?.(nextCode);
   };
 
   const handleClearEditor = () => {
     setDrafts((prev) => ({ ...prev, [language]: '' }));
+    editorRef.current?.setValue?.('');
   };
 
   const handleRunCode = async (override?: { code?: string; lang?: 'python' | 'java'; input?: string; label?: string; customTimeoutMs?: number }) => {
