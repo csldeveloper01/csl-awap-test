@@ -29,6 +29,8 @@ import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
 import { ImportCodingJsonModal } from './ImportCodingJsonModal';
 import { formatApiError } from '../../utils/errorFormatter';
 import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader } from '../../components/ui';
 
 interface AdminQuestionPoolsViewProps {
   onCreateQuestion?: () => void;
@@ -703,111 +705,69 @@ export function AdminQuestionPoolsView({
   const mcqPoolsOnly = pools.filter((p) => p.question_type === 'MCQ');
 
   return (
-    <div style={{ maxWidth: '1220px', fontFamily: tokens.fontFamily, color: tokens.textPrimary }}>
-      {/* Header */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: '16px',
-          flexWrap: 'wrap',
-          marginBottom: '20px',
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: '26px', fontWeight: 800, color: tokens.textPrimary, margin: 0, letterSpacing: '-0.02em' }}>
-            Question Pools
-          </h1>
-          <p style={{ fontSize: '13px', color: tokens.textSecondary, margin: '4px 0 0 0' }}>
-            Curate strictly typed MCQ and Coding pools, enforce format boundaries, and link pools to assessments.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          {onViewCentralBank && (
+    <PageContainer>
+      <SectionHeader
+        title="Question Pools"
+        description="Curate strictly typed MCQ and Coding pools, enforce format boundaries, and link pools to assessments."
+        actions={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            {onViewCentralBank && (
+              <button
+                type="button"
+                onClick={onViewCentralBank}
+                className="csl-btn-secondary"
+                style={{ color: tokens.cslBlueSoftText, borderColor: tokens.cslBlueSoftBorder }}
+              >
+                Global Question Bank →
+              </button>
+            )}
             <button
               type="button"
-              onClick={onViewCentralBank}
+              data-testid="pools-create-mcq-btn"
+              onClick={() => {
+                if (onCreateMcqQuestion) onCreateMcqQuestion();
+                else setStandaloneQuestionModal('MCQ');
+              }}
+              className="csl-btn-secondary"
+            >
+              + Create MCQ
+            </button>
+            <button
+              type="button"
+              data-testid="pools-create-coding-btn"
+              onClick={() => {
+                if (onCreateCodingQuestion) onCreateCodingQuestion();
+                else setStandaloneQuestionModal('CODING');
+              }}
               style={{
                 padding: '8px 14px',
-                backgroundColor: tokens.surfaceCard,
-                color: tokens.cslBlueSoftText,
-                border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                backgroundColor: tokens.codingBg,
+                color: tokens.codingText,
+                border: `1px solid ${tokens.codingBorder}`,
                 borderRadius: '8px',
-                fontSize: '12.5px',
-                fontWeight: 700,
+                fontSize: '13px',
+                fontWeight: 600,
                 cursor: 'pointer',
               }}
             >
-              Global Question Bank →
+              &lt;/&gt; + Create Coding
             </button>
-          )}
-          <button
-            type="button"
-            data-testid="pools-create-mcq-btn"
-            onClick={() => {
-              if (onCreateMcqQuestion) onCreateMcqQuestion();
-              else setStandaloneQuestionModal('MCQ');
-            }}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: tokens.surfaceCard,
-              color: tokens.textPrimary,
-              border: `1px solid ${tokens.borderStrong}`,
-              borderRadius: '8px',
-              fontSize: '12.5px',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            + Create MCQ
-          </button>
-          <button
-            type="button"
-            data-testid="pools-create-coding-btn"
-            onClick={() => {
-              if (onCreateCodingQuestion) onCreateCodingQuestion();
-              else setStandaloneQuestionModal('CODING');
-            }}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: tokens.codingBg,
-              color: tokens.codingText,
-              border: `1px solid ${tokens.codingBorder}`,
-              borderRadius: '8px',
-              fontSize: '12.5px',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            &lt;/&gt; + Create Coding
-          </button>
-          <button
-            type="button"
-            data-testid="create-pool-btn"
-            onClick={handleOpenCreateModal}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: tokens.cslBlue,
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '12.5px',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            + Create Pool
-          </button>
-        </div>
-      </div>
+            <button
+              type="button"
+              data-testid="create-pool-btn"
+              onClick={handleOpenCreateModal}
+              className="csl-btn-primary"
+            >
+              + Create Pool
+            </button>
+          </div>
+        }
+      />
 
       {/* Feedback Banners */}
       {toastMsg && (
         <div
           style={{
-            marginBottom: '16px',
             padding: '10px 14px',
             borderRadius: '8px',
             backgroundColor: tokens.successBg,
@@ -827,7 +787,6 @@ export function AdminQuestionPoolsView({
       {error && (
         <div
           style={{
-            marginBottom: '16px',
             padding: '10px 14px',
             borderRadius: '8px',
             backgroundColor: tokens.dangerBg,
@@ -849,35 +808,13 @@ export function AdminQuestionPoolsView({
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-          gap: '14px',
-          marginBottom: '20px',
+          gap: '16px',
         }}
       >
-        {[
-          { label: 'Total Pools', value: totalPoolsCount, accent: tokens.cslBlue },
-          { label: 'MCQ Pools', value: mcqPoolsCount, accent: '#0EA5E9' },
-          { label: 'Coding Pools', value: codingPoolsCount, accent: '#7C3AED' },
-          { label: 'Needs Classification / Empty', value: attentionCount, accent: tokens.cslYellow },
-        ].map((metric) => (
-          <div
-            key={metric.label}
-            style={{
-              backgroundColor: tokens.surfaceCard,
-              borderRight: `1px solid ${tokens.border}`,
-              borderBottom: `1px solid ${tokens.border}`,
-              borderLeft: `1px solid ${tokens.border}`,
-              borderTop: `3px solid ${metric.accent}`,
-              borderRadius: '12px',
-              padding: '16px 18px',
-              boxShadow: tokens.cardShadow,
-            }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 600, color: tokens.textSecondary }}>{metric.label}</div>
-            <div style={{ fontSize: '26px', fontWeight: 800, color: tokens.textPrimary, marginTop: '4px' }}>
-              {metric.value}
-            </div>
-          </div>
-        ))}
+        <OdometerCard label="Total Pools" value={totalPoolsCount} subtitle="All curated pools" />
+        <OdometerCard label="MCQ Pools" value={mcqPoolsCount} subtitle="Objective aptitude & core" accent="blue" />
+        <OdometerCard label="Coding Pools" value={codingPoolsCount} subtitle="Programming challenges" accent="indigo" />
+        <OdometerCard label="Needs Attention" value={attentionCount} subtitle="Empty or unclassified" accent="amber" />
       </div>
 
       {/* Filter Toolbar */}
@@ -2764,6 +2701,6 @@ export function AdminQuestionPoolsView({
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -1,13 +1,31 @@
 import { useState, useEffect } from 'react';
 import { getAdminStats, type AdminStats } from '../../api/admin';
-import { OdometerCard } from '../../components/admin/OdometerCard';
-import { MetricCardSkeleton } from '../../components/admin/SkeletonLoaders';
+import { useAdminTheme } from '../../utils/adminTheme';
+import {
+  PageContainer,
+  SectionHeader,
+  MetricCard,
+  ProgressBar,
+  StatusBadge,
+  InformationPanel,
+} from '../../components/ui';
+import { MetricGridSkeleton } from '../../components/admin/SkeletonLoaders';
+import {
+  AssessmentsIcon,
+  CollegesIcon,
+  LiveSessionsIcon,
+  QuestionBankIcon,
+  IntegrityIcon,
+  PlusIcon,
+  DrivesIcon,
+} from '../../components/common/Icons';
 
 interface AdminOverviewViewProps {
   onNavigateTab: (tab: string) => void;
 }
 
 export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
+  const { tokens } = useAdminTheme();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
@@ -31,299 +49,473 @@ export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
 
   if (loading) {
     return (
-      <div style={{ maxWidth: '1080px' }}>
-        <h1
-          style={{
-            fontSize: '44px',
-            fontWeight: 900,
-            color: '#0F172A',
-            margin: '0 0 28px 0',
-            letterSpacing: '-0.03em',
-            lineHeight: 1.1,
-          }}
-        >
-          Welcome<br />Admin
-        </h1>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '16px',
-            marginBottom: '32px',
-          }}
-        >
-          {Array.from({ length: 8 }).map((_, idx) => (
-            <MetricCardSkeleton key={idx} />
-          ))}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
-          <div style={{ height: '180px', backgroundColor: '#E2E8F0', borderRadius: '24px', opacity: 0.6 }} className="animate-pulse" />
-          <div style={{ height: '180px', backgroundColor: '#E2E8F0', borderRadius: '24px', opacity: 0.6 }} className="animate-pulse" />
-        </div>
-      </div>
+      <PageContainer>
+        <SectionHeader
+          title="Overview"
+          description="Monitor and manage your assessment operations."
+        />
+        <MetricGridSkeleton count={8} />
+      </PageContainer>
     );
   }
 
   if (error || !stats) {
     return (
-      <div
-        style={{
-          padding: '24px',
-          backgroundColor: '#FEF2F2',
-          border: '1px solid #FECACA',
-          borderRadius: '16px',
-          color: '#991B1B',
-          maxWidth: '560px',
-        }}
-      >
-        <div style={{ fontWeight: 800, marginBottom: '6px' }}>Database Error</div>
-        <div style={{ fontSize: '13px', marginBottom: '12px' }}>{error}</div>
-        <button
-          onClick={loadStats}
-          style={{
-            padding: '8px 16px',
-            backgroundColor: '#0D52D6',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          Retry
-        </button>
-      </div>
+      <PageContainer maxWidth="680px">
+        <InformationPanel
+          tone="danger"
+          title="Unable to Load Administrative Metrics"
+          description={error || 'The administrative telemetry endpoint did not respond.'}
+          actions={
+            <button type="button" onClick={loadStats} className="csl-btn-primary">
+              Retry
+            </button>
+          }
+        />
+      </PageContainer>
     );
   }
 
-  return (
-    <div style={{ maxWidth: '1080px' }}>
-      {/* Page Title (Mockup 4) */}
-      <h1
-        style={{
-          fontSize: '44px',
-          fontWeight: 900,
-          color: '#0F172A',
-          margin: '0 0 28px 0',
-          letterSpacing: '-0.03em',
-          lineHeight: 1.1,
-        }}
-      >
-        Welcome<br />Admin
-      </h1>
+  const totalAttempts = stats.attempts_count || 0;
+  const submittedCount = stats.submitted_count || 0;
+  const completionRate = totalAttempts > 0 ? Math.round((submittedCount / totalAttempts) * 1000) / 10 : 0;
+  const totalQuestions = stats.total_questions_count || 0;
+  const unassignedQuestions = stats.unassigned_questions_count || 0;
+  const assignedPct =
+    totalQuestions > 0 ? Math.max(0, Math.round(((totalQuestions - unassignedQuestions) / totalQuestions) * 100)) : 100;
+  const bankHealthText =
+    stats.question_bank_health?.overall_status ||
+    (unassignedQuestions > 0 ? 'Unassigned Items' : 'OK');
+  const flaggedCount = stats.flagged_count || 0;
 
-      {/* 8 Odometer Counters in 4x2 Grid (Mockup 4) */}
-      <div
+  return (
+    <PageContainer>
+      <SectionHeader
+        title="Overview"
+        description="Monitor and manage your assessment operations across drives, candidates, and Sentinel proctoring."
+        actions={
+          <button
+            type="button"
+            onClick={() => onNavigateTab('assessments')}
+            className="csl-btn-primary"
+          >
+            <PlusIcon size={16} color={tokens.onPrimary} />
+            <span>Create Assessment</span>
+          </button>
+        }
+      />
+
+      {/* Primary 4 Metrics Row */}
+      <section
+        aria-label="Primary metrics"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
           gap: '16px',
-          marginBottom: '32px',
         }}
       >
-        {/* Row 1 */}
-        <OdometerCard
-          label="Colleges"
+        <MetricCard
+          label="Total Assessments"
+          value={stats.assessments_count || 0}
+          subtitle={`${stats.open_assessments_count || 0} open now`}
+          subtitleTone="primary"
+          icon={<AssessmentsIcon size={18} />}
+          onClick={() => onNavigateTab('assessments')}
+        />
+        <MetricCard
+          label="Submitted Attempts"
+          value={submittedCount}
+          subtitle={`${completionRate}% completion rate`}
+          subtitleTone="success"
+          icon={<AssessmentsIcon size={18} />}
+          onClick={() => onNavigateTab('results')}
+        />
+        <MetricCard
+          label="Active Sessions"
+          value={stats.in_progress_count || 0}
+          valueTone={stats.in_progress_count > 0 ? 'primary' : 'default'}
+          subtitle={`${totalAttempts} total sessions recorded`}
+          icon={<LiveSessionsIcon size={18} />}
+          onClick={() => onNavigateTab('live')}
+        />
+        <MetricCard
+          label="Participating Colleges"
           value={stats.colleges_count || 0}
+          subtitle="Verified institutions"
+          icon={<CollegesIcon size={18} />}
           onClick={() => onNavigateTab('colleges')}
         />
-        <OdometerCard
-          label="Assessments"
-          value={stats.assessments_count || 0}
-          onClick={() => onNavigateTab('assessments')}
-        />
-        <OdometerCard
-          label="Submitted"
-          value={stats.submitted_count || 0}
-          onClick={() => onNavigateTab('results')}
-        />
-        <OdometerCard
-          label="Sessions"
-          value={stats.attempts_count || 0}
-          onClick={() => onNavigateTab('live')}
-        />
+      </section>
 
-        {/* Row 2 */}
-        <OdometerCard
-          label="Active Assessments"
-          value={stats.open_assessments_count || 0}
-          onClick={() => onNavigateTab('assessments')}
-        />
-        <OdometerCard
-          label="In Progress"
-          value={stats.in_progress_count || 0}
-          onClick={() => onNavigateTab('live')}
-        />
-        <OdometerCard
-          label="Timed Out"
-          value={stats.timed_out_count || 0}
-          onClick={() => onNavigateTab('results')}
-        />
-        <OdometerCard
-          label="Flagged"
-          value={stats.flagged_count || 0}
-          onClick={() => onNavigateTab('integrity')}
-        />
-      </div>
-
-      {/* 2 Lower Highlight Cards (Mockup 4) */}
-      <div
+      {/* Secondary 4 Operational Counters */}
+      <section
+        aria-label="Operational metrics"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, 1fr)',
-          gap: '20px',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: '16px',
         }}
       >
-        {/* Left Card: Question Bank Balance & Health */}
-        <div
+        <MetricCard
+          label="Open Assessments"
+          value={stats.open_assessments_count || 0}
+          valueTone="primary"
+          onClick={() => onNavigateTab('assessments')}
+        />
+        <MetricCard
+          label="Question Pools"
+          value={stats.pools_count ?? 0}
+          subtitle={`${totalQuestions} total questions`}
+          onClick={() => onNavigateTab('questions')}
+        />
+        <MetricCard
+          label="Timed Out Attempts"
+          value={stats.timed_out_count || 0}
+          valueTone={stats.timed_out_count > 0 ? 'warning' : 'default'}
+          onClick={() => onNavigateTab('results')}
+        />
+        <MetricCard
+          label="Flagged Attempts"
+          value={flaggedCount}
+          valueTone={flaggedCount > 0 ? 'danger' : 'success'}
+          subtitle={flaggedCount > 0 ? 'Action required' : 'All clear'}
+          subtitleTone={flaggedCount > 0 ? 'danger' : 'success'}
+          onClick={() => onNavigateTab('integrity')}
+        />
+      </section>
+
+      {/* Lower Summary & Quick Actions Grid */}
+      <section
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '20px',
+          alignItems: 'stretch',
+        }}
+      >
+        {/* Card 1: Question Bank Balance & Health */}
+        <article
           style={{
-            backgroundColor: '#CBD5E1',
-            borderRadius: '24px',
-            padding: '20px 24px',
+            backgroundColor: tokens.surfaceCard,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: '10px',
+            padding: '22px',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
+            gap: '18px',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div>
-            <div style={{ fontSize: '16px', fontWeight: 900, color: '#0F172A', marginBottom: '14px' }}>
-              Question Bank Balance<br />& Health
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <QuestionBankIcon size={18} color={tokens.cslBlue} />
+                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: tokens.textPrimary }}>
+                  Question Bank &amp; Pools
+                </h2>
+              </div>
+              <StatusBadge
+                status={bankHealthText}
+                variant={
+                  bankHealthText.includes('Required') || unassignedQuestions > 0 ? 'warning' : 'success'
+                }
+              />
+            </header>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-              {/* Recessed Digital Display */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
               <div
                 style={{
-                  backgroundColor: '#94A3B8',
-                  borderRadius: '12px',
-                  padding: '6px 16px',
-                  minWidth: '70px',
-                  textAlign: 'center',
-                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
+                  backgroundColor: tokens.pageBg,
+                  border: `1px solid ${tokens.border}`,
+                  borderRadius: '8px',
+                  padding: '10px 12px',
                 }}
               >
-                <span style={{ fontSize: '36px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                  {String(stats.total_questions_count ?? 0).padStart(2, '0')}
-                </span>
+                <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Questions</div>
+                <div className="csl-tabular" style={{ fontSize: '20px', fontWeight: 600, marginTop: '2px' }}>
+                  {totalQuestions}
+                </div>
               </div>
-
-              {/* Status Pill */}
               <div
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '16px',
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 800,
-                  color: stats.question_bank_health?.overall_status?.includes('Required') || (stats.unassigned_questions_count && stats.unassigned_questions_count > 0) ? '#D97706' : '#16A34A',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                  backgroundColor: tokens.pageBg,
+                  border: `1px solid ${tokens.border}`,
+                  borderRadius: '8px',
+                  padding: '10px 12px',
                 }}
               >
-                Status: {stats.question_bank_health?.overall_status || (stats.unassigned_questions_count && stats.unassigned_questions_count > 0 ? 'Unassigned Items' : 'OK')}
+                <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Pools</div>
+                <div className="csl-tabular" style={{ fontSize: '20px', fontWeight: 600, marginTop: '2px' }}>
+                  {stats.pools_count ?? 0}
+                </div>
+              </div>
+              <div
+                style={{
+                  backgroundColor: tokens.pageBg,
+                  border: `1px solid ${tokens.border}`,
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                }}
+              >
+                <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Unassigned</div>
+                <div
+                  className="csl-tabular"
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    marginTop: '2px',
+                    color: unassignedQuestions > 0 ? tokens.warningText : tokens.textPrimary,
+                  }}
+                >
+                  {unassignedQuestions}
+                </div>
               </div>
             </div>
 
-            <div style={{ fontSize: '11px', color: '#475569', fontWeight: 600, marginBottom: '14px' }}>
-              Global Questions: {stats.total_questions_count ?? 0} | Pools: {stats.pools_count ?? 0} | Unassigned: {stats.unassigned_questions_count ?? 0}
-            </div>
+            <ProgressBar
+              label="Pool Allocation Coverage"
+              rightText={`${assignedPct}%`}
+              value={assignedPct}
+              tone={unassignedQuestions > 0 ? 'warning' : 'success'}
+            />
           </div>
 
-          <button
-            onClick={() => onNavigateTab('questions')}
+          <footer
             style={{
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '20px',
-              padding: '10px 20px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-              alignSelf: 'flex-start',
-              boxShadow: '0 2px 6px rgba(13, 82, 214, 0.3)',
-              transition: 'opacity 0.15s ease',
+              paddingTop: '14px',
+              borderTop: `1px solid ${tokens.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
           >
-            View Question Bank
-          </button>
-        </div>
+            <span style={{ fontSize: '12px', color: tokens.textSecondary }}>
+              Manage MCQ &amp; coding pools
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('questions')}
+              className="csl-btn-secondary"
+            >
+              Open Question Bank
+            </button>
+          </footer>
+        </article>
 
-        {/* Right Card: Integrity Enforcement Audit Trail */}
-        <div
+        {/* Card 2: Integrity Enforcement Audit Trail */}
+        <article
           style={{
-            backgroundColor: '#CBD5E1',
-            borderRadius: '24px',
-            padding: '20px 24px',
+            backgroundColor: tokens.surfaceCard,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: '10px',
+            padding: '22px',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
+            gap: '18px',
+            boxShadow: tokens.cardShadow,
           }}
         >
-          <div>
-            <div style={{ fontSize: '16px', fontWeight: 900, color: '#0F172A', marginBottom: '14px' }}>
-              Integrity Enforcement<br />Audit Trail
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <IntegrityIcon size={18} color={flaggedCount > 0 ? tokens.danger : tokens.success} />
+                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: tokens.textPrimary }}>
+                  Integrity &amp; Sentinel
+                </h2>
+              </div>
+              <StatusBadge
+                status={flaggedCount > 0 ? 'Action Required' : 'Sentinel Active'}
+                variant={flaggedCount > 0 ? 'danger' : 'success'}
+                dot
+              />
+            </header>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-              {/* Recessed Digital Display */}
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div
                 style={{
-                  backgroundColor: '#94A3B8',
-                  borderRadius: '12px',
-                  padding: '6px 16px',
-                  minWidth: '70px',
-                  textAlign: 'center',
-                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '10px 0',
+                  borderBottom: `1px solid ${tokens.border}`,
                 }}
               >
-                <span style={{ fontSize: '36px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                  {String(stats.flagged_count ?? 0).padStart(2, '0')}
+                <span style={{ fontSize: '13.5px', color: tokens.textSecondary }}>Flagged Attempts</span>
+                <span
+                  className="csl-tabular"
+                  style={{
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: flaggedCount > 0 ? tokens.danger : tokens.textPrimary,
+                  }}
+                >
+                  {flaggedCount}
                 </span>
               </div>
-
-              {/* Status Pill */}
               <div
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '16px',
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 800,
-                  color: stats.flagged_count > 0 ? '#DC2626' : '#16A34A',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '10px 0',
+                  borderBottom: `1px solid ${tokens.border}`,
                 }}
               >
-                {stats.flagged_count > 0 ? 'Status: Action Required!' : 'Status: OK'}
+                <span style={{ fontSize: '13.5px', color: tokens.textSecondary }}>In-Progress Sessions</span>
+                <span className="csl-tabular" style={{ fontSize: '16px', fontWeight: 600 }}>
+                  {stats.in_progress_count || 0}
+                </span>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '10px 0',
+                }}
+              >
+                <span style={{ fontSize: '13.5px', color: tokens.textSecondary }}>Completion Rate</span>
+                <span className="csl-tabular" style={{ fontSize: '16px', fontWeight: 600 }}>
+                  {completionRate}%
+                </span>
               </div>
             </div>
           </div>
 
-          <button
-            onClick={() => onNavigateTab('integrity')}
+          <footer
             style={{
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '20px',
-              padding: '10px 20px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-              alignSelf: 'flex-start',
-              boxShadow: '0 2px 6px rgba(13, 82, 214, 0.3)',
-              transition: 'opacity 0.15s ease',
+              paddingTop: '14px',
+              borderTop: `1px solid ${tokens.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
           >
-            View Integrity Events
-          </button>
-        </div>
-      </div>
-    </div>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('sentinel')}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: tokens.cslBlue,
+                fontSize: '12.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              Sentinel Sessions →
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('integrity')}
+              className="csl-btn-secondary"
+            >
+              Integrity Logs
+            </button>
+          </footer>
+        </article>
+
+        {/* Card 3: Quick Navigation Actions */}
+        <article
+          style={{
+            backgroundColor: tokens.surfaceCard,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: '10px',
+            padding: '22px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            boxShadow: tokens.cardShadow,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: tokens.textPrimary }}>
+            Quick Shortcuts
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {[
+              {
+                tab: 'assessments',
+                title: 'Create Assessment',
+                sub: 'Configure sections, MCQ & coding pools',
+                icon: <AssessmentsIcon size={17} color={tokens.cslBlueSoftText} />,
+                badgeBg: tokens.cslBlueSoftBg,
+              },
+              {
+                tab: 'drives',
+                title: 'Manage Drives',
+                sub: '8-digit invite codes & college access',
+                icon: <DrivesIcon size={17} color={tokens.textPrimary} />,
+                badgeBg: tokens.surfaceElevated,
+              },
+              {
+                tab: 'questions',
+                title: 'Question Pools & Bank',
+                sub: 'Author MCQs or coding problems',
+                icon: <QuestionBankIcon size={17} color={tokens.textPrimary} />,
+                badgeBg: tokens.surfaceElevated,
+              },
+              {
+                tab: 'colleges',
+                title: 'Manage Colleges',
+                sub: `${stats.colleges_count || 0} participating institutions`,
+                icon: <CollegesIcon size={17} color={tokens.textPrimary} />,
+                badgeBg: tokens.surfaceElevated,
+              },
+            ].map((item) => (
+              <button
+                key={item.tab}
+                type="button"
+                onClick={() => onNavigateTab(item.tab)}
+                style={{
+                  border: `1px solid ${tokens.border}`,
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  backgroundColor: tokens.pageBg,
+                  color: tokens.textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'border-color 120ms ease-out',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = tokens.surfaceElevated;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = tokens.pageBg;
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  <span
+                    style={{
+                      width: '34px',
+                      height: '34px',
+                      borderRadius: '8px',
+                      backgroundColor: item.badgeBg,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.icon}
+                  </span>
+                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ fontSize: '13.5px', fontWeight: 600 }}>{item.title}</span>
+                    <span style={{ fontSize: '12px', color: tokens.textSecondary }}>{item.sub}</span>
+                  </span>
+                </span>
+                <span style={{ fontSize: '14px', color: tokens.textMuted }}>→</span>
+              </button>
+            ))}
+          </div>
+        </article>
+      </section>
+    </PageContainer>
   );
 }

@@ -1,7 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../api';
-import { getAdminMe, getAdminStats, getAdminAssessments, getAdminColleges, type AdminUser, type AdminStats, type AdminAssessment, type AdminCollege } from '../../api/admin';
+import {
+  getAdminMe,
+  getAdminStats,
+  getAdminAssessments,
+  getAdminColleges,
+  undoAdminAuditAction,
+  type AdminUser,
+  type AdminStats,
+  type AdminAssessment,
+  type AdminCollege,
+} from '../../api/admin';
 import { queryClient } from '../../main';
 import { AdminLoginPage } from './AdminLoginPage';
 import { AdminOverviewView } from './AdminOverviewView';
@@ -17,8 +27,8 @@ import { AdminIntegrityEventsView } from './AdminIntegrityEventsView';
 import { AdminSentinelView } from './AdminSentinelView';
 import { AdminUsersView } from './AdminUsersView';
 import { AdminDrivesView } from './AdminDrivesView';
-import { undoAdminAuditAction } from '../../api/admin';
 import { AccessibleModal } from '../../components/admin/AccessibleModal';
+import { StatusBadge } from '../../components/ui';
 import { useAdminTheme } from '../../utils/adminTheme';
 import {
   OverviewIcon,
@@ -39,6 +49,7 @@ import {
   DeviceIcon,
   HomeIcon,
   UndoIcon,
+  SearchIcon,
 } from '../../components/common/Icons';
 import {
   ReassessStudentAccessModal,
@@ -46,9 +57,17 @@ import {
   ImportQuestionsCSVModal,
 } from '../../components/admin/QuickActionsModals';
 
-const MIN_DESKTOP_WIDTH = 1024;
-const MIN_DESKTOP_HEIGHT = 650;
 const CSL_ADMIN_TAB_AUTH_KEY = 'csl_admin_tab_authenticated';
+
+interface NavGroup {
+  title: string;
+  items: {
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    badgeCount?: number;
+  }[];
+}
 
 export function CSLAdminPortalPage() {
   const { isDark, toggleTheme, tokens } = useAdminTheme();
@@ -57,27 +76,20 @@ export function CSLAdminPortalPage() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Portal-level shared assessments and colleges (Phase 2.2.4)
   const [portalAssessments, setPortalAssessments] = useState<AdminAssessment[]>([]);
   const [portalColleges, setPortalColleges] = useState<AdminCollege[]>([]);
 
   const loadPortalAssessmentsAndColleges = async () => {
     try {
       const [assData, colData] = await Promise.all([
-        getAdminAssessments().catch((e) => {
-          console.error('Failed to load assessments for portal', e);
-          return [] as AdminAssessment[];
-        }),
-        getAdminColleges().catch((e) => {
-          console.error('Failed to load colleges for portal', e);
-          return [] as AdminCollege[];
-        }),
+        getAdminAssessments().catch(() => [] as AdminAssessment[]),
+        getAdminColleges().catch(() => [] as AdminCollege[]),
       ]);
       setPortalAssessments(assData);
       setPortalColleges(colData);
-    } catch (err: any) {
-      console.error('Failed to load assessments collection', err);
-    } finally {}
+    } catch {
+      // handled per request
+    }
   };
 
   useEffect(() => {
@@ -86,20 +98,50 @@ export function CSLAdminPortalPage() {
     }
   }, [adminUser]);
 
-
-  // Collapsible Sidebars state (Persisted in localStorage)
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('csl_admin_sidebar_collapsed') === 'true';
   });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('csl_admin_right_collapsed') === 'true';
   });
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
     const saved = localStorage.getItem('csl_admin_right_width');
-    const num = saved ? parseInt(saved, 10) : 270;
-    return !isNaN(num) && num >= 220 && num <= 420 ? num : 270;
+    const num = saved ? parseInt(saved, 10) : 272;
+    return !isNaN(num) && num >= 230 && num <= 400 ? num : 272;
   });
   const [isDraggingRight, setIsDraggingRight] = useState(false);
+
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const isMobileDrawerMode = viewportWidth < 1024;
+  const isCompactPadding = viewportWidth < 768;
+
+  // Quick Command Modal (Ctrl+K)
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandOpen((prev) => !prev);
+      } else if (e.key === 'Escape' && isMobileDrawerMode && mobileMenuOpen) {
+        e.preventDefault();
+        setMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isMobileDrawerMode, mobileMenuOpen]);
 
   const handleDividerPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -109,7 +151,7 @@ export function CSLAdminPortalPage() {
 
   const handleDividerPointerMove = (e: React.PointerEvent) => {
     if (!isDraggingRight) return;
-    const newWidth = Math.max(220, Math.min(420, window.innerWidth - e.clientX));
+    const newWidth = Math.max(230, Math.min(400, window.innerWidth - e.clientX));
     setRightPanelWidth(newWidth);
     localStorage.setItem('csl_admin_right_width', String(newWidth));
   };
@@ -119,7 +161,9 @@ export function CSLAdminPortalPage() {
       setIsDraggingRight(false);
       try {
         (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -139,13 +183,10 @@ export function CSLAdminPortalPage() {
     });
   };
 
-  // Quick Action Modal states
   const [showReassessModal, setShowReassessModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [undoToast, setUndoToast] = useState<string | null>(null);
-
-  // Undo Confirmation Dialog state
   const [pendingUndoAct, setPendingUndoAct] = useState<{ id: number; action_display?: string } | null>(null);
   const [undoing, setUndoing] = useState(false);
 
@@ -169,33 +210,11 @@ export function CSLAdminPortalPage() {
     }
   };
 
-  // Viewport dimensions
-  const [viewportDimensions, setViewportDimensions] = useState({
-    width: typeof window !== 'undefined' ? window.innerWidth : 1280,
-    height: typeof window !== 'undefined' ? window.innerHeight : 800,
-  });
-
-  useEffect(() => {
-    const handleResize = () => {
-      setViewportDimensions({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const isDesktopEligible =
-    viewportDimensions.width >= MIN_DESKTOP_WIDTH &&
-    viewportDimensions.height >= MIN_DESKTOP_HEIGHT;
-
   const activeTab = searchParams.get('tab') || 'overview';
   const reviewAttemptId = searchParams.get('attemptId');
   const assessmentIdFromQuery = searchParams.get('assessmentId');
   const fromTab = searchParams.get('fromTab') || 'live';
 
-  // Load telemetry stats on mount and interval
   const loadStatsData = () => {
     getAdminStats()
       .then((data) => setStats(data))
@@ -266,6 +285,7 @@ export function CSLAdminPortalPage() {
 
   const setActiveTab = (tabKey: string) => {
     setSearchParams({ tab: tabKey });
+    setMobileMenuOpen(false);
   };
 
   const handleOpenReview = (attemptId: string) => {
@@ -280,6 +300,72 @@ export function CSLAdminPortalPage() {
     setSearchParams({ tab: fromTab });
   };
 
+  const navGroups: NavGroup[] = useMemo(
+    () => [
+      {
+        title: 'Workspace',
+        items: [
+          { key: 'overview', label: 'Overview', icon: <OverviewIcon size={17} /> },
+          { key: 'colleges', label: 'Colleges', icon: <CollegesIcon size={17} /> },
+          { key: 'candidates', label: 'Candidates', icon: <CandidatesIcon size={17} /> },
+        ],
+      },
+      {
+        title: 'Assessments',
+        items: [
+          { key: 'assessments', label: 'Assessments', icon: <AssessmentsIcon size={17} /> },
+          { key: 'drives', label: 'Drives', icon: <DrivesIcon size={17} /> },
+          { key: 'questions', label: 'Question Bank', icon: <QuestionBankIcon size={17} /> },
+        ],
+      },
+      {
+        title: 'Monitoring',
+        items: [
+          {
+            key: 'live',
+            label: 'Live Sessions',
+            icon: <LiveSessionsIcon size={17} />,
+            badgeCount: stats?.in_progress_count,
+          },
+          { key: 'sentinel', label: 'Sentinel AI', icon: <IntegrityIcon size={17} /> },
+          { key: 'integrity', label: 'Integrity Logs', icon: <DeviceIcon size={17} /> },
+        ],
+      },
+      {
+        title: 'Analytics',
+        items: [{ key: 'results', label: 'Results', icon: <ResultsIcon size={17} /> }],
+      },
+      {
+        title: 'System',
+        items: [
+          { key: 'config', label: 'Settings', icon: <SettingsIcon size={17} /> },
+          { key: 'users', label: 'Admin Users', icon: <CandidatesIcon size={17} /> },
+        ],
+      },
+    ],
+    [stats?.in_progress_count]
+  );
+
+  const flatNavItems = useMemo(
+    () => navGroups.flatMap((g) => g.items.map((item) => ({ ...item, group: g.title }))),
+    [navGroups]
+  );
+
+  const currentBreadcrumb = useMemo(() => {
+    if (activeTab === 'review') return { group: 'Analytics', label: 'Attempt Review' };
+    const found = flatNavItems.find(
+      (i) => i.key === activeTab || (i.key === 'assessments' && activeTab === 'assessment')
+    );
+    return found ? { group: found.group, label: found.label } : { group: 'Workspace', label: 'Overview' };
+  }, [activeTab, flatNavItems]);
+
+  const adminInitials = useMemo(() => {
+    const src = (adminUser?.name || adminUser?.email || 'AD').trim();
+    const parts = src.split(/[\s._-]+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return src.slice(0, 2).toUpperCase();
+  }, [adminUser]);
+
   if (loadingAuth) {
     return (
       <div
@@ -288,198 +374,37 @@ export function CSLAdminPortalPage() {
           justifyContent: 'center',
           alignItems: 'center',
           minHeight: '100vh',
-          backgroundColor: '#0D52D6',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          backgroundColor: tokens.pageBg,
+          color: tokens.textPrimary,
+          fontFamily: tokens.fontFamily,
         }}
       >
-        <div style={{ textAlign: 'center', color: '#FFFFFF', fontWeight: 700 }}>
-          <div style={{ fontSize: '15px' }}>Verifying Administrator Session...</div>
-        </div>
-        {/* Undo Action Confirmation Modal */}
-      <AccessibleModal
-        isOpen={!!pendingUndoAct}
-        onClose={() => setPendingUndoAct(null)}
-        title="Confirm Operation Rollback"
-        description="Controlled undo will revert this administrative action and record a compensating audit log entry."
-        size="sm"
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
           <div
             style={{
-              padding: '12px 16px',
-              backgroundColor: '#FEF3C7',
-              borderRadius: '12px',
-              border: '1px solid #FDE68A',
-              color: '#92400E',
-              fontSize: '13px',
-              lineHeight: 1.5,
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              border: `3px solid ${tokens.border}`,
+              borderTopColor: tokens.cslBlue,
+              animation: 'spin 0.8s linear infinite',
             }}
-          >
-            <strong>Action to Revert:</strong> {pendingUndoAct?.action_display || 'Administrative operation'}
-            <p style={{ margin: '6px 0 0', fontSize: '12px' }}>
-              Are you sure you want to rollback this change? This action will restore the previous record state atomically.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-            <button
-              type="button"
-              onClick={() => setPendingUndoAct(null)}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: '#475569',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={undoing}
-              onClick={handleConfirmUndo}
-              style={{
-                padding: '8px 18px',
-                borderRadius: '8px',
-                backgroundColor: '#DC2626',
-                color: '#FFFFFF',
-                border: 'none',
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: undoing ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {undoing ? 'Reverting...' : 'Confirm Rollback'}
-            </button>
+          />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <div style={{ fontSize: '14px', fontWeight: 500, color: tokens.textSecondary }}>
+            Verifying Administrator Session...
           </div>
         </div>
-      </AccessibleModal>
-    </div>
-  );
-}
-
-  if (!isDesktopEligible) {
-    return (
-      <div
-        style={{
-          minHeight: '100vh',
-          backgroundColor: '#FCFAF5',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '24px 20px',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: '520px',
-            width: '100%',
-            backgroundColor: '#FFFFFF',
-            borderRadius: '16px',
-            border: '1px solid #E2E8F0',
-            padding: '36px 32px',
-            textAlign: 'center',
-            boxShadow: '0 20px 40px -12px rgba(11, 46, 111, 0.1)',
-          }}
-        >
-          <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 12px 0' }}>
-            Desktop Display Required
-          </h2>
-          <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.6, margin: '0 0 16px 0' }}>
-            The CSL Admin Portal is designed for PC and desktop workstations (minimum {MIN_DESKTOP_WIDTH} × {MIN_DESKTOP_HEIGHT} px).
-          </p>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#DC2626' }}>
-            Current resolution: {viewportDimensions.width} × {viewportDimensions.height} px
-          </div>
-        </div>
-        {/* Undo Action Confirmation Modal */}
-      <AccessibleModal
-        isOpen={!!pendingUndoAct}
-        onClose={() => setPendingUndoAct(null)}
-        title="Confirm Operation Rollback"
-        description="Controlled undo will revert this administrative action and record a compensating audit log entry."
-        size="sm"
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div
-            style={{
-              padding: '12px 16px',
-              backgroundColor: '#FEF3C7',
-              borderRadius: '12px',
-              border: '1px solid #FDE68A',
-              color: '#92400E',
-              fontSize: '13px',
-              lineHeight: 1.5,
-            }}
-          >
-            <strong>Action to Revert:</strong> {pendingUndoAct?.action_display || 'Administrative operation'}
-            <p style={{ margin: '6px 0 0', fontSize: '12px' }}>
-              Are you sure you want to rollback this change? This action will restore the previous record state atomically.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-            <button
-              type="button"
-              onClick={() => setPendingUndoAct(null)}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: '#475569',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={undoing}
-              onClick={handleConfirmUndo}
-              style={{
-                padding: '8px 18px',
-                borderRadius: '8px',
-                backgroundColor: '#DC2626',
-                color: '#FFFFFF',
-                border: 'none',
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: undoing ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {undoing ? 'Reverting...' : 'Confirm Rollback'}
-            </button>
-          </div>
-        </div>
-      </AccessibleModal>
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
   if (!adminUser) {
     return <AdminLoginPage onLoginSuccess={handleLoginSuccess} />;
   }
 
-  const navItems = [
-    { key: 'overview', label: 'Overview', icon: <OverviewIcon size={18} /> },
-    { key: 'colleges', label: 'Colleges', icon: <CollegesIcon size={18} /> },
-    { key: 'candidates', label: 'Candidates', icon: <CandidatesIcon size={18} /> },
-    { key: 'assessments', label: 'Assessments', icon: <AssessmentsIcon size={18} /> },
-    { key: 'drives', label: 'Drives', icon: <DrivesIcon size={18} /> },
-    { key: 'questions', label: 'Question Bank', icon: <QuestionBankIcon size={18} /> },
-    { key: 'results', label: 'Results', icon: <ResultsIcon size={18} /> },
-    { key: 'sentinel', label: 'Sentinel AI', icon: <IntegrityIcon size={18} /> },
-    { key: 'integrity', label: 'Integrity Logs', icon: <DeviceIcon size={18} /> },
-    { key: 'live', label: 'Live Sessions', icon: <LiveSessionsIcon size={18} /> },
-  ];
+  const sidebarWidth = isMobileDrawerMode ? '250px' : leftSidebarCollapsed ? '68px' : '248px';
+  const showLabels = isMobileDrawerMode || !leftSidebarCollapsed;
 
   return (
     <div
@@ -494,210 +419,350 @@ export function CSLAdminPortalPage() {
         fontFamily: tokens.fontFamily,
       }}
     >
-      {/* ─── 1. CHARCOAL CSL SIDEBAR (Collapsible) ───────────────────── */}
+      {/* Mobile Sidebar Backdrop */}
+      {isMobileDrawerMode && mobileMenuOpen && (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close navigation backdrop"
+          data-testid="mobile-nav-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              setMobileMenuOpen(false);
+            }
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(23, 23, 23, 0.6)',
+            zIndex: 99,
+          }}
+        />
+      )}
+
+      {/* ─── 1. STITCH CHARCOAL SIDEBAR (#171717) ─────────────────────────── */}
       <aside
         style={{
-          width: leftSidebarCollapsed ? '76px' : '214px',
-          minWidth: leftSidebarCollapsed ? '76px' : '214px',
-          maxWidth: leftSidebarCollapsed ? '76px' : '214px',
-          backgroundColor: isDark ? '#0F172A' : '#1E293B',
-          color: '#FFFFFF',
-          borderRight: isDark ? '1px solid #1F2937' : '1px solid #0F172A',
+          width: sidebarWidth,
+          minWidth: sidebarWidth,
+          maxWidth: sidebarWidth,
+          backgroundColor: tokens.sidebarBg,
+          color: tokens.sidebarText,
+          borderRight: `1px solid ${tokens.sidebarBorder}`,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          padding: leftSidebarCollapsed ? '20px 8px' : '20px 14px 20px 18px',
           boxSizing: 'border-box',
-          position: 'relative',
-          zIndex: 30,
-          transition: 'width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease, padding 0.2s ease',
+          position: isMobileDrawerMode ? 'fixed' : 'relative',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          zIndex: 100,
+          transform: isMobileDrawerMode && !mobileMenuOpen ? 'translateX(-100%)' : 'translateX(0)',
+          transition: 'transform 180ms cubic-bezier(0.2, 0, 0, 1), width 180ms cubic-bezier(0.2, 0, 0, 1)',
         }}
       >
-        {/* Floating Center Collapse Button */}
-        <button
-          type="button"
-          onClick={toggleLeftSidebar}
-          title={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-          aria-label={leftSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-          style={{
-            position: 'absolute',
-            top: '50%',
-            right: '-14px',
-            transform: 'translateY(-50%)',
-            width: '28px',
-            height: '28px',
-            borderRadius: '50%',
-            backgroundColor: '#1455B8',
-            color: '#FFFFFF',
-            border: '2px solid #F5B83D',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            zIndex: 50,
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-            transition: 'all 0.15s ease',
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0F4496')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#1455B8')}
-        >
-          {leftSidebarCollapsed ? <ChevronRightIcon size={14} /> : <ChevronLeftIcon size={14} />}
-        </button>
-        <div>
-          {/* Top Admin Active Session Card */}
+        {/* Brand Header */}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div
             style={{
-              backgroundColor: 'rgba(15, 23, 42, 0.72)',
-              borderRadius: '14px',
-              padding: '15px 14px',
-              border: '1px solid rgba(245, 184, 61, 0.28)',
-              marginBottom: '22px',
-              position: 'relative',
-              boxShadow: '0 6px 16px rgba(0, 0, 0, 0.18)',
+              height: '56px',
+              minHeight: '56px',
+              padding: showLabels ? '0 16px' : '0 12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: showLabels ? 'space-between' : 'center',
+              borderBottom: `1px solid ${tokens.sidebarBorder}`,
             }}
           >
-            {/* Green glowing status dot */}
-            <div
-              style={{
-                position: 'absolute',
-                top: '16px',
-                right: '16px',
-                width: '9px',
-                height: '9px',
-                borderRadius: '50%',
-                backgroundColor: '#22C55E',
-                boxShadow: '0 0 8px #22C55E',
-              }}
-            />
-
-            <div style={{ fontSize: leftSidebarCollapsed ? '14px' : '18px', fontWeight: 800, color: '#FFFFFF', lineHeight: 1.2, textAlign: leftSidebarCollapsed ? 'center' : 'left' }}>
-              {leftSidebarCollapsed ? '👤' : 'Admin'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+              <div
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
+                  backgroundColor: tokens.sidebarAccent,
+                  color: '#111827',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 700,
+                  fontSize: '14px',
+                  fontFamily: tokens.monoFamily,
+                  flexShrink: 0,
+                }}
+              >
+                {'</>'}
+              </div>
+              {showLabels && (
+                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: tokens.sidebarText, lineHeight: '18px' }}>
+                    CSL Console
+                  </span>
+                  <span style={{ fontSize: '11px', fontWeight: 500, color: tokens.sidebarMuted, lineHeight: '14px' }}>
+                    Assessment Platform
+                  </span>
+                </div>
+              )}
             </div>
-            {!leftSidebarCollapsed && (
-              <>
-                <div
+
+            {isMobileDrawerMode && (
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                title="Close navigation"
+                aria-label="Close navigation"
+                data-testid="mobile-nav-close"
+                style={{
+                  width: '30px',
+                  height: '30px',
+                  borderRadius: '6px',
+                  border: `1px solid ${tokens.sidebarBorder}`,
+                  backgroundColor: tokens.sidebarSurface,
+                  color: tokens.sidebarText,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  fontSize: '15px',
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                ✕
+              </button>
+            )}
+
+            {!isMobileDrawerMode && (
+              <button
+                type="button"
+                onClick={toggleLeftSidebar}
+                title={leftSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-label={leftSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: tokens.sidebarMuted,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = tokens.sidebarSurface;
+                  e.currentTarget.style.color = tokens.sidebarText;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = tokens.sidebarMuted;
+                }}
+              >
+                {leftSidebarCollapsed ? <ChevronRightIcon size={15} /> : <ChevronLeftIcon size={15} />}
+              </button>
+            )}
+          </div>
+
+          {/* Grouped Navigation */}
+          <nav
+            aria-label="Primary navigation"
+            style={{
+              padding: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+            }}
+          >
+            {navGroups.map((group) => (
+              <div key={group.title} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {showLabels && (
+                  <span
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                      color: tokens.sidebarMuted,
+                    }}
+                  >
+                    {group.title}
+                  </span>
+                )}
+                {group.items.map((item) => {
+                  const isActive =
+                    activeTab === item.key ||
+                    (item.key === 'assessments' && activeTab === 'assessment');
+
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setActiveTab(item.key)}
+                      title={item.label}
+                      aria-current={isActive ? 'page' : undefined}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: showLabels ? 'space-between' : 'center',
+                        gap: '10px',
+                        width: '100%',
+                        padding: showLabels ? '8px 10px' : '9px 0',
+                        borderRadius: '8px',
+                        fontSize: '13.5px',
+                        fontWeight: isActive ? 500 : 400,
+                        color: isActive ? tokens.sidebarText : tokens.sidebarMuted,
+                        backgroundColor: isActive ? tokens.sidebarActive : 'transparent',
+                        border: isActive ? `1px solid ${tokens.sidebarBorder}` : '1px solid transparent',
+                        cursor: 'pointer',
+                        transition: 'background-color 120ms ease-out, color 120ms ease-out',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = tokens.sidebarSurface;
+                          e.currentTarget.style.color = tokens.sidebarText;
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isActive) {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          e.currentTarget.style.color = tokens.sidebarMuted;
+                        }
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            color: isActive ? tokens.sidebarAccent : 'currentColor',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {item.icon}
+                        </span>
+                        {showLabels && (
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {item.label}
+                          </span>
+                        )}
+                      </span>
+                      {showLabels && typeof item.badgeCount === 'number' && item.badgeCount > 0 && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            fontVariantNumeric: 'tabular-nums',
+                            padding: '1px 6px',
+                            borderRadius: '6px',
+                            backgroundColor: '#052E16',
+                            color: '#86EFAC',
+                          }}
+                        >
+                          {item.badgeCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        </div>
+
+        {/* Profile Footer */}
+        <div
+          style={{
+            padding: '12px',
+            borderTop: `1px solid ${tokens.sidebarBorder}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: showLabels ? 'space-between' : 'center',
+            gap: '8px',
+          }}
+        >
+          {showLabels && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+              <div
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
+                  backgroundColor: tokens.sidebarSurface,
+                  border: `1px solid ${tokens.sidebarBorder}`,
+                  color: tokens.sidebarAccent,
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {adminInitials}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span
                   style={{
-                    fontSize: '11px',
-                    color: 'rgba(255, 255, 255, 0.65)',
-                    margin: '2px 0 14px 0',
+                    fontSize: '12.5px',
+                    fontWeight: 500,
+                    color: tokens.sidebarText,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {adminUser.email || 'admin@email.com'}
-                </div>
-
-                <div
+                  {adminUser.name || 'Administrator'}
+                </span>
+                <span
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                    borderRadius: '12px',
-                    padding: '4px 10px',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    color: 'rgba(255, 255, 255, 0.85)',
-                    textAlign: 'center',
-                    letterSpacing: '0.02em',
+                    fontSize: '11px',
+                    color: tokens.sidebarMuted,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}
                 >
-                  Session Active
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Navigation Links */}
-          <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {navItems.map((item) => {
-              const isActive =
-                activeTab === item.key ||
-                (item.key === 'assessments' && activeTab === 'assessment');
-
-              return (
-                <button
-                  key={item.key}
-                  onClick={() => setActiveTab(item.key)}
-                  title={item.label}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    width: '100%',
-                    justifyContent: leftSidebarCollapsed ? 'center' : 'flex-start',
-                    textAlign: leftSidebarCollapsed ? 'center' : 'left',
-                    padding: leftSidebarCollapsed ? '10px 0' : '9px 14px',
-                    borderRadius: '12px',
-                    fontSize: '14px',
-                    fontWeight: isActive ? 800 : 600,
-                    color: '#FFFFFF',
-                    backgroundColor: isActive ? 'rgba(255, 255, 255, 0.18)' : 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s ease',
-                    boxShadow: isActive ? '0 2px 8px rgba(0, 0, 0, 0.1)' : 'none',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{item.icon}</span>
-                  {!leftSidebarCollapsed && <span>{item.label}</span>}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Bottom Circular Controls: Settings Gear & Logout */}
-        <div style={{ display: 'flex', flexDirection: leftSidebarCollapsed ? 'column' : 'row', alignItems: 'center', gap: '12px', justifyContent: 'center' }}>
-          <button
-            type="button"
-            onClick={() => setActiveTab('config')}
-            title="System Configuration"
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              backgroundColor: '#CBD5E1',
-              color: '#0F172A',
-              border: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
-            }}
-          >
-            <SettingsIcon size={20} />
-          </button>
+                  {adminUser.email}
+                </span>
+              </div>
+            </div>
+          )}
 
           <button
             type="button"
             onClick={handleLogout}
             title="Sign Out"
+            aria-label="Sign Out"
             style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              backgroundColor: '#CBD5E1',
-              color: '#0F172A',
-              border: 'none',
-              display: 'flex',
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              border: `1px solid ${tokens.sidebarBorder}`,
+              backgroundColor: tokens.sidebarSurface,
+              color: tokens.sidebarMuted,
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = '#FCA5A5';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = tokens.sidebarMuted;
             }}
           >
-            <LogoutIcon size={20} />
+            <LogoutIcon size={16} />
           </button>
         </div>
       </aside>
 
-      {/* ─── 2. MAIN WORKSPACE CONTAINER (TOPBAR + CONTENT + RIGHT PANEL) ─ */}
+      {/* ─── 2. MAIN WORKSPACE COLUMN ───────────────────────────────────── */}
       <div
         style={{
           flex: 1,
@@ -710,69 +775,107 @@ export function CSLAdminPortalPage() {
           backgroundColor: tokens.pageBg,
         }}
       >
-        {/* Top CSL Yellow Accent Header Bar */}
+        {/* Minimal Sticky Top Bar (56px) */}
         <header
           style={{
-            height: '44px',
-            minHeight: '44px',
-            backgroundColor: isDark ? '#111827' : '#F5B83D',
-            borderBottom: isDark ? '2px solid #F5B83D' : '1px solid rgba(15, 23, 42, 0.08)',
-            padding: '0 24px',
+            height: '56px',
+            minHeight: '56px',
+            backgroundColor: tokens.surfaceCard,
+            borderBottom: `1px solid ${tokens.border}`,
+            padding: isCompactPadding ? '0 14px' : '0 24px',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: '12px',
             boxSizing: 'border-box',
           }}
         >
-          {/* Breadcrumb e.g. admin/overview */}
-          <div style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F5B83D' : '#1E293B', letterSpacing: '-0.01em' }}>
-            admin/{activeTab === 'review' ? 'review' : activeTab}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            {isMobileDrawerMode && (
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                aria-label="Open navigation"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.border}`,
+                  backgroundColor: tokens.surfaceCard,
+                  color: tokens.textPrimary,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <span aria-hidden="true" style={{ fontSize: '16px', fontWeight: 700 }}>☰</span>
+              </button>
+            )}
+            <nav
+              aria-label="Breadcrumb"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '13px',
+                color: tokens.textSecondary,
+                minWidth: 0,
+              }}
+            >
+              {!isCompactPadding && (
+                <>
+                  <span>CSL Console</span>
+                  <span style={{ color: tokens.textMuted }}>/</span>
+                  <span>{currentBreadcrumb.group}</span>
+                  <span style={{ color: tokens.textMuted }}>/</span>
+                </>
+              )}
+              <span style={{ fontWeight: 600, color: tokens.textPrimary, whiteSpace: 'nowrap' }}>
+                {currentBreadcrumb.label}
+              </span>
+            </nav>
           </div>
 
-          {/* Right Circular Icons & Right Panel Toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <button
-              type="button"
-              onClick={toggleRightPanel}
-              title={rightPanelCollapsed ? 'Show Quick Actions' : 'Hide Quick Actions'}
-              style={{
-                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
-                border: isDark ? '1px solid #334155' : 'none',
-                borderRadius: '8px',
-                padding: '4px 10px',
-                fontSize: '12px',
-                fontWeight: 700,
-                color: isDark ? '#F1F5F9' : '#1E293B',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
-            >
-              {rightPanelCollapsed ? '‹ Quick Actions' : 'Quick Actions ›'}
-            </button>
-            <button
-              type="button"
-              title="User Directory"
-              style={{
-                width: '28px',
-                height: '28px',
-                borderRadius: '8px',
-                border: isDark ? '1px solid #334155' : 'none',
-                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: isDark ? '#F1F5F9' : '#1E293B',
-                cursor: 'pointer',
-              }}
-              onClick={() => setActiveTab('users')}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                <circle cx="9" cy="7" r="4"></circle>
-              </svg>
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {!isCompactPadding && (
+              <button
+                type="button"
+                onClick={() => setCommandOpen(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '24px',
+                  width: '220px',
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  backgroundColor: tokens.pageBg,
+                  border: `1px solid ${tokens.border}`,
+                  color: tokens.textSecondary,
+                  fontSize: '12.5px',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <SearchIcon size={14} color={tokens.textMuted} />
+                  <span>Search console...</span>
+                </span>
+                <kbd
+                  style={{
+                    fontFamily: tokens.monoFamily,
+                    fontSize: '11px',
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    backgroundColor: tokens.surfaceCard,
+                    border: `1px solid ${tokens.border}`,
+                    color: tokens.textMuted,
+                  }}
+                >
+                  Ctrl+K
+                </kbd>
+              </button>
+            )}
 
             <button
               type="button"
@@ -783,72 +886,80 @@ export function CSLAdminPortalPage() {
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '5px',
-                padding: '4px 10px',
+                gap: '6px',
+                height: '32px',
+                padding: '0 10px',
                 borderRadius: '8px',
-                border: isDark ? '1px solid #F5B83D' : '1px solid rgba(15, 23, 42, 0.14)',
-                backgroundColor: isDark ? 'rgba(245, 184, 61, 0.14)' : 'rgba(255, 255, 255, 0.72)',
-                color: isDark ? '#F5B83D' : '#1E293B',
-                fontSize: '11.5px',
-                fontWeight: 700,
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.surfaceCard,
+                color: tokens.textPrimary,
+                fontSize: '12px',
+                fontWeight: 500,
                 cursor: 'pointer',
               }}
             >
-              {isDark ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="5"></circle>
-                  <line x1="12" y1="1" x2="12" y2="3"></line>
-                  <line x1="12" y1="21" x2="12" y2="23"></line>
-                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-                  <line x1="1" y1="12" x2="3" y2="12"></line>
-                  <line x1="21" y1="12" x2="23" y2="12"></line>
-                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-                </svg>
-              ) : (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-                </svg>
-              )}
-              <span>{isDark ? 'Light' : 'Dark'}</span>
+              <span>{isDark ? '☀' : '☾'}</span>
+              {!isCompactPadding && <span>{isDark ? 'Light' : 'Dark'}</span>}
             </button>
+
+            {!isMobileDrawerMode && (
+              <button
+                type="button"
+                onClick={toggleRightPanel}
+                title={rightPanelCollapsed ? 'Show Quick Actions' : 'Hide Quick Actions'}
+                style={{
+                  height: '32px',
+                  padding: '0 10px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.border}`,
+                  backgroundColor: tokens.surfaceCard,
+                  color: tokens.textSecondary,
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+              >
+                {rightPanelCollapsed ? 'Activity & Tools' : 'Hide Panel'}
+              </button>
+            )}
+
+            <div
+              title={adminUser.email}
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                backgroundColor: tokens.surfaceElevated,
+                border: `1px solid ${tokens.border}`,
+                color: tokens.textPrimary,
+                fontSize: '12px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {adminInitials}
+            </div>
           </div>
         </header>
 
-        {/* Body Row: Center Main Content + Right Sidebar */}
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            minHeight: 0,
-            overflow: 'hidden',
-          }}
-        >
-          {/* Scrollable Center Content */}
+        {/* Workspace + Optional Right Panel */}
+        <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
           <main
             style={{
               flex: 1,
               minWidth: 0,
               minHeight: 0,
               overflowY: 'auto',
-              padding: '28px 32px',
+              padding: isCompactPadding ? '16px' : '28px 32px',
               boxSizing: 'border-box',
               backgroundColor: tokens.pageBg,
-              backgroundImage: isDark
-                ? 'radial-gradient(ellipse at 50% 0%, rgba(20, 85, 184, 0.14) 0%, rgba(11, 17, 32, 0) 65%)'
-                : 'radial-gradient(ellipse at 50% 0%, rgba(245, 184, 61, 0.12) 0%, rgba(248, 250, 252, 0) 60%)',
             }}
           >
-            {activeTab === 'overview' && (
-              <AdminOverviewView onNavigateTab={(tab) => setActiveTab(tab)} />
-            )}
-
+            {activeTab === 'overview' && <AdminOverviewView onNavigateTab={(tab) => setActiveTab(tab)} />}
             {activeTab === 'colleges' && <AdminCollegesView />}
-
-            {activeTab === 'candidates' && (
-              <AdminCandidatesView onReviewAttempt={handleOpenReview} />
-            )}
+            {activeTab === 'candidates' && <AdminCandidatesView onReviewAttempt={handleOpenReview} />}
 
             {(activeTab === 'assessments' || activeTab === 'assessment') && (
               <AdminAssessmentsView
@@ -868,7 +979,6 @@ export function CSLAdminPortalPage() {
                 colleges={portalColleges}
                 onRefreshAssessments={loadPortalAssessmentsAndColleges}
                 onNavigateToCreateAssessment={(driveId) => {
-                  setActiveTab('assessments');
                   setSearchParams({ tab: 'assessments', create: 'true', ...(driveId ? { driveId } : {}) });
                 }}
               />
@@ -879,57 +989,44 @@ export function CSLAdminPortalPage() {
             )}
 
             {activeTab === 'config' && <AdminConfigView />}
-
             {activeTab === 'users' && <AdminUsersView />}
+            {activeTab === 'live' && <AdminLiveAttemptsView onReviewAttempt={handleOpenReview} />}
 
-            {activeTab === 'live' && (
-              <AdminLiveAttemptsView onReviewAttempt={handleOpenReview} />
-            )}
-
-            {activeTab === 'review' && (
-              reviewAttemptId ? (
-                <AdminAttemptReviewView
-                  attemptId={reviewAttemptId}
-                  onBack={handleBackFromReview}
-                />
+            {activeTab === 'review' &&
+              (reviewAttemptId ? (
+                <AdminAttemptReviewView attemptId={reviewAttemptId} onBack={handleBackFromReview} />
               ) : (
-                <div style={{ textAlign: 'center', padding: '60px' }}>
-                  <h3>No Attempt Selected</h3>
+                <div
+                  style={{
+                    backgroundColor: tokens.surfaceCard,
+                    border: `1px solid ${tokens.border}`,
+                    borderRadius: '10px',
+                    padding: '48px 24px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <h3 style={{ margin: '0 0 12px', fontSize: '16px', fontWeight: 600 }}>No Attempt Selected</h3>
                   <button
+                    type="button"
                     onClick={() => setActiveTab('live')}
-                    style={{
-                      padding: '8px 18px',
-                      backgroundColor: '#0D52D6',
-                      color: '#FFFFFF',
-                      border: 'none',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                    }}
+                    className="csl-btn-primary"
                   >
                     Go to Live Sessions
                   </button>
                 </div>
-              )
-            )}
+              ))}
 
-            {activeTab === 'results' && (
-              <AdminResultsView onReviewAttempt={handleOpenReview} />
-            )}
+            {activeTab === 'results' && <AdminResultsView onReviewAttempt={handleOpenReview} />}
 
             {activeTab === 'sentinel' && (
-              <AdminSentinelView
-                assessments={portalAssessments}
-                onReviewAttempt={handleOpenReview}
-              />
+              <AdminSentinelView assessments={portalAssessments} onReviewAttempt={handleOpenReview} />
             )}
 
-            {activeTab === 'integrity' && (
-              <AdminIntegrityEventsView onReviewAttempt={handleOpenReview} />
-            )}
+            {activeTab === 'integrity' && <AdminIntegrityEventsView onReviewAttempt={handleOpenReview} />}
           </main>
 
-          {/* Draggable Resize Divider */}
-          {!rightPanelCollapsed && (
+          {/* Resize Handle */}
+          {!rightPanelCollapsed && !isMobileDrawerMode && (
             <div
               role="separator"
               aria-orientation="vertical"
@@ -940,182 +1037,141 @@ export function CSLAdminPortalPage() {
               onPointerCancel={handleDividerPointerUp}
               title="Drag to resize panel"
               style={{
-                width: '8px',
+                width: '6px',
                 cursor: 'col-resize',
-                backgroundColor: isDraggingRight ? '#0052CC' : 'transparent',
+                backgroundColor: isDraggingRight ? tokens.cslBlue : 'transparent',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 userSelect: 'none',
                 touchAction: 'none',
                 zIndex: 25,
-                transition: 'background-color 0.15s ease',
               }}
-            >
-              <div
-                style={{
-                  width: '3px',
-                  height: '32px',
-                  borderRadius: '2px',
-                  backgroundColor: isDraggingRight ? '#FFFFFF' : '#CBD5E1',
-                }}
-              />
-            </div>
+            />
           )}
 
-          {/* 3. RIGHT SIDEBAR (Quick Actions & Previous Activities, Collapsible & Resizable) */}
-          {!rightPanelCollapsed && (
+          {/* Contextual Right Panel */}
+          {!rightPanelCollapsed && !isMobileDrawerMode && (
             <aside
               style={{
                 width: `${rightPanelWidth}px`,
                 minWidth: `${rightPanelWidth}px`,
                 maxWidth: `${rightPanelWidth}px`,
-                backgroundColor: '#F8F9FA',
-                borderLeft: '1px solid #E2E8F0',
-                padding: '24px 18px',
+                backgroundColor: tokens.surfaceCard,
+                borderLeft: `1px solid ${tokens.border}`,
+                padding: '20px 16px',
                 boxSizing: 'border-box',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '24px',
                 overflowY: 'auto',
-                transition: isDraggingRight ? 'none' : 'width 0.2s ease',
               }}
             >
-              {/* Quick Actions Container (Mockups 1-5) */}
-              <div
-                style={{
-                  backgroundColor: '#DDE2EB',
-                  borderRadius: '24px',
-                  padding: '20px 16px',
-                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.04)',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '16px',
-                    fontWeight: 900,
-                    color: '#0F172A',
-                    marginBottom: '16px',
-                    letterSpacing: '-0.02em',
-                  }}
-                >
+              {/* Quick Actions */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ fontSize: '13.5px', fontWeight: 600, color: tokens.textPrimary }}>
                   Quick Actions
                 </div>
-
-                {/* 2x2 Button Grid */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(2, 1fr)',
-                    gap: '12px',
-                  }}
-                >
-                  {/* 1. Add / Create Assessment */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
                   <button
                     type="button"
                     onClick={() => setActiveTab('assessments')}
-                    title="Create New Assessment"
                     style={{
-                      backgroundColor: '#FFFFFF',
-                      border: '1.5px solid #C7D0DE',
-                      borderRadius: '16px',
-                      height: '68px',
+                      padding: '12px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.border}`,
+                      backgroundColor: tokens.pageBg,
+                      color: tokens.textPrimary,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      fontWeight: 500,
                       cursor: 'pointer',
-                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                      transition: 'transform 0.1s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <PlusIcon size={28} color="#0F172A" />
+                    <PlusIcon size={18} color={tokens.cslBlue} />
+                    <span>Assessments</span>
                   </button>
 
-                  {/* 2. Download / Export Student CSV */}
                   <button
                     type="button"
                     onClick={() => setShowExportModal(true)}
-                    title="Export Student Data CSV"
                     style={{
-                      backgroundColor: '#FFFFFF',
-                      border: '1.5px solid #C7D0DE',
-                      borderRadius: '16px',
-                      height: '68px',
+                      padding: '12px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.border}`,
+                      backgroundColor: tokens.pageBg,
+                      color: tokens.textPrimary,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      fontWeight: 500,
                       cursor: 'pointer',
-                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                      transition: 'transform 0.1s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <DownloadIcon size={26} color="#0F172A" />
+                    <DownloadIcon size={18} color={tokens.textSecondary} />
+                    <span>Export Data</span>
                   </button>
 
-                  {/* 3. Reassess Student Access / Device Monitoring */}
                   <button
                     type="button"
                     onClick={() => setShowReassessModal(true)}
-                    title="Reassess Student Access"
                     style={{
-                      backgroundColor: '#FFFFFF',
-                      border: '1.5px solid #C7D0DE',
-                      borderRadius: '16px',
-                      height: '68px',
+                      padding: '12px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.border}`,
+                      backgroundColor: tokens.pageBg,
+                      color: tokens.textPrimary,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      fontWeight: 500,
                       cursor: 'pointer',
-                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                      transition: 'transform 0.1s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <DeviceIcon size={26} color="#0F172A" />
+                    <DeviceIcon size={18} color={tokens.textSecondary} />
+                    <span>Reassess</span>
                   </button>
 
-                  {/* 4. Home / Overview */}
                   <button
                     type="button"
                     onClick={() => setActiveTab('overview')}
-                    title="Return to Overview Dashboard"
                     style={{
-                      backgroundColor: '#FFFFFF',
-                      border: '1.5px solid #C7D0DE',
-                      borderRadius: '16px',
-                      height: '68px',
+                      padding: '12px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.border}`,
+                      backgroundColor: tokens.pageBg,
+                      color: tokens.textPrimary,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      fontWeight: 500,
                       cursor: 'pointer',
-                      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
-                      transition: 'transform 0.1s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.04)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                   >
-                    <HomeIcon size={26} color="#0F172A" />
+                    <HomeIcon size={18} color={tokens.textSecondary} />
+                    <span>Overview</span>
                   </button>
                 </div>
               </div>
 
-              {/* Previous Activities Container (Mockups 1-5) */}
-              <div>
-                <div
-                  style={{
-                    fontSize: '16px',
-                    fontWeight: 900,
-                    color: '#0F172A',
-                    marginBottom: '14px',
-                    letterSpacing: '-0.02em',
-                  }}
-                >
-                  Previous Activities
+              {/* Previous Activities */}
+              <div style={{ borderTop: `1px solid ${tokens.border}`, paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '13.5px', fontWeight: 600, color: tokens.textPrimary }}>
+                    Recent Activity
+                  </span>
+                  {stats?.recent_activities?.length ? (
+                    <StatusBadge status={`${stats.recent_activities.length}`} variant="neutral" size="sm" />
+                  ) : null}
                 </div>
 
                 {stats?.recent_activities && stats.recent_activities.length > 0 ? (
@@ -1124,15 +1180,26 @@ export function CSLAdminPortalPage() {
                       <div
                         key={act.id}
                         style={{
-                          backgroundColor: '#CBD5E1',
+                          backgroundColor: tokens.pageBg,
+                          border: `1px solid ${tokens.border}`,
                           borderRadius: '8px',
-                          padding: '8px 10px',
-                          fontSize: '11px',
-                          color: '#1E293B',
+                          padding: '10px',
+                          fontSize: '12px',
+                          color: tokens.textPrimary,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                          <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: act.can_undo ? '120px' : '100%' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                          <span
+                            style={{
+                              fontWeight: 500,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
                             {act.action_display || act.action}
                           </span>
                           {act.can_undo && (
@@ -1140,45 +1207,46 @@ export function CSLAdminPortalPage() {
                               type="button"
                               onClick={() => handleOpenUndoConfirm(act)}
                               style={{
-                                display: 'flex',
+                                display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: '4px',
-                                padding: '2px 8px',
-                                borderRadius: '4px',
-                                backgroundColor: '#0052CC',
-                                color: '#FFFFFF',
+                                gap: '3px',
+                                padding: '2px 7px',
+                                borderRadius: '6px',
+                                backgroundColor: tokens.cslBlue,
+                                color: tokens.onPrimary,
                                 border: 'none',
-                                fontSize: '10px',
-                                fontWeight: 700,
+                                fontSize: '10.5px',
+                                fontWeight: 600,
                                 cursor: 'pointer',
+                                flexShrink: 0,
                               }}
                               title="Revert / Undo action"
                             >
-                              <UndoIcon size={11} color="#FFFFFF" /> Undo
+                              <UndoIcon size={10} color={tokens.onPrimary} /> Undo
                             </button>
                           )}
                         </div>
-                        <div style={{ fontSize: '10px', color: '#64748B', display: 'flex', justifyContent: 'space-between' }}>
+                        <div style={{ fontSize: '11px', color: tokens.textMuted, display: 'flex', justifyContent: 'space-between' }}>
                           <span>{act.performed_by_name || 'Admin'}</span>
-                          <span>{act.created_at ? new Date(act.created_at).toLocaleTimeString() : 'Just now'}</span>
+                          <span className="csl-tabular">
+                            {act.created_at ? new Date(act.created_at).toLocaleTimeString() : 'Just now'}
+                          </span>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  /* Grey Placeholder Bars Matching Mockup */
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
-                      <div
-                        key={i}
-                        style={{
-                          height: '14px',
-                          backgroundColor: '#CBD5E1',
-                          borderRadius: '4px',
-                          opacity: 0.8,
-                        }}
-                      />
-                    ))}
+                  <div
+                    style={{
+                      padding: '14px 12px',
+                      borderRadius: '8px',
+                      border: `1px solid ${tokens.border}`,
+                      backgroundColor: tokens.pageBg,
+                      fontSize: '12px',
+                      color: tokens.textMuted,
+                    }}
+                  >
+                    No recent audit events recorded yet.
                   </div>
                 )}
               </div>
@@ -1187,21 +1255,130 @@ export function CSLAdminPortalPage() {
         </div>
       </div>
 
-      {/* Undo Toast Alert */}
+      {/* Ctrl+K Command Palette Modal */}
+      <AccessibleModal
+        isOpen={commandOpen}
+        onClose={() => {
+          setCommandOpen(false);
+          setCommandQuery('');
+        }}
+        title="Console Command Search"
+        description="Jump quickly to any workspace module or toggle appearance."
+        size="sm"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <input
+            type="text"
+            value={commandQuery}
+            onChange={(e) => setCommandQuery(e.target.value)}
+            placeholder="Filter navigation or actions..."
+            autoFocus
+            style={{
+              width: '100%',
+              padding: '9px 12px',
+              borderRadius: '8px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
+              fontSize: '13.5px',
+              boxSizing: 'border-box',
+              outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '300px', overflowY: 'auto' }}>
+            {flatNavItems
+              .filter(
+                (item) =>
+                  !commandQuery.trim() ||
+                  item.label.toLowerCase().includes(commandQuery.trim().toLowerCase()) ||
+                  item.group.toLowerCase().includes(commandQuery.trim().toLowerCase())
+              )
+              .map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(item.key);
+                    setCommandOpen(false);
+                    setCommandQuery('');
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: activeTab === item.key ? tokens.surfaceElevated : 'transparent',
+                    color: tokens.textPrimary,
+                    fontSize: '13.5px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = tokens.surfaceElevated;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor =
+                      activeTab === item.key ? tokens.surfaceElevated : 'transparent';
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </span>
+                  <span style={{ fontSize: '11.5px', color: tokens.textMuted }}>{item.group}</span>
+                </button>
+              ))}
+            <button
+              type="button"
+              onClick={() => {
+                toggleTheme();
+                setCommandOpen(false);
+                setCommandQuery('');
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '9px 12px',
+                borderRadius: '8px',
+                border: 'none',
+                borderTop: `1px solid ${tokens.border}`,
+                marginTop: '4px',
+                backgroundColor: 'transparent',
+                color: tokens.cslBlue,
+                fontSize: '13.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <span>Toggle Dark / Light Theme</span>
+              <span style={{ fontSize: '11.5px', color: tokens.textMuted }}>
+                Currently {isDark ? 'Dark' : 'Light'}
+              </span>
+            </button>
+          </div>
+        </div>
+      </AccessibleModal>
+
+      {/* Undo Toast */}
       {undoToast && (
         <div
           style={{
             position: 'fixed',
             bottom: '24px',
             right: '24px',
-            backgroundColor: '#0F172A',
-            color: '#FFFFFF',
-            padding: '12px 20px',
-            borderRadius: '12px',
-            boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
+            backgroundColor: tokens.cslCharcoal,
+            color: tokens.sidebarText,
+            border: `1px solid ${tokens.sidebarBorder}`,
+            padding: '12px 18px',
+            borderRadius: '10px',
+            boxShadow: tokens.modalShadow,
             zIndex: 10000,
             fontSize: '13px',
-            fontWeight: 600,
+            fontWeight: 500,
           }}
         >
           {undoToast}
@@ -1213,17 +1390,16 @@ export function CSLAdminPortalPage() {
         isOpen={showReassessModal}
         onClose={() => setShowReassessModal(false)}
         onSuccess={loadStatsData}
+        assessments={portalAssessments}
       />
-      <ExportStudentDataModal
-        isOpen={showExportModal}
-        onClose={() => setShowExportModal(false)}
-      />
+      <ExportStudentDataModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
       <ImportQuestionsCSVModal
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         onSuccess={loadStatsData}
       />
-      {/* Undo Action Confirmation Modal */}
+
+      {/* Undo Rollback Confirmation Modal */}
       <AccessibleModal
         isOpen={!!pendingUndoAct}
         onClose={() => setPendingUndoAct(null)}
@@ -1235,10 +1411,10 @@ export function CSLAdminPortalPage() {
           <div
             style={{
               padding: '12px 16px',
-              backgroundColor: '#FEF3C7',
-              borderRadius: '12px',
-              border: '1px solid #FDE68A',
-              color: '#92400E',
+              backgroundColor: tokens.warningBg,
+              borderRadius: '8px',
+              border: `1px solid ${tokens.warningBorder}`,
+              color: tokens.warningText,
               fontSize: '13px',
               lineHeight: 1.5,
             }}
@@ -1253,16 +1429,7 @@ export function CSLAdminPortalPage() {
             <button
               type="button"
               onClick={() => setPendingUndoAct(null)}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: '#475569',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
+              className="csl-btn-secondary"
             >
               Cancel
             </button>
@@ -1271,13 +1438,13 @@ export function CSLAdminPortalPage() {
               disabled={undoing}
               onClick={handleConfirmUndo}
               style={{
-                padding: '8px 18px',
+                padding: '8px 16px',
                 borderRadius: '8px',
-                backgroundColor: '#DC2626',
+                backgroundColor: tokens.danger,
                 color: '#FFFFFF',
                 border: 'none',
                 fontSize: '13px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: undoing ? 'not-allowed' : 'pointer',
               }}
             >

@@ -29,6 +29,8 @@ import { AdminCodingQuestionModal } from './AdminCodingQuestionModal';
 import { AdminQuestionPoolsView } from './AdminQuestionPoolsView';
 import { ImportCodingJsonModal } from './ImportCodingJsonModal';
 import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge } from '../../components/ui';
 
 interface AdminQuestionsViewProps {
   initialAssessmentId?: string;
@@ -695,13 +697,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
   };
 
   return (
-    <div style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
-      {/* ─── PHASE 2.1 SUB-NAVIGATION: BANK VS REUSABLE POOLS ───────────── */}
+    <PageContainer>
+      {/* ─── SUB-NAVIGATION: BANK VS REUSABLE POOLS ───────────── */}
       <div
         style={{
           display: 'flex',
           gap: '8px',
-          marginBottom: '20px',
           borderBottom: `1px solid ${tokens.border}`,
           paddingBottom: '12px',
           flexWrap: 'wrap',
@@ -801,271 +802,99 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         />
       ) : (
         <>
-          {/* ─── PHASE 2.1 INDEPENDENT QUESTION BANK HEADER ─────────────────── */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '20px',
-              flexWrap: 'wrap',
-              gap: '12px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '12px',
-              backgroundColor: tokens.cslBlueSoftBg,
-              border: `1px solid ${tokens.cslBlueSoftBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: tokens.cslBlue,
-            }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-            </svg>
-          </div>
-          <div>
-            <h2
-              style={{
-                fontSize: '22px',
-                fontWeight: 800,
-                color: tokens.cslNavy,
-                margin: '0 0 2px 0',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              Independent Question Bank
-            </h2>
-            <p style={{ fontSize: '13px', color: tokens.textMuted, margin: 0 }}>
-              Central repository of reusable curriculum items across dynamic sections. Questions can be assigned to multiple assessment pools.
-            </p>
-          </div>
-        </div>
+          <SectionHeader
+            title="Independent Question Bank"
+            description="Central repository of reusable curriculum items across dynamic sections. Questions can be assigned to multiple assessment pools."
+            actions={
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleOpenCreateSection}
+                  className="csl-btn-secondary"
+                >
+                  + Create Reusable Section
+                </button>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={handleOpenCreateSection}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 16px',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #CBD5E1',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#0B2E6F',
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            }}
-          >
-            <span>+ Create Reusable Section</span>
-          </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportResult(null);
+                    setShowImportModal(true);
+                  }}
+                  className="csl-btn-secondary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>Import CSV</span>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setImportResult(null);
-              setShowImportModal(true);
-            }}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 16px',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #CBD5E1',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#0B2E6F',
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span>Import CSV</span>
-          </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCodingJsonModal(true)}
+                  className="csl-btn-secondary"
+                >
+                  💻 Import Coding JSON
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setShowCodingJsonModal(true)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 16px',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #CBD5E1',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#0B2E6F',
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
-            }}
-          >
-            <span>💻 Import Coding JSON</span>
-          </button>
+                <button
+                  type="button"
+                  data-testid="create-mcq-question-btn"
+                  onClick={openCreateMcqModal}
+                  className="csl-btn-primary"
+                >
+                  + Create MCQ Question
+                </button>
 
-          <button
-            type="button"
-            data-testid="create-mcq-question-btn"
-            onClick={openCreateMcqModal}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 16px',
-              backgroundColor: '#1455B8',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(20, 85, 184, 0.25)',
-            }}
-          >
-            <span>+ Create MCQ Question</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="create-coding-question-btn"
-            onClick={openCreateCodingModal}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 16px',
-              backgroundColor: '#0F172A',
-              color: '#38BDF8',
-              border: '1px solid #0EA5E9',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.18)',
-            }}
-          >
-            <span>&lt;/&gt; + Create Coding Question</span>
-          </button>
-        </div>
-      </div>
+                <button
+                  type="button"
+                  data-testid="create-coding-question-btn"
+                  onClick={openCreateCodingModal}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    backgroundColor: tokens.codingBg,
+                    color: tokens.codingText,
+                    border: `1px solid ${tokens.codingBorder}`,
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  &lt;/&gt; + Create Coding Question
+                </button>
+              </div>
+            }
+          />
 
       {/* ─── METRICS CARDS ────────────────────────────────────────── */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: '14px',
-          marginBottom: '20px',
+          gap: '16px',
         }}
       >
-        <div
-          style={{
-            backgroundColor: tokens.surfaceCard,
-            borderRadius: '12px',
-            border: `1px solid ${tokens.border}`,
-            padding: '16px 18px',
-            boxShadow: tokens.cardShadow,
-          }}
-        >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: tokens.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Total Bank Questions
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: tokens.cslNavy, marginTop: '4px' }}>
-            {questions.length}
-          </div>
-          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
-            Available across all curriculum tracks
-          </div>
-        </div>
-
-        <div
-          style={{
-            backgroundColor: tokens.surfaceCard,
-            borderRadius: '12px',
-            border: `1px solid ${tokens.border}`,
-            padding: '16px 18px',
-            boxShadow: tokens.cardShadow,
-          }}
-        >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Active Questions
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#16A34A', marginTop: '4px' }}>
-            {questions.filter((q) => q.is_active && !q.is_archived).length}
-          </div>
-          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
-            Live for assignment &amp; delivery
-          </div>
-        </div>
-
-        <div
-          style={{
-            backgroundColor: tokens.surfaceCard,
-            borderRadius: '12px',
-            border: `1px solid ${tokens.border}`,
-            padding: '16px 18px',
-            boxShadow: tokens.cardShadow,
-          }}
-        >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#7C3AED', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Reusable Sections
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#7C3AED', marginTop: '4px' }}>
-            {sections.length}
-          </div>
-          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
-            Categorized section buckets
-          </div>
-        </div>
-
-        <div
-          style={{
-            backgroundColor: tokens.surfaceCard,
-            borderRadius: '12px',
-            border: `1px solid ${tokens.border}`,
-            padding: '16px 18px',
-            boxShadow: tokens.cardShadow,
-          }}
-        >
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#EA580C', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Archived Questions
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 800, color: '#EA580C', marginTop: '4px' }}>
-            {questions.filter((q) => q.is_archived).length}
-          </div>
-          <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>
-            Safely retained historical items
-          </div>
-        </div>
+        <OdometerCard label="Total Bank Questions" value={questions.length} subtitle="All curriculum tracks" />
+        <OdometerCard label="Active Questions" value={questions.filter((q) => q.is_active && !q.is_archived).length} subtitle="Live for delivery" accent="green" />
+        <OdometerCard label="Reusable Sections" value={sections.length} subtitle="Section buckets" accent="indigo" />
+        <OdometerCard label="Archived Questions" value={questions.filter((q) => q.is_archived).length} subtitle="Retained historical items" accent="amber" />
       </div>
 
-      {/* ─── SECTION NAVIGATION TAB PILLS (PHASE 2.1) ───────────────── */}
+      {/* ─── SECTION NAVIGATION TAB PILLS ───────────────── */}
       <div
         style={{
           display: 'flex',
           gap: '8px',
           alignItems: 'center',
           overflowX: 'auto',
-          paddingBottom: '12px',
-          marginBottom: '14px',
+          paddingBottom: '4px',
         }}
       >
         <button
@@ -1074,12 +903,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
             setSectionFilter('');
           }}
           style={{
-            padding: '8px 16px',
+            padding: '7px 14px',
             borderRadius: '20px',
-            border: !sectionFilter ? '2px solid #1455B8' : '1px solid #CBD5E1',
-            backgroundColor: !sectionFilter ? '#EFF6FF' : '#FFFFFF',
-            color: !sectionFilter ? '#1D4ED8' : '#475569',
-            fontWeight: !sectionFilter ? 800 : 600,
+            border: !sectionFilter ? `1.5px solid ${tokens.cslBlue}` : `1px solid ${tokens.border}`,
+            backgroundColor: !sectionFilter ? tokens.cslBlueSoftBg : tokens.surfaceCard,
+            color: !sectionFilter ? tokens.cslBlueSoftText : tokens.textSecondary,
+            fontWeight: !sectionFilter ? 700 : 500,
             fontSize: '13px',
             cursor: 'pointer',
             whiteSpace: 'nowrap',
@@ -1103,12 +932,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                 setSectionFilter(sec.code);
               }}
               style={{
-                padding: '8px 16px',
+                padding: '7px 14px',
                 borderRadius: '20px',
-                border: isSelected ? '2px solid #7C3AED' : '1px solid #CBD5E1',
-                backgroundColor: isSelected ? '#F5F3FF' : '#FFFFFF',
-                color: isSelected ? '#6D28D9' : '#475569',
-                fontWeight: isSelected ? 800 : 600,
+                border: isSelected ? `1.5px solid ${tokens.codingBorder}` : `1px solid ${tokens.border}`,
+                backgroundColor: isSelected ? tokens.codingBg : tokens.surfaceCard,
+                color: isSelected ? tokens.codingText : tokens.textSecondary,
+                fontWeight: isSelected ? 700 : 500,
                 fontSize: '13px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -1123,17 +952,13 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
       {/* ─── FILTER TOOLBAR ────────────────────────────────────────── */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '12px',
-          border: '1px solid #E2E8F0',
-          padding: '12px 18px',
-          marginBottom: '16px',
+          padding: '12px 16px',
           display: 'flex',
-          gap: '12px',
+          gap: '10px',
           flexWrap: 'wrap',
           alignItems: 'center',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
         }}
       >
         <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '8px', flex: 1, minWidth: '240px' }}>
@@ -1143,7 +968,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               height="15"
               viewBox="0 0 24 24"
               fill="none"
-              stroke="#94A3B8"
+              stroke={tokens.textMuted}
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -1158,29 +983,22 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search question prompt..."
               style={{
-                padding: '9px 12px 9px 36px',
+                padding: '8px 12px 8px 36px',
                 borderRadius: '8px',
-                border: '1px solid #CBD5E1',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.inputBg,
+                color: tokens.textPrimary,
                 fontSize: '13px',
                 width: '100%',
                 boxSizing: 'border-box',
-                outlineColor: '#1455B8',
+                outlineColor: tokens.cslBlue,
               }}
             />
           </div>
           <button
             type="submit"
-            style={{
-              padding: '9px 16px',
-              backgroundColor: '#1455B8',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(20, 85, 184, 0.2)',
-            }}
+            className="csl-btn-primary"
+            style={{ padding: '8px 16px' }}
           >
             Filter
           </button>
@@ -1190,14 +1008,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           value={sectionFilter}
           onChange={(e) => setSectionFilter(e.target.value)}
           style={{
-            padding: '9px 12px',
+            padding: '8px 12px',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
+            border: `1px solid ${tokens.border}`,
             fontSize: '13px',
-            backgroundColor: '#FFFFFF',
-            fontWeight: 600,
-            color: '#1E293B',
-            outlineColor: '#1455B8',
+            backgroundColor: tokens.inputBg,
+            fontWeight: 500,
+            color: tokens.textPrimary,
+            outlineColor: tokens.cslBlue,
           }}
         >
           <option value="">All Sections</option>
@@ -1214,14 +1032,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           value={difficultyFilter}
           onChange={(e) => setDifficultyFilter(e.target.value)}
           style={{
-            padding: '9px 12px',
+            padding: '8px 12px',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
+            border: `1px solid ${tokens.border}`,
             fontSize: '13px',
-            backgroundColor: '#FFFFFF',
-            fontWeight: 600,
-            color: '#1E293B',
-            outlineColor: '#1455B8',
+            backgroundColor: tokens.inputBg,
+            fontWeight: 500,
+            color: tokens.textPrimary,
+            outlineColor: tokens.cslBlue,
           }}
         >
           <option value="">All Difficulties</option>
@@ -1234,14 +1052,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           value={activeFilter}
           onChange={(e) => setActiveFilter(e.target.value)}
           style={{
-            padding: '9px 12px',
+            padding: '8px 12px',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
+            border: `1px solid ${tokens.border}`,
             fontSize: '13px',
-            backgroundColor: '#FFFFFF',
-            fontWeight: 600,
-            color: '#1E293B',
-            outlineColor: '#1455B8',
+            backgroundColor: tokens.inputBg,
+            fontWeight: 500,
+            color: tokens.textPrimary,
+            outlineColor: tokens.cslBlue,
           }}
         >
           <option value="">All Statuses</option>
@@ -1249,19 +1067,18 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           <option value="false">Inactive Only</option>
         </select>
 
-        {/* Phase 2.1 Archive Status Filter */}
         <select
           value={archiveFilter}
           onChange={(e) => setArchiveFilter(e.target.value as any)}
           style={{
-            padding: '9px 12px',
+            padding: '8px 12px',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
+            border: `1px solid ${tokens.border}`,
             fontSize: '13px',
-            backgroundColor: '#FFFFFF',
-            fontWeight: 600,
-            color: '#1E293B',
-            outlineColor: '#1455B8',
+            backgroundColor: tokens.inputBg,
+            fontWeight: 500,
+            color: tokens.textPrimary,
+            outlineColor: tokens.cslBlue,
           }}
         >
           <option value="ACTIVE_ONLY">Active Library (Hide Archived)</option>
@@ -1273,14 +1090,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
           value={assessmentFilter}
           onChange={(e) => setAssessmentFilter(e.target.value)}
           style={{
-            padding: '9px 12px',
+            padding: '8px 12px',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
+            border: `1px solid ${tokens.border}`,
             fontSize: '13px',
-            backgroundColor: '#FFFFFF',
-            fontWeight: 600,
-            color: '#1E293B',
-            outlineColor: '#1455B8',
+            backgroundColor: tokens.inputBg,
+            fontWeight: 500,
+            color: tokens.textPrimary,
+            outlineColor: tokens.cslBlue,
           }}
         >
           <option value="">All Assessments</option>
@@ -1301,16 +1118,8 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
               setSearch('');
               loadQuestions();
             }}
-            style={{
-              padding: '9px 12px',
-              backgroundColor: '#F1F5F9',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '12px',
-              fontWeight: 600,
-              color: '#475569',
-              cursor: 'pointer',
-            }}
+            className="csl-btn-secondary"
+            style={{ padding: '8px 12px', fontSize: '12px' }}
           >
             Reset
           </button>
@@ -1663,10 +1472,10 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleSelectRow(q.id)}
-                        style={{ width: '16px', height: '16px', accentColor: '#1455B8', cursor: 'pointer' }}
+                        style={{ width: '15px', height: '15px', accentColor: tokens.cslBlue, cursor: 'pointer' }}
                       />
                     </td>
-                    <td style={{ padding: '12px 14px', fontFamily: 'monospace', color: '#64748B', fontWeight: 600 }}>
+                    <td className="csl-tabular" style={{ padding: '12px 14px', fontFamily: tokens.monoFamily, color: tokens.textMuted, fontWeight: 600 }}>
                       #{q.id}
                     </td>
                     <td style={{ padding: '12px 14px' }}>
@@ -1680,7 +1489,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                               padding: '3px 10px',
                               borderRadius: '9999px',
                               fontSize: '11px',
-                              fontWeight: 700,
+                              fontWeight: 600,
                               whiteSpace: 'nowrap',
                               ...badgeStyle,
                             }}
@@ -1690,53 +1499,41 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                         );
                       })()}
                     </td>
-                    <td style={{ padding: '12px 14px', color: '#0F172A' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                    <td style={{ padding: '12px 14px', color: tokens.textPrimary }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
                         {isCodingQuestion(q) && (
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 800,
-                              backgroundColor: '#0F172A',
-                              color: '#38BDF8',
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              fontFamily: 'monospace',
-                            }}
-                          >
-                            &lt;/&gt; CODING
-                          </span>
+                          <StatusBadge label="</> CODING" variant="coding" size="sm" dot={false} />
                         )}
-                        <span style={{ fontWeight: 600, lineHeight: 1.45 }}>
+                        <span style={{ fontWeight: 600, lineHeight: 1.45, color: tokens.textPrimary }}>
                           {q.prompt.length > 110 ? `${q.prompt.slice(0, 110)}...` : q.prompt}
                         </span>
                       </div>
                       {isCodingQuestion(q) ? (
-                        <div style={{ fontSize: '11px', color: '#475569', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: '11.5px', color: tokens.textSecondary, display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                           <span>
                             Languages: {(q.programming_details?.allowed_languages || ['python']).join(', ').toUpperCase()}
                           </span>
                           <span>•</span>
-                          <span>
+                          <span className="csl-tabular">
                             Test Cases: {q.programming_details?.test_cases?.length ?? 0} ({q.programming_details?.test_cases?.filter((t) => t.is_public).length ?? 0} sample / {q.programming_details?.test_cases?.filter((t) => !t.is_public).length ?? 0} hidden)
                           </span>
                         </div>
                       ) : (
-                        <div style={{ fontSize: '11px', color: '#64748B' }}>
+                        <div style={{ fontSize: '11.5px', color: tokens.textMuted }}>
                           A: {q.option_a.slice(0, 24)} | B: {q.option_b.slice(0, 24)} | C: {q.option_c.slice(0, 24)} | D: {q.option_d.slice(0, 24)}
                         </div>
                       )}
                       {q.pool_memberships && q.pool_memberships.length > 0 ? (
-                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '5px' }}>
                           {q.pool_memberships.map((pool) => (
                             <span
                               key={pool.id}
                               style={{
-                                fontSize: '10px',
-                                fontWeight: 700,
-                                backgroundColor: '#EEF2FF',
-                                color: '#4338CA',
-                                border: '1px solid #C7D2FE',
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                backgroundColor: tokens.cslBlueSoftBg,
+                                color: tokens.cslBlueSoftText,
+                                border: `1px solid ${tokens.cslBlueSoftBorder}`,
                                 padding: '1px 6px',
                                 borderRadius: '4px',
                               }}
@@ -1749,13 +1546,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       ) : (
                         <span
                           style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            backgroundColor: tokens.warningBg,
+                            color: tokens.warningText,
+                            border: `1px solid ${tokens.warningBorder}`,
                             padding: '1px 6px',
                             borderRadius: '4px',
-                            marginTop: '4px',
+                            marginTop: '5px',
                             display: 'inline-block',
                           }}
                         >
@@ -1765,22 +1563,7 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                       {isCodingQuestion(q) ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '2px 7px',
-                            borderRadius: '6px',
-                            backgroundColor: '#E0F2FE',
-                            color: '#0369A1',
-                            fontWeight: 800,
-                            fontSize: '10.5px',
-                            border: '1px solid #BAE6FD',
-                          }}
-                        >
-                          TESTS
-                        </span>
+                        <StatusBadge label="TESTS" variant="info" size="sm" dot={false} />
                       ) : (
                         <span
                           style={{
@@ -1790,11 +1573,11 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                             width: '24px',
                             height: '24px',
                             borderRadius: '6px',
-                            backgroundColor: '#DCFCE7',
-                            color: '#166534',
-                            fontWeight: 800,
-                            fontFamily: 'monospace',
-                            border: '1px solid #86EFAC',
+                            backgroundColor: tokens.successBg,
+                            color: tokens.successText,
+                            fontWeight: 700,
+                            fontFamily: tokens.monoFamily,
+                            border: `1px solid ${tokens.successBorder}`,
                           }}
                         >
                           {q.correct_option}
@@ -1802,35 +1585,19 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      <span
-                        style={{
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          backgroundColor:
-                            q.difficulty === 'EASY'
-                              ? '#EFF6FF'
-                              : q.difficulty === 'MEDIUM'
-                              ? '#FEF3C7'
-                              : '#FEE2E2',
-                          color:
-                            q.difficulty === 'EASY'
-                              ? '#1455B8'
-                              : q.difficulty === 'MEDIUM'
-                              ? '#B45309'
-                              : '#DC2626',
-                        }}
-                      >
-                        {q.difficulty}
-                      </span>
+                      <StatusBadge
+                        status={q.difficulty}
+                        variant={q.difficulty === 'EASY' ? 'info' : q.difficulty === 'MEDIUM' ? 'warning' : 'danger'}
+                        size="sm"
+                        dot={false}
+                      />
                     </td>
-                    {/* Phase 2.1 Marks */}
-                    <td style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 800, color: '#0B2E6F' }}>
+                    {/* Marks */}
+                    <td className="csl-tabular" style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: tokens.textPrimary }}>
                       {q.marks ?? 1}
                     </td>
 
-                    {/* Phase 2.1 Status Badges */}
+                    {/* Status Badges */}
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
                         <button
@@ -1838,52 +1605,33 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           style={{
                             padding: '2px 8px',
                             borderRadius: '9999px',
-                            border: 'none',
+                            border: `1px solid ${q.is_active ? tokens.successBorder : tokens.border}`,
                             fontSize: '10.5px',
-                            fontWeight: 700,
-                            backgroundColor: q.is_active ? '#DCFCE7' : '#F1F5F9',
-                            color: q.is_active ? '#166534' : '#64748B',
+                            fontWeight: 600,
+                            backgroundColor: q.is_active ? tokens.successBg : tokens.surfaceElevated,
+                            color: q.is_active ? tokens.successText : tokens.textMuted,
                             cursor: 'pointer',
                           }}
                           title="Toggle Active/Inactive"
                         >
                           {q.is_active ? 'Active' : 'Inactive'}
                         </button>
-                        {q.is_archived && (
-                          <span
-                            style={{
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              backgroundColor: '#FEF3C7',
-                              color: '#92400E',
-                              border: '1px solid #FDE68A',
-                            }}
-                          >
-                            Archived
-                          </span>
-                        )}
+                        {q.is_archived && <StatusBadge label="Archived" variant="warning" size="sm" dot={false} />}
                       </div>
                     </td>
 
-                    {/* Phase 2.1 Actions */}
+                    {/* Actions */}
                     <td style={{ padding: '12px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         type="button"
                         onClick={() => setPreviewQuestion(q)}
+                        className="csl-btn-secondary"
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '4px',
                           padding: '4px 8px',
-                          backgroundColor: '#F8FAFC',
-                          border: '1px solid #CBD5E1',
-                          borderRadius: '6px',
-                          color: '#0B2E6F',
                           fontSize: '11.5px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
                         }}
                         title="Preview question options and details"
                       >
@@ -1898,12 +1646,13 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           alignItems: 'center',
                           gap: '4px',
                           padding: '4px 8px',
-                          backgroundColor: '#F5F3FF',
-                          border: '1px solid #DDD6FE',
+                          marginLeft: '4px',
+                          backgroundColor: tokens.codingBg,
+                          border: `1px solid ${tokens.codingBorder}`,
                           borderRadius: '6px',
-                          color: '#6D28D9',
+                          color: tokens.codingText,
                           fontSize: '11.5px',
-                          fontWeight: 700,
+                          fontWeight: 600,
                           cursor: 'pointer',
                         }}
                         title="Assign to one or more assessment pools"
@@ -1913,18 +1662,14 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
                       <button
                         onClick={() => openEditModal(q)}
+                        className="csl-btn-secondary"
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '4px',
                           padding: '4px 8px',
-                          backgroundColor: '#FFFFFF',
-                          border: '1px solid #CBD5E1',
-                          borderRadius: '6px',
-                          color: '#0B2E6F',
+                          marginLeft: '4px',
                           fontSize: '11.5px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
                         }}
                         title="Edit question"
                       >
@@ -1938,12 +1683,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           alignItems: 'center',
                           gap: '4px',
                           padding: '4px 8px',
-                          backgroundColor: q.is_archived ? '#EFF6FF' : '#FFFBEB',
-                          border: `1px solid ${q.is_archived ? '#BFDBFE' : '#FDE68A'}`,
+                          backgroundColor: q.is_archived ? tokens.cslBlueSoftBg : tokens.warningBg,
+                          border: `1px solid ${q.is_archived ? tokens.cslBlueSoftBorder : tokens.warningBorder}`,
                           borderRadius: '6px',
-                          color: q.is_archived ? '#1E40AF' : '#92400E',
+                          color: q.is_archived ? tokens.cslBlueSoftText : tokens.warningText,
                           fontSize: '11.5px',
-                          fontWeight: 700,
+                          fontWeight: 600,
                           cursor: 'pointer',
                           marginLeft: '4px',
                         }}
@@ -1959,12 +1704,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
                           alignItems: 'center',
                           gap: '4px',
                           padding: '4px 8px',
-                          backgroundColor: '#FFFFFF',
-                          border: '1px solid #FECACA',
+                          backgroundColor: tokens.dangerBg,
+                          border: `1px solid ${tokens.dangerBorder}`,
                           borderRadius: '6px',
-                          color: '#DC2626',
+                          color: tokens.dangerText,
                           fontSize: '11.5px',
-                          fontWeight: 700,
+                          fontWeight: 600,
                           cursor: 'pointer',
                           marginLeft: '4px',
                           opacity: q.can_be_deleted === false ? 0.7 : 1,
@@ -1985,33 +1730,30 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         <div
           style={{
             padding: '14px 20px',
-            backgroundColor: '#FAF7F3',
-            borderTop: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceElevated,
+            borderTop: `1px solid ${tokens.border}`,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             fontSize: '12.5px',
-            color: '#64748B',
+            color: tokens.textSecondary,
           }}
         >
-          <div>
-            Showing <strong>{totalQuestions > 0 ? startIndex + 1 : 0}</strong> to{' '}
-            <strong>{endIndex}</strong> of <strong>{totalQuestions}</strong> questions
+          <div className="csl-tabular">
+            Showing <strong style={{ color: tokens.textPrimary }}>{totalQuestions > 0 ? startIndex + 1 : 0}</strong> to{' '}
+            <strong style={{ color: tokens.textPrimary }}>{endIndex}</strong> of <strong style={{ color: tokens.textPrimary }}>{totalQuestions}</strong> questions
           </div>
 
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
             <button
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
+              className="csl-btn-secondary"
               style={{
                 padding: '5px 10px',
-                borderRadius: '6px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: currentPage === 1 ? '#94A3B8' : '#0B2E6F',
+                color: currentPage === 1 ? tokens.textMuted : tokens.textPrimary,
                 cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                 fontSize: '12px',
-                fontWeight: 700,
               }}
             >
               &lt;
@@ -2032,18 +1774,18 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
 
                 return (
                   <span key={page} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    {showEllipsis && <span style={{ color: '#94A3B8' }}>...</span>}
+                    {showEllipsis && <span style={{ color: tokens.textMuted }}>...</span>}
                     <button
                       onClick={() => setCurrentPage(page)}
                       style={{
                         padding: '5px 10px',
                         borderRadius: '6px',
-                        border: page === currentPage ? 'none' : '1px solid #CBD5E1',
-                        backgroundColor: page === currentPage ? '#0B2E6F' : '#FFFFFF',
-                        color: page === currentPage ? '#FFFFFF' : '#475569',
+                        border: page === currentPage ? 'none' : `1px solid ${tokens.border}`,
+                        backgroundColor: page === currentPage ? tokens.cslBlue : tokens.surfaceCard,
+                        color: page === currentPage ? '#FFFFFF' : tokens.textSecondary,
                         cursor: 'pointer',
                         fontSize: '12px',
-                        fontWeight: page === currentPage ? 800 : 600,
+                        fontWeight: page === currentPage ? 700 : 500,
                       }}
                     >
                       {page}
@@ -2055,15 +1797,12 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
             <button
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages || totalPages === 0}
+              className="csl-btn-secondary"
               style={{
                 padding: '5px 10px',
-                borderRadius: '6px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#FFFFFF',
-                color: currentPage === totalPages ? '#94A3B8' : '#0B2E6F',
+                color: currentPage === totalPages ? tokens.textMuted : tokens.textPrimary,
                 cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
                 fontSize: '12px',
-                fontWeight: 700,
               }}
             >
               &gt;
@@ -3339,6 +3078,6 @@ export function AdminQuestionsView({ initialAssessmentId }: AdminQuestionsViewPr
         onSave={handleSaveQuestion}
         saving={savingQuestion}
       />
-    </div>
+    </PageContainer>
   );
 }

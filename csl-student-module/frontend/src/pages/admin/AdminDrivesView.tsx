@@ -27,8 +27,10 @@ import {
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { AccessibleModal } from '../../components/admin/AccessibleModal';
 import { FoldedCardSkeleton, MetricCardSkeleton } from '../../components/admin/SkeletonLoaders';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState } from '../../components/ui';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
-import { SearchIcon, PlusIcon } from '../../components/common/Icons';
+import { PlusIcon, DrivesIcon } from '../../components/common/Icons';
 
 interface AdminDrivesViewProps {
   colleges?: AdminCollege[];
@@ -52,6 +54,7 @@ export function AdminDrivesView({
   onRefreshAssessments,
   onNavigateToCreateAssessment,
 }: AdminDrivesViewProps) {
+  const { tokens } = useAdminTheme();
   const [internalAssessments, setInternalAssessments] = useState<AdminAssessment[]>(assessments);
   const [internalColleges, setInternalColleges] = useState<AdminCollege[]>(colleges);
 
@@ -495,7 +498,7 @@ export function AdminDrivesView({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', width: '100%' }}>
+    <PageContainer>
       {/* Toast Notification */}
       {toastMessage && (
         <div
@@ -518,111 +521,69 @@ export function AdminDrivesView({
         </div>
       )}
 
-      {/* Top Header & Stat Odometer Cards */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <h1 style={{ fontSize: '32px', fontWeight: 800, color: '#0F172A', margin: 0, letterSpacing: '-0.03em' }}>
-            Drive Management
-          </h1>
-          <p style={{ margin: '6px 0 0', color: '#64748B', fontSize: '14px' }}>
-            Multi-college recruitment, campus placements, and pooled assessment drives.
-          </p>
-        </div>
+      {/* Top Header & Stat Metric Cards */}
+      <SectionHeader
+        title="Drives"
+        description="Organize assessment drives, participating colleges, 8-digit invite codes, and linked assessments."
+        actions={
+          <button
+            type="button"
+            onClick={() => setIsCreateOpen(true)}
+            className="csl-btn-primary"
+          >
+            <PlusIcon size={16} color={tokens.onPrimary} />
+            <span>Create Drive</span>
+          </button>
+        }
+      />
 
-        <button
-          onClick={() => setIsCreateOpen(true)}
-          style={{
-            backgroundColor: '#0052CC',
-            color: '#FFFFFF',
-            borderRadius: '14px',
-            padding: '12px 24px',
-            fontWeight: 700,
-            fontSize: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(0, 82, 204, 0.25)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <PlusIcon size={16} /> Create New Drive
-        </button>
-      </div>
-
-      {/* Odometer Cards */}
+      {/* Summary Metrics */}
       {loading ? (
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px' }}>
           <MetricCardSkeleton />
           <MetricCardSkeleton />
           <MetricCardSkeleton />
           <MetricCardSkeleton />
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          <OdometerCard label="Total Drives" value={totalDrives} />
-          <OdometerCard label="Active Drives" value={activeDrives} />
-          <OdometerCard label="Registrations" value={totalRegistrations} />
-          <OdometerCard label="Total Assessments" value={totalLinkedAssessments} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px' }}>
+          <OdometerCard label="Total Drives" value={totalDrives} icon={<DrivesIcon size={18} />} />
+          <OdometerCard label="Active Drives" value={activeDrives} valueTone="success" icon={<DrivesIcon size={18} />} />
+          <OdometerCard label="Registrations" value={totalRegistrations} valueTone="primary" />
+          <OdometerCard label="Linked Assessments" value={totalLinkedAssessments} />
         </div>
       )}
 
-      {/* Pill Filter Bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '16px',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '50px',
-          padding: '6px 16px',
-          border: '1.5px solid #E2E8F0',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
-          <SearchIcon size={18} color="#0052CC" />
-          <input
-            type="text"
-            placeholder="Search by Drive Name, Code or Description..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              width: '100%',
-              border: 'none',
-              outline: 'none',
-              fontSize: '14px',
-              color: '#1E293B',
-              backgroundColor: 'transparent',
-            }}
-          />
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>STATUS:</span>
+      {/* Search & Filter Toolbar */}
+      <SearchToolbar
+        searchValue={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchPlaceholder="Search by drive name, code, or description..."
+        filters={
           <select
+            aria-label="Filter drives by status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             style={{
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              border: `1px solid ${tokens.border}`,
               fontSize: '13px',
-              fontWeight: 600,
-              backgroundColor: '#F8FAFC',
+              fontWeight: 500,
+              color: tokens.textPrimary,
+              backgroundColor: tokens.inputBg,
               outline: 'none',
               cursor: 'pointer',
             }}
           >
-            <option value="ALL">All Statuses</option>
+            <option value="ALL">Status: All</option>
             <option value="ACTIVE">Active</option>
             <option value="DRAFT">Draft</option>
             <option value="CLOSED">Closed</option>
             <option value="ARCHIVED">Archived</option>
           </select>
-        </div>
-      </div>
+        }
+      />
 
       {/* Drive Cards Directory */}
       {loading ? (
@@ -632,138 +593,124 @@ export function AdminDrivesView({
           <FoldedCardSkeleton />
         </div>
       ) : filteredDrives.length === 0 ? (
-        <div
-          style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '20px',
-            border: '1px dashed #CBD5E1',
-            padding: '48px 24px',
-            textAlign: 'center',
-            color: '#64748B',
-          }}
-        >
-          <div style={{ fontSize: '32px', marginBottom: '8px' }}>📁</div>
-          <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#334155', margin: '0 0 6px' }}>No Drives Found</h3>
-          <p style={{ margin: 0, fontSize: '14px' }}>
-            {searchQuery ? 'Try adjusting your search criteria.' : 'Create your first recruitment drive to get started.'}
-          </p>
-        </div>
+        <EmptyState
+          title="No Drives Found"
+          description={searchQuery ? 'Try adjusting your search or status filters.' : 'Create your first recruitment drive to get started.'}
+          action={
+            <button type="button" onClick={() => setIsCreateOpen(true)} className="csl-btn-primary">
+              Create Drive
+            </button>
+          }
+        />
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '20px' }}>
           {filteredDrives.map((drive) => {
-            const isDraft = drive.status === 'DRAFT';
-            const isActive = drive.status === 'ACTIVE';
-
             return (
-              <div
+              <article
                 key={drive.id}
                 style={{
-                  position: 'relative',
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '20px',
-                  border: '1px solid #E2E8F0',
-                  padding: '24px 22px 20px',
-                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.04)',
+                  backgroundColor: tokens.surfaceCard,
+                  borderRadius: '10px',
+                  border: `1px solid ${tokens.border}`,
+                  padding: '20px 22px',
+                  boxShadow: tokens.cardShadow,
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  overflow: 'hidden',
-                  transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                  gap: '16px',
                 }}
               >
-                {/* Folded Blue Corner Ribbon */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    right: 0,
-                    width: '54px',
-                    height: '54px',
-                    backgroundColor: '#0052CC',
-                    clipPath: 'polygon(100% 0, 0 0, 100% 100%)',
-                    zIndex: 1,
-                  }}
-                />
-
                 {/* Card Top */}
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                    <span
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        padding: '3px 8px',
-                        borderRadius: '6px',
-                        backgroundColor: isActive ? '#DCFCE7' : isDraft ? '#FEF3C7' : '#F1F5F9',
-                        color: isActive ? '#15803D' : isDraft ? '#B45309' : '#475569',
-                      }}
-                    >
-                      {drive.status}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        padding: '3px 8px',
-                        borderRadius: '6px',
-                        backgroundColor: '#EFF6FF',
-                        color: '#0052CC',
-                      }}
-                    >
-                      {drive.visibility}
-                    </span>
-                  </div>
-
-                  <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#0F172A', margin: '0 0 6px', paddingRight: '36px' }}>
-                    {drive.name}
-                  </h3>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '2px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', fontFamily: 'monospace' }}>
-                      CODE: {drive.code}
-                    </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <StatusBadge status={drive.status} />
+                      <StatusBadge
+                        status={drive.visibility}
+                        label={drive.visibility === 'INVITE_ONLY' ? 'Invite Only' : 'Public'}
+                        variant={drive.visibility === 'INVITE_ONLY' ? 'neutral' : 'info'}
+                        size="sm"
+                      />
+                    </div>
                     {drive.drive_code && (
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#166534', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace' }}>
-                        8-DIGIT: {drive.drive_code}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(drive.drive_code || '', '8-Digit Access Code')}
+                        title="Click to copy 8-digit student access code"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '3px 9px',
+                          borderRadius: '6px',
+                          backgroundColor: tokens.cslBlueSoftBg,
+                          border: `1px solid ${tokens.cslBlueSoftBorder}`,
+                          color: tokens.cslBlueSoftText,
+                          fontFamily: tokens.monoFamily,
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          letterSpacing: '0.04em',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span>{drive.drive_code}</span>
+                        <span style={{ fontSize: '11px' }}>Copy</span>
+                      </button>
                     )}
                   </div>
+
+                  <h3 style={{ fontSize: '17px', fontWeight: 600, color: tokens.textPrimary, margin: 0 }}>
+                    {drive.name}
+                  </h3>
+                  <div style={{ fontSize: '12px', fontWeight: 500, color: tokens.textMuted, fontFamily: tokens.monoFamily }}>
+                    CODE: {drive.code}
+                  </div>
                   {drive.description && (
-                    <p style={{ fontSize: '13px', color: '#475569', margin: '8px 0 0', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    <p
+                      style={{
+                        fontSize: '13px',
+                        color: tokens.textSecondary,
+                        margin: 0,
+                        lineHeight: '18px',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
                       {drive.description}
                     </p>
                   )}
                 </div>
 
-                {/* Mini Stats Grid */}
+                {/* Mini Stats Strip */}
                 <div
                   style={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(3, 1fr)',
                     gap: '10px',
-                    margin: '16px 0',
-                    padding: '12px',
-                    backgroundColor: '#F8FAFC',
-                    borderRadius: '12px',
-                    border: '1px solid #EDF2F7',
+                    padding: '12px 0',
+                    borderTop: `1px solid ${tokens.border}`,
+                    borderBottom: `1px solid ${tokens.border}`,
                   }}
                 >
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A' }}>
-                      {String(drive.assessments_count || 0).padStart(2, '0')}
+                  <div>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Assessments</div>
+                    <div className="csl-tabular" style={{ fontSize: '16px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                      {drive.assessments_count || 0}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Assessments</div>
                   </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 800, color: '#0052CC' }}>
-                      {String(drive.registrations_count || 0).padStart(2, '0')}
+                  <div>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Candidates</div>
+                    <div className="csl-tabular" style={{ fontSize: '16px', fontWeight: 600, color: tokens.cslBlue, marginTop: '2px' }}>
+                      {drive.registrations_count || 0}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Candidates</div>
                   </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 800, color: '#059669' }}>
-                      {String(drive.colleges_count || 0).padStart(2, '0')}
+                  <div>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 500 }}>Colleges</div>
+                    <div className="csl-tabular" style={{ fontSize: '16px', fontWeight: 600, color: tokens.successText, marginTop: '2px' }}>
+                      {drive.colleges_count || 0}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Colleges</div>
                   </div>
                 </div>
 
@@ -773,97 +720,50 @@ export function AdminDrivesView({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    paddingTop: '12px',
-                    borderTop: '1px solid #F1F5F9',
+                    flexWrap: 'wrap',
+                    gap: '8px',
                   }}
                 >
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     <button
+                      type="button"
                       onClick={() => handleOpenEdit(drive)}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        backgroundColor: '#FFFFFF',
-                        color: '#0F172A',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
                     >
                       Edit
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleArchiveDrive(drive.id, drive.name)}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        backgroundColor: '#FFFFFF',
-                        color: '#64748B',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
                     >
                       Archive
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         const publicUrl = `${window.location.origin}/register?drive=${drive.code}`;
                         copyToClipboard(publicUrl, 'Public registration link');
                       }}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #CBD5E1',
-                        backgroundColor: '#FFFFFF',
-                        color: '#0052CC',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px', color: tokens.cslBlue }}
                     >
                       Copy Link
                     </button>
-                    {drive.drive_code && (
-                      <button
-                        onClick={() => copyToClipboard(drive.drive_code || "", '8-Digit Access Code')}
-                        title="Copy 8-Digit Student Access Code"
-                        style={{
-                          padding: '6px 12px',
-                          borderRadius: '8px',
-                          border: '1px solid #BBF7D0',
-                          backgroundColor: '#F0FDF4',
-                          color: '#15803D',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Copy 8-Digit
-                      </button>
-                    )}
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => handleOpenManage(drive.id)}
-                    style={{
-                      backgroundColor: '#0052CC',
-                      color: '#FFFFFF',
-                      padding: '8px 18px',
-                      borderRadius: '10px',
-                      border: 'none',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      boxShadow: '0 2px 6px rgba(0, 82, 204, 0.2)',
-                    }}
+                    className="csl-btn-primary"
+                    style={{ padding: '6px 14px', fontSize: '12.5px' }}
                   >
                     Manage Drive
                   </button>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
@@ -1570,16 +1470,17 @@ export function AdminDrivesView({
           <div>
             {/* 8-Digit Access Banner */}
             {driveDetail.drive_code && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '10px', padding: '10px 16px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', backgroundColor: tokens.successBg, border: `1px solid ${tokens.successBorder}`, borderRadius: '10px', padding: '12px 16px', marginBottom: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#166534' }}>8-Digit Student Access Code:</span>
-                  <span style={{ fontSize: '16px', fontWeight: 800, color: '#15803D', fontFamily: 'monospace', letterSpacing: '1px' }}>{driveDetail.drive_code}</span>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: tokens.successText }}>8-Digit Student Access Code:</span>
+                  <span style={{ fontSize: '16px', fontWeight: 700, color: tokens.successText, fontFamily: tokens.monoFamily, letterSpacing: '1px' }}>{driveDetail.drive_code}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <button
                     type="button"
                     onClick={() => copyToClipboard(driveDetail.drive_code || "", '8-Digit Access Code')}
-                    style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #16A34A', backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                    className="csl-btn-secondary"
+                    style={{ padding: '5px 12px', fontSize: '12px', color: tokens.successText, borderColor: tokens.successBorder }}
                   >
                     Copy Code
                   </button>
@@ -1587,14 +1488,12 @@ export function AdminDrivesView({
                     type="button"
                     onClick={handleRegenerateAccessCode}
                     disabled={regeneratingCode}
+                    className="csl-btn-secondary"
                     style={{
                       padding: '5px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid #0D52D6',
-                      backgroundColor: '#EEF2FF',
-                      color: '#1E40AF',
                       fontSize: '12px',
-                      fontWeight: 700,
+                      color: tokens.cslBlueSoftText,
+                      borderColor: tokens.cslBlueSoftBorder,
                       cursor: regeneratingCode ? 'wait' : 'pointer',
                     }}
                   >
@@ -1608,9 +1507,9 @@ export function AdminDrivesView({
             <div
               style={{
                 display: 'flex',
-                gap: '8px',
-                borderBottom: '2px solid #E2E8F0',
-                paddingBottom: '8px',
+                gap: '6px',
+                borderBottom: `1px solid ${tokens.border}`,
+                paddingBottom: '10px',
                 marginBottom: '20px',
                 overflowX: 'auto',
               }}
@@ -1628,14 +1527,14 @@ export function AdminDrivesView({
                   key={tab.key}
                   onClick={() => handleTabChange(tab.key as any)}
                   style={{
-                    padding: '8px 16px',
-                    borderRadius: '10px',
-                    border: 'none',
-                    fontWeight: 700,
+                    padding: '7px 14px',
+                    borderRadius: '8px',
+                    border: manageTab === tab.key ? `1px solid ${tokens.cslBlue}` : `1px solid ${tokens.border}`,
+                    fontWeight: 600,
                     fontSize: '13px',
                     cursor: 'pointer',
-                    backgroundColor: manageTab === tab.key ? '#0052CC' : '#F1F5F9',
-                    color: manageTab === tab.key ? '#FFFFFF' : '#475569',
+                    backgroundColor: manageTab === tab.key ? tokens.cslBlue : tokens.surfaceElevated,
+                    color: manageTab === tab.key ? '#FFFFFF' : tokens.textSecondary,
                     transition: 'all 0.15s ease',
                     whiteSpace: 'nowrap',
                   }}
@@ -1654,32 +1553,32 @@ export function AdminDrivesView({
                     gridTemplateColumns: 'repeat(4, 1fr)',
                     gap: '12px',
                     padding: '16px',
-                    backgroundColor: '#F8FAFC',
-                    borderRadius: '16px',
-                    border: '1px solid #EDF2F7',
+                    backgroundColor: tokens.surfaceElevated,
+                    borderRadius: '12px',
+                    border: `1px solid ${tokens.border}`,
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>STATUS</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A', marginTop: '2px' }}>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 600 }}>STATUS</div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, marginTop: '4px' }}>
                       {driveDetail.status}
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>VISIBILITY</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A', marginTop: '2px' }}>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 600 }}>VISIBILITY</div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, marginTop: '4px' }}>
                       {driveDetail.visibility}
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>REGISTERED</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#0052CC', marginTop: '2px' }}>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 600 }}>REGISTERED</div>
+                    <div className="csl-tabular" style={{ fontSize: '16px', fontWeight: 700, color: tokens.cslBlue, marginTop: '4px' }}>
                       {driveDetail.registrations_count}
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>ASSESSMENTS</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#059669', marginTop: '2px' }}>
+                    <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 600 }}>ASSESSMENTS</div>
+                    <div className="csl-tabular" style={{ fontSize: '16px', fontWeight: 700, color: tokens.successText, marginTop: '4px' }}>
                       {driveDetail.drive_assessments?.length || 0}
                     </div>
                   </div>
@@ -1688,12 +1587,12 @@ export function AdminDrivesView({
                 <div
                   style={{
                     padding: '16px 20px',
-                    borderRadius: '16px',
-                    backgroundColor: '#EFF6FF',
-                    border: '1px solid #BFDBFE',
+                    borderRadius: '12px',
+                    backgroundColor: tokens.cslBlueSoftBg,
+                    border: `1px solid ${tokens.cslBlueSoftBorder}`,
                   }}
                 >
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#1E40AF', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: tokens.cslBlueSoftText, marginBottom: '8px' }}>
                     Candidate Registration Link
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1703,11 +1602,12 @@ export function AdminDrivesView({
                       value={`${window.location.origin}/drive/${driveDetail.code}`}
                       style={{
                         flex: 1,
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        border: '1px solid #93C5FD',
-                        backgroundColor: '#FFFFFF',
-                        fontFamily: 'monospace',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: `1px solid ${tokens.border}`,
+                        backgroundColor: tokens.inputBg,
+                        color: tokens.textPrimary,
+                        fontFamily: tokens.monoFamily,
                         fontSize: '13px',
                       }}
                     />
@@ -1716,23 +1616,15 @@ export function AdminDrivesView({
                         const url = `${window.location.origin}/register?drive=${driveDetail.code}`;
                         copyToClipboard(url, 'Registration Link');
                       }}
-                      style={{
-                        backgroundColor: '#0052CC',
-                        color: '#FFFFFF',
-                        padding: '10px 18px',
-                        borderRadius: '10px',
-                        border: 'none',
-                        fontWeight: 600,
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                      }}
+                      className="csl-btn-primary"
+                      style={{ padding: '9px 16px', fontSize: '13px' }}
                     >
                       Copy Link
                     </button>
                   </div>
-                  <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#3B82F6' }}>
+                  <p style={{ margin: '8px 0 0', fontSize: '12px', color: tokens.cslBlueSoftText }}>
                     Students can visit this link directly or enter access code{' '}
-                    <strong style={{ fontFamily: 'monospace' }}>{driveDetail.code}</strong> on the registration portal.
+                    <strong style={{ fontFamily: tokens.monoFamily }}>{driveDetail.code}</strong> on the registration portal.
                   </p>
                 </div>
 
@@ -1740,15 +1632,10 @@ export function AdminDrivesView({
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(driveDetail)}
+                    className="csl-btn-secondary"
                     style={{
-                      padding: '8px 18px',
-                      borderRadius: '8px',
-                      border: '1px solid #CBD5E1',
-                      backgroundColor: '#FFFFFF',
-                      color: '#0F172A',
-                      fontWeight: 600,
+                      padding: '8px 16px',
                       fontSize: '13px',
-                      cursor: 'pointer',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
@@ -2666,6 +2553,6 @@ export function AdminDrivesView({
           </div>
         )}
       </AccessibleModal>
-    </div>
+    </PageContainer>
   );
 }

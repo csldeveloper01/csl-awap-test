@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AccessibleModal } from './AccessibleModal';
+import { useAdminTheme } from '../../utils/adminTheme';
 import {
   reassessAdminStudentAccess,
   exportCandidateDataCsv,
@@ -10,6 +11,31 @@ import {
   type AdminQuestionPool,
   importAdminQuestionsCSV,
 } from '../../api/admin';
+
+function useModalFieldStyle() {
+  const { tokens } = useAdminTheme();
+  return {
+    labelStyle: {
+      display: 'block',
+      fontSize: '13px',
+      fontWeight: 500,
+      color: tokens.textSecondary,
+      marginBottom: '6px',
+    } as React.CSSProperties,
+    inputStyle: {
+      width: '100%',
+      padding: '9px 12px',
+      borderRadius: '8px',
+      border: `1px solid ${tokens.border}`,
+      backgroundColor: tokens.inputBg,
+      color: tokens.textPrimary,
+      fontFamily: tokens.fontFamily,
+      fontSize: '13.5px',
+      outline: 'none',
+      boxSizing: 'border-box',
+    } as React.CSSProperties,
+  };
+}
 
 // ─── REASSESS STUDENT ACCESS MODAL ──────────────────────────────────────────
 
@@ -26,6 +52,8 @@ export function ReassessStudentAccessModal({
   onSuccess,
   assessments = [],
 }: ReassessModalProps) {
+  const { tokens } = useAdminTheme();
+  const { labelStyle, inputStyle } = useModalFieldStyle();
   const [registerNumber, setRegisterNumber] = useState('');
   const [assessmentId, setAssessmentId] = useState('');
   const [action, setAction] = useState<'RETRIEVE_ACCESS' | 'REASSIGN_NEW_ATTEMPT' | 'EXTRA_RECOVERY' | 'UNLOCK_FLAGGED'>('RETRIEVE_ACCESS');
@@ -96,10 +124,10 @@ export function ReassessStudentAccessModal({
           <div
             style={{
               padding: '12px 16px',
-              borderRadius: '12px',
-              backgroundColor: feedback.type === 'success' ? '#F0FDF4' : '#FEF2F2',
-              border: `1px solid ${feedback.type === 'success' ? '#86EFAC' : '#FECACA'}`,
-              color: feedback.type === 'success' ? '#166534' : '#991B1B',
+              borderRadius: '8px',
+              backgroundColor: feedback.type === 'success' ? tokens.successBg : tokens.dangerBg,
+              border: `1px solid ${feedback.type === 'success' ? tokens.successBorder : tokens.dangerBorder}`,
+              color: feedback.type === 'success' ? tokens.successText : tokens.dangerText,
               fontSize: '13px',
               lineHeight: 1.5,
             }}
@@ -114,7 +142,7 @@ export function ReassessStudentAccessModal({
                   href={feedback.accessUrl}
                   target="_blank"
                   rel="noreferrer"
-                  style={{ color: '#0052CC', fontWeight: 600, textDecoration: 'underline' }}
+                  style={{ color: tokens.cslBlue, fontWeight: 600, textDecoration: 'underline' }}
                 >
                   Open Candidate Direct Link
                 </a>
@@ -124,45 +152,20 @@ export function ReassessStudentAccessModal({
         )}
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Candidate Register Number or ID *
-          </label>
+          <label style={labelStyle}>Candidate Register Number or ID *</label>
           <input
             type="text"
             value={registerNumber}
             onChange={(e) => setRegisterNumber(e.target.value)}
             placeholder="e.g. 71762105001 or UUID"
             required
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
+            style={inputStyle}
           />
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Action Type *
-          </label>
-          <select
-            value={action}
-            onChange={(e) => setAction(e.target.value as any)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              outline: 'none',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Action Type *</label>
+          <select value={action} onChange={(e) => setAction(e.target.value as any)} style={inputStyle}>
             <option value="RETRIEVE_ACCESS">Retrieve Direct Assessment Access / Bypass Token</option>
             <option value="REASSIGN_NEW_ATTEMPT">Reassign Brand-New Assessment Attempt</option>
             <option value="EXTRA_RECOVERY">Grant Additional Recovery Slot</option>
@@ -171,23 +174,8 @@ export function ReassessStudentAccessModal({
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Assessment (Optional if student has active session)
-          </label>
-          <select
-            value={assessmentId}
-            onChange={(e) => setAssessmentId(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              outline: 'none',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Assessment (Optional if student has active session)</label>
+          <select value={assessmentId} onChange={(e) => setAssessmentId(e.target.value)} style={inputStyle}>
             <option value="">Auto-detect from candidate active record</option>
             {assessments.map((a) => (
               <option key={a.id} value={a.id}>
@@ -199,83 +187,35 @@ export function ReassessStudentAccessModal({
 
         {action === 'EXTRA_RECOVERY' && (
           <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-              Extra Time Allowed (Minutes)
-            </label>
+            <label style={labelStyle}>Extra Time Allowed (Minutes)</label>
             <input
               type="number"
               min="5"
               max="120"
               value={extraTime}
               onChange={(e) => setExtraTime(Number(e.target.value))}
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                borderRadius: '10px',
-                border: '1px solid #CBD5E1',
-                fontSize: '14px',
-                boxSizing: 'border-box',
-              }}
+              style={inputStyle}
             />
           </div>
         )}
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Reason for Administrative Action *
-          </label>
+          <label style={labelStyle}>Reason for Administrative Action *</label>
           <textarea
             rows={3}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="e.g. Lab power interruption verified by college coordinator."
             required
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              resize: 'vertical',
-            }}
+            style={{ ...inputStyle, resize: 'vertical' }}
           />
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={loading}
-            style={{
-              padding: '10px 18px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: '#FFFFFF',
-              color: '#475569',
-              fontWeight: 600,
-              fontSize: '14px',
-              cursor: 'pointer',
-            }}
-          >
+          <button type="button" onClick={onClose} disabled={loading} className="csl-btn-secondary">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              padding: '10px 22px',
-              borderRadius: '10px',
-              backgroundColor: '#0052CC',
-              color: '#FFFFFF',
-              fontWeight: 600,
-              fontSize: '14px',
-              border: 'none',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1,
-            }}
-          >
+          <button type="submit" disabled={loading} className="csl-btn-primary">
             {loading ? 'Processing...' : 'Authorize Action'}
           </button>
         </div>
@@ -301,6 +241,8 @@ export function ExportStudentDataModal({
   assessments = [],
   drives = [],
 }: ExportStudentDataModalProps) {
+  const { tokens } = useAdminTheme();
+  const { labelStyle, inputStyle } = useModalFieldStyle();
   const [collegeId, setCollegeId] = useState('');
   const [assessmentId, setAssessmentId] = useState('');
   const [driveId, setDriveId] = useState('');
@@ -351,7 +293,7 @@ export function ExportStudentDataModal({
     <AccessibleModal
       isOpen={isOpen}
       onClose={onClose}
-      title="Export Student Data CSV"
+      title="Export Student Data"
       description="Download complete candidate registration, attendance, scores, and integrity records."
       maxWidth="540px"
     >
@@ -361,8 +303,9 @@ export function ExportStudentDataModal({
             style={{
               padding: '10px 14px',
               borderRadius: '8px',
-              backgroundColor: '#FEF2F2',
-              color: '#991B1B',
+              backgroundColor: tokens.dangerBg,
+              border: `1px solid ${tokens.dangerBorder}`,
+              color: tokens.dangerText,
               fontSize: '13px',
             }}
           >
@@ -371,22 +314,8 @@ export function ExportStudentDataModal({
         )}
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Filter by College
-          </label>
-          <select
-            value={collegeId}
-            onChange={(e) => setCollegeId(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Filter by College</label>
+          <select value={collegeId} onChange={(e) => setCollegeId(e.target.value)} style={inputStyle}>
             <option value="">All Institutions</option>
             {colleges.map((c) => (
               <option key={c.id} value={c.id}>
@@ -397,22 +326,8 @@ export function ExportStudentDataModal({
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Filter by Drive
-          </label>
-          <select
-            value={driveId}
-            onChange={(e) => setDriveId(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Filter by Drive</label>
+          <select value={driveId} onChange={(e) => setDriveId(e.target.value)} style={inputStyle}>
             <option value="">All Drives</option>
             {drives.map((d) => (
               <option key={d.id} value={d.id}>
@@ -423,22 +338,8 @@ export function ExportStudentDataModal({
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Filter by Assessment
-          </label>
-          <select
-            value={assessmentId}
-            onChange={(e) => setAssessmentId(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Filter by Assessment</label>
+          <select value={assessmentId} onChange={(e) => setAssessmentId(e.target.value)} style={inputStyle}>
             <option value="">All Assessments</option>
             {assessments.map((a) => (
               <option key={a.id} value={a.id}>
@@ -449,22 +350,8 @@ export function ExportStudentDataModal({
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Attempt Status
-          </label>
-          <select
-            value={attemptState}
-            onChange={(e) => setAttemptState(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Attempt Status</label>
+          <select value={attemptState} onChange={(e) => setAttemptState(e.target.value)} style={inputStyle}>
             <option value="">All Statuses (Registered, In Progress, Submitted)</option>
             <option value="SUBMITTED">Submitted Only</option>
             <option value="IN_PROGRESS">Active / In Progress</option>
@@ -474,58 +361,18 @@ export function ExportStudentDataModal({
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Export File Format *
-          </label>
-          <select
-            value={exportFormat}
-            onChange={(e) => setExportFormat(e.target.value as 'xlsx' | 'csv')}
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              fontSize: '14px',
-              backgroundColor: '#FFFFFF',
-              boxSizing: 'border-box',
-            }}
-          >
+          <label style={labelStyle}>Export File Format *</label>
+          <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as 'xlsx' | 'csv')} style={inputStyle}>
             <option value="xlsx">Excel Workbook (.xlsx) — Styled via Global Export Settings</option>
             <option value="csv">Comma-Separated Values (.csv) — Plain Unstyled Text</option>
           </select>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              padding: '10px 18px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: '#FFFFFF',
-              color: '#475569',
-              fontWeight: 600,
-              fontSize: '14px',
-              cursor: 'pointer',
-            }}
-          >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+          <button type="button" onClick={onClose} className="csl-btn-secondary">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={exporting}
-            style={{
-              padding: '10px 22px',
-              borderRadius: '10px',
-              backgroundColor: '#0052CC',
-              color: '#FFFFFF',
-              fontWeight: 600,
-              fontSize: '14px',
-              border: 'none',
-              cursor: exporting ? 'not-allowed' : 'pointer',
-            }}
-          >
+          <button type="submit" disabled={exporting} className="csl-btn-primary">
             {exporting ? `Generating ${exportFormat.toUpperCase()}...` : `Download ${exportFormat.toUpperCase()}`}
           </button>
         </div>
@@ -549,6 +396,8 @@ export function ImportQuestionsCSVModal({
   onSuccess,
   pools = [],
 }: ImportQuestionsCSVModalProps) {
+  const { tokens } = useAdminTheme();
+  const { labelStyle, inputStyle } = useModalFieldStyle();
   const [file, setFile] = useState<File | null>(null);
   const [destinationMode, setDestinationMode] = useState<'GLOBAL_ONLY' | 'EXISTING_POOLS' | 'NEW_POOL'>('GLOBAL_ONLY');
   const [selectedPoolIds, setSelectedPoolIds] = useState<string[]>([]);
@@ -619,15 +468,15 @@ export function ImportQuestionsCSVModal({
         {result && (
           <div
             style={{
-              padding: '14px 16px',
-              borderRadius: '12px',
-              backgroundColor: result.error_count === 0 ? '#F0FDF4' : '#FEF2F2',
-              border: `1px solid ${result.error_count === 0 ? '#86EFAC' : '#FECACA'}`,
+              padding: '12px 16px',
+              borderRadius: '8px',
+              backgroundColor: result.error_count === 0 ? tokens.successBg : tokens.dangerBg,
+              border: `1px solid ${result.error_count === 0 ? tokens.successBorder : tokens.dangerBorder}`,
               fontSize: '13px',
-              color: result.error_count === 0 ? '#166534' : '#991B1B',
+              color: result.error_count === 0 ? tokens.successText : tokens.dangerText,
             }}
           >
-            <div style={{ fontWeight: 700, marginBottom: '6px' }}>
+            <div style={{ fontWeight: 600, marginBottom: '6px' }}>
               Import Results: {result.success_count} Created, {result.skipped_count} Skipped, {result.error_count} Errors
             </div>
             {result.errors.length > 0 && (
@@ -645,35 +494,27 @@ export function ImportQuestionsCSVModal({
         )}
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Select CSV File *
-          </label>
+          <label style={labelStyle}>Select CSV File *</label>
           <input
             type="file"
             accept=".csv"
             onChange={handleFileChange}
             required
             style={{
-              width: '100%',
-              padding: '10px 14px',
-              borderRadius: '10px',
-              border: '1px dashed #CBD5E1',
-              backgroundColor: '#F8FAFC',
+              ...inputStyle,
+              borderStyle: 'dashed',
               cursor: 'pointer',
-              boxSizing: 'border-box',
             }}
           />
-          <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+          <span style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '5px', display: 'block' }}>
             Headers: prompt, option_a, option_b, option_c, option_d, correct_option, section_type, difficulty, marks
           </span>
         </div>
 
         <div>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-            Destination Mode *
-          </label>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+          <label style={labelStyle}>Destination Mode *</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '13px', color: tokens.textPrimary }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="radio"
                 name="destMode"
@@ -683,7 +524,7 @@ export function ImportQuestionsCSVModal({
               />
               Global Bank Only
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="radio"
                 name="destMode"
@@ -693,7 +534,7 @@ export function ImportQuestionsCSVModal({
               />
               Assign to Existing Pools
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="radio"
                 name="destMode"
@@ -708,9 +549,7 @@ export function ImportQuestionsCSVModal({
 
         {destinationMode === 'EXISTING_POOLS' && (
           <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-              Choose Destination Pools
-            </label>
+            <label style={labelStyle}>Choose Destination Pools</label>
             <select
               multiple
               value={selectedPoolIds}
@@ -718,15 +557,7 @@ export function ImportQuestionsCSVModal({
                 const opts = Array.from(e.target.selectedOptions).map((o) => o.value);
                 setSelectedPoolIds(opts);
               }}
-              style={{
-                width: '100%',
-                height: '100px',
-                padding: '8px 12px',
-                borderRadius: '10px',
-                border: '1px solid #CBD5E1',
-                fontSize: '13px',
-                boxSizing: 'border-box',
-              }}
+              style={{ ...inputStyle, height: '100px' }}
             >
               {pools.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -734,7 +565,7 @@ export function ImportQuestionsCSVModal({
                 </option>
               ))}
             </select>
-            <span style={{ fontSize: '11px', color: '#64748B', marginTop: '2px', display: 'block' }}>
+            <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '3px', display: 'block' }}>
               Hold Ctrl / Cmd to select multiple pools
             </span>
           </div>
@@ -742,29 +573,34 @@ export function ImportQuestionsCSVModal({
 
         {destinationMode === 'NEW_POOL' && (
           <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
-              New Pool Name *
-            </label>
+            <label style={labelStyle}>New Pool Name *</label>
             <input
               type="text"
               value={newPoolName}
               onChange={(e) => setNewPoolName(e.target.value)}
               placeholder="e.g. Cognitive Ability Pool 2026"
               required
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                borderRadius: '10px',
-                border: '1px solid #CBD5E1',
-                fontSize: '14px',
-                boxSizing: 'border-box',
-              }}
+              style={inputStyle}
             />
           </div>
         )}
 
         {destinationMode !== 'GLOBAL_ONLY' && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '12.5px', fontWeight: 600, color: '#1E293B', cursor: 'pointer' }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              backgroundColor: tokens.pageBg,
+              border: `1px solid ${tokens.border}`,
+              fontSize: '13px',
+              fontWeight: 500,
+              color: tokens.textPrimary,
+              cursor: 'pointer',
+            }}
+          >
             <input
               type="checkbox"
               checked={addToGlobalBank}
@@ -774,39 +610,11 @@ export function ImportQuestionsCSVModal({
           </label>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={loading}
-            style={{
-              padding: '10px 18px',
-              borderRadius: '10px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: '#FFFFFF',
-              color: '#475569',
-              fontWeight: 600,
-              fontSize: '14px',
-              cursor: 'pointer',
-            }}
-          >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+          <button type="button" onClick={onClose} disabled={loading} className="csl-btn-secondary">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={loading || !file}
-            style={{
-              padding: '10px 22px',
-              borderRadius: '10px',
-              backgroundColor: '#0052CC',
-              color: '#FFFFFF',
-              fontWeight: 600,
-              fontSize: '14px',
-              border: 'none',
-              cursor: loading || !file ? 'not-allowed' : 'pointer',
-              opacity: loading || !file ? 0.6 : 1,
-            }}
-          >
+          <button type="submit" disabled={loading || !file} className="csl-btn-primary">
             {loading ? 'Importing Questions...' : 'Import to Bank'}
           </button>
         </div>

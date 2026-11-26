@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge, EmptyState } from '../../components/ui';
 import {
   getAdminProctoringSessions,
   getAdminProctoringSessionDetail,
@@ -136,6 +139,7 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
   assessments = [],
   onReviewAttempt,
 }) => {
+  const { tokens } = useAdminTheme();
   const [sessions, setSessions] = useState<AdminProctoringSessionSummary[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
@@ -301,53 +305,20 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
   };
 
   return (
-    <div
-      style={{
-        padding: '24px 32px',
-        backgroundColor: '#F8F9FA',
-        minHeight: '100%',
-        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-      }}
-    >
-      {/* ─── 1. TOP HEADER & TELEMETRY ODOMETERS ──────────────────────────── */}
-      <div style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '8px',
-                  backgroundColor: '#0D52D6',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 800,
-                  fontSize: '16px',
-                }}
-              >
-                🛡️
-              </div>
-              <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-                CSL Sentinel — AI Examination Integrity System
-              </h1>
-            </div>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: '6px 0 0' }}>
-              Live real-time proctoring telemetry, 3D head pose calibration verification, screen-share monitoring, and evidence audit dossiers.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+    <PageContainer>
+      <SectionHeader
+        title="CSL Sentinel — AI Integrity & Proctoring"
+        description="Live proctoring telemetry, 3D head pose calibration verification, screen-share monitoring, and evidence audit dossiers."
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             <label
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
+                gap: '6px',
                 fontSize: '13px',
-                fontWeight: 600,
-                color: '#475569',
+                fontWeight: 500,
+                color: tokens.textSecondary,
                 cursor: 'pointer',
                 userSelect: 'none',
               }}
@@ -356,27 +327,15 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
                 type="checkbox"
                 checked={autoRefresh}
                 onChange={(e) => setAutoRefresh(e.target.checked)}
-                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                style={{ width: '15px', height: '15px', cursor: 'pointer', accentColor: tokens.cslBlue }}
               />
               Auto-refresh (15s)
             </label>
             <button
               onClick={() => loadSessions()}
               disabled={loading}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '8px',
-                fontSize: '13px',
-                fontWeight: 700,
-                color: '#0B2E6F',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-              }}
+              className="csl-btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
             >
               <span style={{ display: 'inline-block', transform: loading ? 'rotate(180deg)' : 'none', transition: 'transform 0.5s ease' }}>
                 🔄
@@ -384,106 +343,26 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
               Refresh
             </button>
           </div>
-        </div>
+        }
+      />
 
-        {/* Metric Cards Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: '12px',
-              padding: '16px 20px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.03)',
-            }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Total Sessions
-            </div>
-            <div style={{ fontSize: '28px', fontWeight: 800, color: '#0B2E6F', marginTop: '6px' }}>
-              {metrics.total}
-            </div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '4px' }}>
-              Monitored proctoring sessions
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: '12px',
-              padding: '16px 20px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.03)',
-            }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10B981', display: 'inline-block' }} />
-              Live Active
-            </div>
-            <div style={{ fontSize: '28px', fontWeight: 800, color: '#059669', marginTop: '6px' }}>
-              {metrics.active}
-            </div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '4px' }}>
-              Currently streaming cameras & screens
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: '12px',
-              padding: '16px 20px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.03)',
-            }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              High Risk Detected
-            </div>
-            <div style={{ fontSize: '28px', fontWeight: 800, color: '#DC2626', marginTop: '6px' }}>
-              {metrics.highRisk}
-            </div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '4px' }}>
-              Risk score ≥ 60 or critical anomalies
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: '12px',
-              padding: '16px 20px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.03)',
-            }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#D97706', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Review Required
-            </div>
-            <div style={{ fontSize: '28px', fontWeight: 800, color: '#D97706', marginTop: '6px' }}>
-              {metrics.flagged}
-            </div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '4px' }}>
-              Flagged sessions awaiting auditor action
-            </div>
-          </div>
-        </div>
+      {/* Telemetry Metrics Row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: '16px' }}>
+        <OdometerCard label="Total Sessions" value={metrics.total} subtitle="Monitored sessions" />
+        <OdometerCard label="Live Active" value={metrics.active} subtitle="Streaming cameras & screens" accent="green" />
+        <OdometerCard label="High Risk Detected" value={metrics.highRisk} subtitle="Risk score ≥ 60" accent="red" />
+        <OdometerCard label="Review Required" value={metrics.flagged} subtitle="Awaiting auditor action" accent="amber" />
       </div>
 
       {/* ─── 2. FILTERS & SEARCH BAR ─────────────────────────────────────── */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          border: '1px solid #E2E8F0',
-          borderRadius: '12px',
-          padding: '16px 20px',
-          marginBottom: '20px',
+          padding: '12px 16px',
           display: 'flex',
           flexWrap: 'wrap',
-          gap: '12px',
+          gap: '10px',
           alignItems: 'center',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
         }}
       >
         {/* Search */}
@@ -495,8 +374,10 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{
               width: '100%',
-              padding: '9px 14px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               borderRadius: '8px',
               fontSize: '13px',
               outline: 'none',
@@ -512,11 +393,12 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             onChange={(e) => setSelectedAssessment(e.target.value)}
             style={{
               width: '100%',
-              padding: '9px 12px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               borderRadius: '8px',
               fontSize: '13px',
-              backgroundColor: '#FFFFFF',
               cursor: 'pointer',
               outline: 'none',
             }}
@@ -537,11 +419,12 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             onChange={(e) => setSelectedStatus(e.target.value)}
             style={{
               width: '100%',
-              padding: '9px 12px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               borderRadius: '8px',
               fontSize: '13px',
-              backgroundColor: '#FFFFFF',
               cursor: 'pointer',
               outline: 'none',
             }}
@@ -562,11 +445,12 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             onChange={(e) => setSelectedRiskLevel(e.target.value)}
             style={{
               width: '100%',
-              padding: '9px 12px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               borderRadius: '8px',
               fontSize: '13px',
-              backgroundColor: '#FFFFFF',
               cursor: 'pointer',
               outline: 'none',
             }}
@@ -586,11 +470,12 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             onChange={(e) => setSelectedReviewStatus(e.target.value)}
             style={{
               width: '100%',
-              padding: '9px 12px',
-              border: '1px solid #CBD5E1',
+              padding: '8px 12px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.inputBg,
+              color: tokens.textPrimary,
               borderRadius: '8px',
               fontSize: '13px',
-              backgroundColor: '#FFFFFF',
               cursor: 'pointer',
               outline: 'none',
             }}
@@ -607,14 +492,14 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
         <button
           onClick={() => setFlaggedOnly(!flaggedOnly)}
           style={{
-            padding: '9px 16px',
+            padding: '8px 14px',
             borderRadius: '8px',
             fontSize: '13px',
-            fontWeight: 700,
+            fontWeight: 600,
             cursor: 'pointer',
-            border: flaggedOnly ? '1px solid #DC2626' : '1px solid #CBD5E1',
-            backgroundColor: flaggedOnly ? '#FEF2F2' : '#FFFFFF',
-            color: flaggedOnly ? '#DC2626' : '#475569',
+            border: flaggedOnly ? `1px solid ${tokens.dangerBorder}` : `1px solid ${tokens.border}`,
+            backgroundColor: flaggedOnly ? tokens.dangerBg : tokens.surfaceCard,
+            color: flaggedOnly ? tokens.dangerText : tokens.textSecondary,
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
@@ -625,23 +510,15 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
       </div>
 
       {/* ─── 3. SESSIONS TABLE ───────────────────────────────────────────── */}
-      <div
-        style={{
-          backgroundColor: '#FFFFFF',
-          border: '1px solid #E2E8F0',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.03)',
-        }}
-      >
+      <div className="csl-card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading && (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: tokens.textMuted }}>
             <div
               style={{
-                width: '32px',
-                height: '32px',
-                border: '3px solid #CBD5E1',
-                borderTopColor: '#0D52D6',
+                width: '30px',
+                height: '30px',
+                border: `3px solid ${tokens.border}`,
+                borderTopColor: tokens.cslBlue,
                 borderRadius: '50%',
                 animation: 'spin 1s linear infinite',
                 margin: '0 auto 12px',
@@ -652,18 +529,17 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
         )}
 
         {error && (
-          <div style={{ padding: '24px', textAlign: 'center', color: '#DC2626', backgroundColor: '#FEF2F2' }}>
+          <div style={{ padding: '20px', textAlign: 'center', color: tokens.dangerText, backgroundColor: tokens.dangerBg }}>
             {error}
           </div>
         )}
 
         {!loading && !error && sessions.length === 0 && (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748B' }}>
-            <div style={{ fontSize: '32px', marginBottom: '8px' }}>🛡️</div>
-            <div style={{ fontSize: '16px', fontWeight: 700, color: '#0B2E6F' }}>No proctoring sessions found</div>
-            <p style={{ fontSize: '13px', color: '#94A3B8', margin: '4px 0 0' }}>
-              Adjust your filters or initiate an assessment session with Sentinel security gates.
-            </p>
+          <div style={{ padding: '24px' }}>
+            <EmptyState
+              title="No proctoring sessions found"
+              description="Adjust your filters or initiate an assessment session with Sentinel security gates."
+            />
           </div>
         )}
 
@@ -671,15 +547,15 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
-                <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontWeight: 700 }}>
-                  <th style={{ padding: '14px 18px' }}>Candidate</th>
-                  <th style={{ padding: '14px 18px' }}>Assessment</th>
-                  <th style={{ padding: '14px 18px' }}>Streams & Calibration</th>
-                  <th style={{ padding: '14px 18px' }}>Session Status</th>
-                  <th style={{ padding: '14px 18px' }}>Risk Score</th>
-                  <th style={{ padding: '14px 18px' }}>Telemetry Events</th>
-                  <th style={{ padding: '14px 18px' }}>Auditor Review</th>
-                  <th style={{ padding: '14px 18px', textAlign: 'right' }}>Actions</th>
+                <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}`, color: tokens.textMuted, fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <th style={{ padding: '12px 16px' }}>Candidate</th>
+                  <th style={{ padding: '12px 16px' }}>Assessment</th>
+                  <th style={{ padding: '12px 16px' }}>Streams & Calibration</th>
+                  <th style={{ padding: '12px 16px' }}>Session Status</th>
+                  <th style={{ padding: '12px 16px' }}>Risk Score</th>
+                  <th style={{ padding: '12px 16px' }}>Telemetry Events</th>
+                  <th style={{ padding: '12px 16px' }}>Auditor Review</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -691,31 +567,31 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
                     <tr
                       key={sess.id}
                       style={{
-                        borderBottom: '1px solid #F1F5F9',
+                        borderBottom: `1px solid ${tokens.borderLight}`,
                         transition: 'background-color 0.15s ease',
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F8FAFC')}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = tokens.surfaceHover)}
                       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                     >
                       {/* Candidate */}
-                      <td style={{ padding: '14px 18px' }}>
-                        <div style={{ fontWeight: 800, color: '#0B2E6F' }}>{sess.candidate_name}</div>
-                        <div style={{ fontSize: '11px', color: '#64748B' }}>
-                          Reg: {sess.register_number || 'N/A'} • {sess.college_name || 'CSL Portal'}
+                      <td style={{ padding: '14px 16px' }}>
+                        <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{sess.candidate_name}</div>
+                        <div style={{ fontSize: '11.5px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>
+                          {sess.register_number || 'N/A'} • {sess.college_name || 'CSL Portal'}
                         </div>
-                        <div style={{ fontSize: '11px', color: '#94A3B8' }}>{sess.candidate_email}</div>
+                        <div style={{ fontSize: '11.5px', color: tokens.textMuted }}>{sess.candidate_email}</div>
                       </td>
 
                       {/* Assessment */}
-                      <td style={{ padding: '14px 18px' }}>
-                        <div style={{ fontWeight: 700, color: '#1E293B' }}>{sess.assessment_title}</div>
-                        <div style={{ fontSize: '11px', color: '#64748B' }}>Code: {sess.assessment_code}</div>
+                      <td style={{ padding: '14px 16px' }}>
+                        <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{sess.assessment_title}</div>
+                        <div style={{ fontSize: '11.5px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>{sess.assessment_code}</div>
                       </td>
 
                       {/* Streams & Calibration */}
-                      <td style={{ padding: '14px 18px' }}>
+                      <td style={{ padding: '14px 16px' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px' }}>
                             <span
                               style={{
                                 width: '7px',
@@ -724,10 +600,10 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
                                 backgroundColor: sess.camera_status === 'ACTIVE' ? '#10B981' : '#EF4444',
                               }}
                             />
-                            <span style={{ color: '#475569' }}>Cam: {sess.camera_status}</span>
+                            <span style={{ color: tokens.textSecondary }}>Cam: {sess.camera_status}</span>
                           </div>
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px' }}>
                             <span
                               style={{
                                 width: '7px',
@@ -736,46 +612,35 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
                                 backgroundColor: sess.screen_share_status === 'ACTIVE' ? '#10B981' : '#EF4444',
                               }}
                             />
-                            <span style={{ color: '#475569' }}>Screen: {sess.screen_share_status}</span>
+                            <span style={{ color: tokens.textSecondary }}>Screen: {sess.screen_share_status}</span>
                           </div>
 
-                          <div style={{ fontSize: '11px', color: sess.face_calibration_status === 'COMPLETED' ? '#059669' : '#D97706', fontWeight: 600 }}>
+                          <div style={{ fontSize: '11.5px', color: sess.face_calibration_status === 'COMPLETED' ? tokens.successText : tokens.warningText, fontWeight: 600 }}>
                             {sess.face_calibration_status === 'COMPLETED' ? '✓ Head Calibrated' : `⏳ Pose: ${sess.face_calibration_status}`}
                           </div>
                         </div>
                       </td>
 
                       {/* Session Status */}
-                      <td style={{ padding: '14px 18px' }}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: '12px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor: statusBadge.bg,
-                            color: statusBadge.text,
-                          }}
-                        >
-                          {statusBadge.label}
-                        </span>
+                      <td style={{ padding: '14px 16px' }}>
+                        <StatusBadge status={sess.status} label={statusBadge.label} size="sm" />
                         {sess.started_at && (
-                          <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '4px' }}>
+                          <div className="csl-tabular" style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px' }}>
                             Started: {new Date(sess.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </div>
                         )}
                       </td>
 
                       {/* Risk Score */}
-                      <td style={{ padding: '14px 18px' }}>
+                      <td style={{ padding: '14px 16px' }}>
                         <span
+                          className="csl-tabular"
                           style={{
                             display: 'inline-block',
                             padding: '3px 8px',
                             borderRadius: '6px',
                             fontSize: '11px',
-                            fontWeight: 800,
+                            fontWeight: 700,
                             backgroundColor: riskBadge.bg,
                             color: riskBadge.text,
                             border: `1px solid ${riskBadge.border}`,
@@ -786,81 +651,49 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
                       </td>
 
                       {/* Events Count & Latest */}
-                      <td style={{ padding: '14px 18px' }}>
-                        <div style={{ fontWeight: 700, color: '#334155' }}>
+                      <td style={{ padding: '14px 16px' }}>
+                        <div className="csl-tabular" style={{ fontWeight: 600, color: tokens.textPrimary }}>
                           {sess.events_count} events • {sess.evidences_count} snapshots
                         </div>
                         {sess.latest_event && (
-                          <div style={{ fontSize: '11px', color: '#DC2626', marginTop: '2px', fontWeight: 600 }}>
+                          <div style={{ fontSize: '11px', color: tokens.dangerText, marginTop: '2px', fontWeight: 600 }}>
                             Latest: {sess.latest_event.event_type}
                           </div>
                         )}
                       </td>
 
                       {/* Auditor Review */}
-                      <td style={{ padding: '14px 18px' }}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: '12px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor:
-                              sess.review_status === 'CLEARED'
-                                ? '#F0FDF4'
-                                : sess.review_status === 'CONFIRMED_VIOLATION'
-                                ? '#FEF2F2'
-                                : '#FFFBEB',
-                            color:
-                              sess.review_status === 'CLEARED'
-                                ? '#15803D'
-                                : sess.review_status === 'CONFIRMED_VIOLATION'
-                                ? '#DC2626'
-                                : '#B45309',
-                          }}
-                        >
-                          {sess.review_status}
-                        </span>
+                      <td style={{ padding: '14px 16px' }}>
+                        <StatusBadge
+                          status={sess.review_status}
+                          variant={
+                            sess.review_status === 'CLEARED'
+                              ? 'success'
+                              : sess.review_status === 'CONFIRMED_VIOLATION'
+                              ? 'danger'
+                              : 'warning'
+                          }
+                          size="sm"
+                        />
                       </td>
 
                       {/* Action */}
-                      <td style={{ padding: '14px 18px', textAlign: 'right' }}>
+                      <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                           {onReviewAttempt && (
                             <button
                               onClick={() => onReviewAttempt(sess.assessment_session_id)}
                               title="Review Attempt Paper & Questions"
-                              style={{
-                                padding: '7px 10px',
-                                backgroundColor: '#F1F5F9',
-                                color: '#475569',
-                                border: '1px solid #CBD5E1',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                              }}
+                              className="csl-btn-secondary"
+                              style={{ padding: '6px 10px', fontSize: '11.5px' }}
                             >
                               Attempt
                             </button>
                           )}
                           <button
                             onClick={() => handleOpenDossier(sess.id)}
-                            style={{
-                              padding: '7px 14px',
-                              backgroundColor: '#0D52D6',
-                              color: '#FFFFFF',
-                              border: 'none',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              boxShadow: '0 2px 4px rgba(13, 82, 214, 0.2)',
-                              transition: 'background-color 0.15s ease',
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0B2E6F')}
-                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#0D52D6')}
+                            className="csl-btn-primary"
+                            style={{ padding: '6px 12px', fontSize: '12px' }}
                           >
                             Inspect Dossier
                           </button>
@@ -887,19 +720,21 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             justifyContent: 'center',
             zIndex: 9999,
             padding: '20px',
-            backdropFilter: 'blur(3px)',
+            backdropFilter: 'blur(4px)',
           }}
           onClick={handleCloseDossier}
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: '16px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: '12px',
               width: '100%',
               maxWidth: '960px',
               maxHeight: '90vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 40px -10px rgba(0,0,0,0.3)',
+              boxShadow: tokens.modalShadow,
               position: 'relative',
               display: 'flex',
               flexDirection: 'column',
@@ -909,38 +744,32 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
             {/* Modal Header */}
             <div
               style={{
-                padding: '20px 24px',
-                borderBottom: '1px solid #E2E8F0',
+                padding: '18px 24px',
+                borderBottom: `1px solid ${tokens.border}`,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                backgroundColor: '#F8FAFC',
-                borderTopLeftRadius: '16px',
-                borderTopRightRadius: '16px',
+                backgroundColor: tokens.surfaceElevated,
+                borderTopLeftRadius: '12px',
+                borderTopRightRadius: '12px',
               }}
             >
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '18px' }}>🛡️</span>
-                  <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  <h2 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                     CSL Sentinel — Candidate Integrity Dossier
                   </h2>
                 </div>
-                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                  Session ID: <code style={{ backgroundColor: '#E2E8F0', padding: '1px 4px', borderRadius: '4px' }}>{activeSessionId}</code>
+                <div style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '2px' }}>
+                  Session ID: <code style={{ backgroundColor: tokens.surfaceCard, border: `1px solid ${tokens.border}`, padding: '1px 6px', borderRadius: '4px', fontFamily: tokens.monoFamily }}>{activeSessionId}</code>
                 </div>
               </div>
 
               <button
                 onClick={handleCloseDossier}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '22px',
-                  color: '#94A3B8',
-                  cursor: 'pointer',
-                  padding: '4px 8px',
-                }}
+                className="csl-btn-secondary"
+                style={{ width: '32px', height: '32px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1399,6 +1228,6 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 };

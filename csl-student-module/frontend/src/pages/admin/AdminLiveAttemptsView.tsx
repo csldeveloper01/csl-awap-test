@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState, ProgressBar } from '../../components/ui';
 import {
   getAdminLiveAttempts,
   deleteAdminAttempt,
@@ -10,6 +13,7 @@ interface AdminLiveAttemptsViewProps {
 }
 
 export function AdminLiveAttemptsView({ onReviewAttempt }: AdminLiveAttemptsViewProps) {
+  const { tokens } = useAdminTheme();
   const [attempts, setAttempts] = useState<AdminLiveAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -79,117 +83,73 @@ export function AdminLiveAttemptsView({ onReviewAttempt }: AdminLiveAttemptsView
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  const activeCount = attempts.filter((a) => a.state === 'IN_PROGRESS').length;
+  const submittedCount = attempts.filter((a) => a.state === 'SUBMITTED').length;
+  const flaggedCount = attempts.filter((a) => a.is_flagged).length;
+  const totalAnomalies = attempts.reduce(
+    (sum, a) => sum + (Number(a.tab_switch_count) || 0) + (Number(a.fullscreen_exit_count) || 0),
+    0
+  );
+
   return (
-    <div style={{ maxWidth: '1100px' }}>
-      {/* ─── PAGE TITLE (Mockup 1) ─── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1
-          style={{
-            fontSize: '44px',
-            fontWeight: 900,
-            color: '#0F172A',
-            margin: 0,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.1,
-          }}
-        >
-          Live Session
-        </h1>
+    <PageContainer>
+      <SectionHeader
+        title="Live Sessions Monitor"
+        description="Real-time view of candidate attempt progression, remaining time, tab switches, and proctoring integrity status."
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 500, color: tokens.textSecondary, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+                style={{ accentColor: tokens.cslBlue, cursor: 'pointer', width: '15px', height: '15px' }}
+              />
+              Auto-refresh (10s)
+            </label>
+            <button
+              onClick={() => loadAttempts()}
+              className="csl-btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              🔄 Refresh
+            </button>
+          </div>
+        }
+      />
 
-        {/* Polling indicator & Refresh */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: '#475569', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-              style={{ accentColor: '#0D52D6', cursor: 'pointer' }}
-            />
-            Auto-refresh
-          </label>
-          <button
-            onClick={() => loadAttempts()}
-            style={{
-              padding: '6px 14px',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #CBD5E1',
-              borderRadius: '20px',
-              fontSize: '12px',
-              fontWeight: 800,
-              color: '#0F172A',
-              cursor: 'pointer',
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* ─── SEARCH & FILTER PILL BAR (Mockup 1) ─── */}
+      {/* Metrics Row */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '24px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))',
+          gap: '16px',
         }}
       >
-        {/* Pill Search Input: Search by College Name */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by College Name"
-            style={{
-              width: '100%',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 42px 10px 18px',
-              fontSize: '13px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              color: '#1E293B',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              right: '4px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </div>
-        </div>
+        <OdometerCard label="Tracked Sessions" value={attempts.length} subtitle="Loaded attempts" />
+        <OdometerCard label="In Progress" value={activeCount} subtitle="Live active now" accent="blue" />
+        <OdometerCard label="Submitted" value={submittedCount} subtitle="Completed sessions" accent="green" />
+        <OdometerCard label="Flagged" value={flaggedCount} subtitle="Integrity alerts" accent="red" />
+        <OdometerCard label="Tab / FS Events" value={totalAnomalies} subtitle="Focus anomalies" accent="amber" />
+      </div>
 
-        {/* All Statuses Pill Dropdown */}
-        <div style={{ position: 'relative' }}>
+      {/* Search & Status Filter */}
+      <SearchToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search candidate, roll number, or college..."
+        filters={
           <select
             value={stateFilter}
             onChange={(e) => setStateFilter(e.target.value)}
             style={{
-              appearance: 'none',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 36px 10px 18px',
+              backgroundColor: tokens.inputBg,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: '8px',
+              padding: '8px 14px',
               fontSize: '13px',
-              fontWeight: 700,
-              color: '#1E293B',
+              fontWeight: 500,
+              color: tokens.textPrimary,
               outline: 'none',
               cursor: 'pointer',
             }}
@@ -200,251 +160,194 @@ export function AdminLiveAttemptsView({ onReviewAttempt }: AdminLiveAttemptsView
             <option value="TIMED_OUT">Timed Out</option>
             <option value="FLAGGED_FOR_REVIEW">Flagged</option>
           </select>
-          <div
-            style={{
-              position: 'absolute',
-              right: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              pointerEvents: 'none',
-              color: '#0D52D6',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-        </div>
-      </div>
+        }
+      />
 
-      {/* ─── LIVE SESSIONS TABLE CONTAINER (Mockup 1) ─── */}
+      {/* Live Sessions Table / Cards */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#0D52D6',
-          borderRadius: '24px',
-          padding: '12px 14px 16px',
-          boxShadow: '0 6px 18px rgba(13, 82, 214, 0.15)',
+          padding: 0,
+          overflowX: 'auto',
         }}
       >
-        {/* Table Header Row (Mockup 1) */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '40px 2.2fr 1.1fr 1.3fr 1fr 1fr 1.2fr',
-            padding: '10px 16px',
-            color: '#FFFFFF',
-            fontSize: '13px',
-            fontWeight: 800,
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <input
-              type="checkbox"
-              checked={attempts.length > 0 && selectedAttemptIds.length === attempts.length}
-              onChange={handleToggleSelectAllAttempts}
-              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-            />
+        <div style={{ minWidth: '880px' }}>
+          {/* Table Header Row */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '40px 2.2fr 1.1fr 1.1fr 0.9fr 0.9fr 1.1fr',
+              padding: '12px 18px',
+              backgroundColor: tokens.surfaceElevated,
+              borderBottom: `1px solid ${tokens.border}`,
+              color: tokens.textMuted,
+              fontSize: '11.5px',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              alignItems: 'center',
+            }}
+          >
+            <div>
+              <input
+                type="checkbox"
+                checked={attempts.length > 0 && selectedAttemptIds.length === attempts.length}
+                onChange={handleToggleSelectAllAttempts}
+                style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
+              />
+            </div>
+            <div>Candidate</div>
+            <div>Status</div>
+            <div>Time Remaining</div>
+            <div style={{ textAlign: 'center' }}>Tab Switches</div>
+            <div style={{ textAlign: 'center' }}>Fullscreen Exits</div>
+            <div>Integrity Status</div>
           </div>
-          <div>Candidate</div>
-          <div>Status</div>
-          <div>Time Remaining</div>
-          <div style={{ textAlign: 'center' }}>Tab Switches</div>
-          <div style={{ textAlign: 'center' }}>Fullscreen Exits</div>
-          <div>Integrity Status</div>
-        </div>
 
-        {/* Candidate Row Cards (Mockup 1) */}
-        {loading ? (
-          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-            Loading candidate attempts...
-          </div>
-        ) : attempts.length === 0 ? (
-          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-            No live assessment attempts found.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
-            {attempts.map((att) => {
-              const totalQ = att.total_questions || 50;
-              const progressPct = Math.min(100, Math.round((att.answered_count / totalQ) * 100));
-              const isSelected = selectedAttemptIds.includes(att.id);
+          {loading ? (
+            <div style={{ padding: '48px', textAlign: 'center', color: tokens.textMuted, fontWeight: 500 }}>
+              Loading candidate attempts...
+            </div>
+          ) : attempts.length === 0 ? (
+            <div style={{ padding: '24px' }}>
+              <EmptyState
+                title="No live assessment attempts found"
+                description="No candidate sessions match the selected state or search query."
+              />
+            </div>
+          ) : (
+            <div>
+              {attempts.map((att) => {
+                const totalQ = att.total_questions || 50;
+                const progressPct = Math.min(100, Math.round((att.answered_count / totalQ) * 100));
+                const isSelected = selectedAttemptIds.includes(att.id);
 
-              return (
-                <div
-                  key={att.id}
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    borderRadius: '16px',
-                    padding: '14px 18px 12px',
-                    border: isSelected ? '1.5px solid #0D52D6' : '1px solid #E2E8F0',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.02)',
-                  }}
-                >
-                  {/* Top Grid Row */}
+                return (
                   <div
+                    key={att.id}
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: '40px 2.2fr 1.1fr 1.3fr 1fr 1fr 1.2fr',
-                      alignItems: 'center',
-                      marginBottom: '12px',
+                      padding: '14px 18px',
+                      borderBottom: `1px solid ${tokens.borderLight}`,
+                      backgroundColor: isSelected ? tokens.cslBlueSoftBg : 'transparent',
                     }}
                   >
-                    <div>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => handleToggleSelectAttempt(att.id)}
-                        style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-                      />
-                    </div>
-
-                    {/* Candidate Info */}
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>
-                        {att.candidate_name}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#64748B', marginTop: '1px' }}>
-                        Roll No: {att.register_number}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
-                        {att.college || 'Academic Institution'}
-                      </div>
-                    </div>
-
-                    {/* Status Pill */}
-                    <div>
-                      <span
-                        style={{
-                          backgroundColor: '#E2E8F0',
-                          color: '#1E293B',
-                          padding: '3px 12px',
-                          borderRadius: '12px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {att.state === 'SUBMITTED' ? 'Submitted' : att.state === 'IN_PROGRESS' ? 'In Progress' : att.state === 'TIMED_OUT' ? 'Timed Out' : 'Flagged'}
-                      </span>
-                    </div>
-
-                    {/* Time Remaining */}
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#1E293B' }}>
-                      {att.state === 'SUBMITTED' || att.state === 'TIMED_OUT' ? (
-                        'Session Finished'
-                      ) : (
-                        formatSeconds(att.remaining_seconds)
-                      )}
-                    </div>
-
-                    {/* Tab Switches */}
-                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
-                      {String(att.tab_switch_count || 0).padStart(2, '0')}
-                    </div>
-
-                    {/* Fullscreen Exits */}
-                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
-                      {String(att.fullscreen_exit_count || 0).padStart(2, '0')}
-                    </div>
-
-                    {/* Integrity Status Pill */}
-                    <div>
-                      <span
-                        style={{
-                          backgroundColor: att.is_flagged ? '#FEE2E2' : '#CBD5E1',
-                          color: att.is_flagged ? '#DC2626' : '#1E293B',
-                          padding: '3px 14px',
-                          borderRadius: '12px',
-                          fontSize: '11px',
-                          fontWeight: 800,
-                        }}
-                      >
-                        {att.is_flagged ? 'Flagged' : 'Normal'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Bottom Row: Question Progress Bar & Actions (Mockup 1) */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      borderTop: '1px solid #F1F5F9',
-                      paddingTop: '10px',
-                    }}
-                  >
-                    {/* Question Progress Bar */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, maxWidth: '420px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A' }}>
-                        Question Progress:
-                      </span>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', backgroundColor: '#F1F5F9', padding: '2px 6px', borderRadius: '4px' }}>
-                        {att.answered_count}/{totalQ}
-                      </span>
-                      <div
-                        style={{
-                          flex: 1,
-                          height: '8px',
-                          backgroundColor: '#E2E8F0',
-                          borderRadius: '9999px',
-                          overflow: 'hidden',
-                        }}
-                      >
-                        <div
-                          style={{
-                            height: '100%',
-                            width: `${progressPct}%`,
-                            backgroundColor: '#22C55E',
-                            borderRadius: '9999px',
-                          }}
+                    {/* Top Grid Row */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '40px 2.2fr 1.1fr 1.1fr 0.9fr 0.9fr 1.1fr',
+                        alignItems: 'center',
+                        marginBottom: '12px',
+                      }}
+                    >
+                      <div>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectAttempt(att.id)}
+                          style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                         />
                       </div>
-                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#0F172A' }}>
-                        {progressPct}%
-                      </span>
+
+                      <div>
+                        <div style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary }}>
+                          {att.candidate_name}
+                        </div>
+                        <div style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '2px', fontFamily: tokens.monoFamily }}>
+                          {att.register_number}
+                        </div>
+                        <div style={{ fontSize: '12px', color: tokens.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+                          {att.college || 'Academic Institution'}
+                        </div>
+                      </div>
+
+                      <div>
+                        <StatusBadge
+                          status={att.state}
+                          label={att.state === 'SUBMITTED' ? 'Submitted' : att.state === 'IN_PROGRESS' ? 'In Progress' : att.state === 'TIMED_OUT' ? 'Timed Out' : 'Flagged'}
+                          size="sm"
+                        />
+                      </div>
+
+                      <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary, fontFamily: tokens.monoFamily }}>
+                        {att.state === 'SUBMITTED' || att.state === 'TIMED_OUT' ? (
+                          <span style={{ color: tokens.textMuted, fontFamily: tokens.fontFamily }}>Session Finished</span>
+                        ) : (
+                          formatSeconds(att.remaining_seconds)
+                        )}
+                      </div>
+
+                      <div className="csl-tabular" style={{ textAlign: 'center', fontSize: '15px', fontWeight: 700, color: (att.tab_switch_count || 0) > 0 ? tokens.warningText : tokens.textPrimary }}>
+                        {String(att.tab_switch_count || 0).padStart(2, '0')}
+                      </div>
+
+                      <div className="csl-tabular" style={{ textAlign: 'center', fontSize: '15px', fontWeight: 700, color: (att.fullscreen_exit_count || 0) > 0 ? tokens.dangerText : tokens.textPrimary }}>
+                        {String(att.fullscreen_exit_count || 0).padStart(2, '0')}
+                      </div>
+
+                      <div>
+                        <StatusBadge
+                          status={att.is_flagged ? 'FLAGGED' : 'ACTIVE'}
+                          label={att.is_flagged ? 'Flagged' : 'Normal'}
+                          size="sm"
+                        />
+                      </div>
                     </div>
 
-                    {/* Actions: Inspect Review (Blue) & Delete (Red) */}
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={() => onReviewAttempt(att.id)}
-                        style={{
-                          backgroundColor: '#0D52D6',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '16px',
-                          padding: '6px 18px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Inspect Review
-                      </button>
-                      <button
-                        onClick={() => handleDeleteAttempt(att)}
-                        style={{
-                          backgroundColor: '#DC2626',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '16px',
-                          padding: '6px 16px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Delete
-                      </button>
+                    {/* Bottom Row: Question Progress Bar & Actions */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px',
+                        flexWrap: 'wrap',
+                        borderTop: `1px solid ${tokens.borderLight}`,
+                        paddingTop: '10px',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: '240px', maxWidth: '420px' }}>
+                        <ProgressBar
+                          label="Question Progress"
+                          rightText={`${att.answered_count}/${totalQ} (${progressPct}%)`}
+                          value={progressPct}
+                          tone={att.is_flagged ? 'warning' : 'success'}
+                          height={6}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={() => onReviewAttempt(att.id)}
+                          className="csl-btn-primary"
+                          style={{ padding: '6px 14px', fontSize: '12px' }}
+                        >
+                          Inspect Review
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAttempt(att)}
+                          style={{
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            borderRadius: '8px',
+                            padding: '6px 14px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

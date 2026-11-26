@@ -91,51 +91,47 @@ export function StudentActivitiesPage() {
   };
 
   return (
-    <div style={{ maxWidth: '800px' }}>
-      <h2 style={{ fontSize: '1.4rem', marginBottom: '16px' }}>Activities</h2>
+    <div style={{ maxWidth: '860px' }}>
+      <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--csl-text-primary)', margin: '0 0 16px 0', letterSpacing: '-0.02em' }}>
+        Activities
+      </h2>
 
       {activities.length === 0 ? (
         <div
+          className="csl-card"
           style={{
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '24px',
+            padding: '36px 24px',
             textAlign: 'center',
-            color: '#6b7280',
+            color: 'var(--csl-text-muted)',
           }}
         >
-          <p style={{ margin: '0 0 8px 0', fontWeight: 500, color: '#374151', fontSize: '1.05rem' }}>
+          <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--csl-text-primary)', fontSize: '15px' }}>
             No activities yet.
           </p>
-          <p style={{ margin: 0, fontSize: '0.9rem' }}>
+          <p style={{ margin: 0, fontSize: '13.5px' }}>
             Your assigned activities will appear here.
           </p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {activities.map((act) => (
             <div
               key={act.id}
-              style={{
-                backgroundColor: '#ffffff',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                padding: '20px',
-              }}
+              className="csl-card"
+              style={{ padding: '20px' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
                 <div>
-                  <h3 style={{ margin: '0 0 6px 0', fontSize: '1.15rem' }}>{act.title}</h3>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '16px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>{act.title}</h3>
                   <span
                     style={{
                       display: 'inline-block',
-                      backgroundColor: '#eff6ff',
-                      color: '#1d4ed8',
-                      fontSize: '0.75rem',
+                      backgroundColor: 'rgba(20, 85, 217, 0.1)',
+                      color: '#1455D9',
+                      fontSize: '11.5px',
                       fontWeight: 600,
                       padding: '2px 8px',
-                      borderRadius: '4px',
+                      borderRadius: '6px',
                       marginBottom: '8px',
                     }}
                   >
@@ -144,17 +140,20 @@ export function StudentActivitiesPage() {
                 </div>
                 <span
                   style={{
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                    color: act.status === 'PENDING' ? '#d97706' : '#16a34a',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    padding: '3px 10px',
+                    borderRadius: '9999px',
+                    backgroundColor: act.status === 'PENDING' ? 'rgba(217, 119, 6, 0.12)' : 'rgba(22, 163, 74, 0.12)',
+                    color: act.status === 'PENDING' ? '#B45309' : '#15803D',
                   }}
                 >
-                  Status: {formatStatus(act.status)}
+                  {formatStatus(act.status)}
                 </span>
               </div>
 
               {act.description && (
-                <p style={{ margin: '4px 0 12px 0', color: '#4b5563', fontSize: '0.9rem' }}>
+                <p style={{ margin: '4px 0 12px 0', color: 'var(--csl-text-secondary)', fontSize: '13.5px', lineHeight: 1.5 }}>
                   {act.description}
                 </p>
               )}
@@ -166,26 +165,20 @@ export function StudentActivitiesPage() {
                   alignItems: 'center',
                   marginTop: '12px',
                   paddingTop: '12px',
-                  borderTop: '1px solid #f3f4f6',
-                  fontSize: '0.85rem',
-                  color: '#6b7280',
+                  borderTop: '1px solid var(--csl-border)',
+                  fontSize: '12.5px',
+                  color: 'var(--csl-text-muted)',
                 }}
               >
-                <div>
+                <div className="csl-tabular">
                   <span>Due: {formatDueDate(act.due_date)}</span>
                   {act.max_marks > 0 && <span style={{ marginLeft: '16px' }}>Max marks: {act.max_marks}</span>}
                 </div>
 
                 <Link
                   to={`/student/activities/${act.id}`}
-                  style={{
-                    backgroundColor: '#2563eb',
-                    color: '#ffffff',
-                    padding: '6px 14px',
-                    borderRadius: '4px',
-                    textDecoration: 'none',
-                    fontWeight: 500,
-                  }}
+                  className="csl-btn-primary"
+                  style={{ textDecoration: 'none', padding: '6px 14px', fontSize: '12.5px' }}
                 >
                   View Activity
                 </Link>

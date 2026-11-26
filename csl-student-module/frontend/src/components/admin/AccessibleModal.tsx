@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { CloseIcon } from '../common/Icons';
+import { useAdminTheme } from '../../utils/adminTheme';
 
 export interface AccessibleModalProps {
   isOpen: boolean;
@@ -13,7 +14,7 @@ export interface AccessibleModalProps {
 }
 
 const SIZE_MAP: Record<string, string> = {
-  sm: '440px',
+  sm: '460px',
   md: '580px',
   lg: '760px',
   xl: '980px',
@@ -30,12 +31,12 @@ export function AccessibleModal({
   maxWidth,
   closeOnBackdropClick = true,
 }: AccessibleModalProps) {
+  const { tokens } = useAdminTheme();
   const modalRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const prevOpenRef = useRef(false);
   const onCloseRef = useRef(onClose);
 
-  // Keep latest onClose callback without re-triggering effects
   useEffect(() => {
     onCloseRef.current = onClose;
   });
@@ -43,10 +44,7 @@ export function AccessibleModal({
   useEffect(() => {
     if (isOpen) {
       if (!prevOpenRef.current) {
-        // Modal just opened: save active element and focus inside
         previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
-
-        // Prevent body scrolling
         document.body.style.overflow = 'hidden';
 
         const timer = setTimeout(() => {
@@ -65,18 +63,15 @@ export function AccessibleModal({
         prevOpenRef.current = true;
         return () => clearTimeout(timer);
       }
-    } else {
-      if (prevOpenRef.current) {
-        prevOpenRef.current = false;
-        document.body.style.overflow = '';
-        if (previouslyFocusedElementRef.current) {
-          previouslyFocusedElementRef.current.focus();
-        }
+    } else if (prevOpenRef.current) {
+      prevOpenRef.current = false;
+      document.body.style.overflow = '';
+      if (previouslyFocusedElementRef.current) {
+        previouslyFocusedElementRef.current.focus();
       }
     }
   }, [isOpen]);
 
-  // Global keydown listeners for Escape & Tab focus-trap
   useEffect(() => {
     if (!isOpen) return;
 
@@ -102,11 +97,9 @@ export function AccessibleModal({
             e.preventDefault();
             last.focus();
           }
-        } else {
-          if (document.activeElement === last) {
-            e.preventDefault();
-            first.focus();
-          }
+        } else if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
         }
       }
     };
@@ -126,14 +119,15 @@ export function AccessibleModal({
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(15, 23, 42, 0.65)',
-        backdropFilter: 'blur(4px)',
+        backgroundColor: 'rgba(16, 19, 24, 0.62)',
+        backdropFilter: 'blur(3px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 9999,
         padding: isFull ? '12px' : '16px',
         animation: 'cslModalFadeIn 0.15s ease-out',
+        fontFamily: tokens.fontFamily,
       }}
       onClick={(e) => {
         if (closeOnBackdropClick && e.target === e.currentTarget) {
@@ -143,11 +137,8 @@ export function AccessibleModal({
     >
       <style>{`
         @keyframes cslModalFadeIn {
-          from { opacity: 0; transform: scale(0.98); }
+          from { opacity: 0; transform: scale(0.985); }
           to { opacity: 1; transform: scale(1); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          * { animation: none !important; transition: none !important; }
         }
       `}</style>
       <div
@@ -158,15 +149,17 @@ export function AccessibleModal({
         aria-describedby={description ? 'accessible-modal-desc' : undefined}
         tabIndex={-1}
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: isFull ? '16px' : '24px',
+          backgroundColor: tokens.surfaceCard,
+          color: tokens.textPrimary,
+          border: `1px solid ${tokens.border}`,
+          borderRadius: '12px',
           width: '100%',
           maxWidth: resolvedMaxWidth,
           height: isFull ? '94vh' : undefined,
           maxHeight: isFull ? '94vh' : '90vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+          boxShadow: tokens.modalShadow,
           overflow: 'hidden',
           outline: 'none',
         }}
@@ -178,20 +171,22 @@ export function AccessibleModal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '18px 24px',
-            borderBottom: '1px solid #E2E8F0',
-            backgroundColor: '#F8FAFC',
+            gap: '12px',
+            padding: '16px 24px',
+            borderBottom: `1px solid ${tokens.border}`,
+            backgroundColor: tokens.surfaceCard,
           }}
         >
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h2
               id="accessible-modal-title"
               style={{
                 margin: 0,
                 fontSize: '18px',
-                fontWeight: 700,
-                color: '#0F172A',
-                letterSpacing: '-0.02em',
+                fontWeight: 600,
+                lineHeight: '24px',
+                color: tokens.textPrimary,
+                letterSpacing: '-0.015em',
               }}
             >
               {title}
@@ -200,9 +195,10 @@ export function AccessibleModal({
               <p
                 id="accessible-modal-desc"
                 style={{
-                  margin: '3px 0 0',
-                  fontSize: '12px',
-                  color: '#64748B',
+                  margin: '4px 0 0',
+                  fontSize: '13px',
+                  lineHeight: '18px',
+                  color: tokens.textSecondary,
                 }}
               >
                 {description}
@@ -220,20 +216,21 @@ export function AccessibleModal({
               justifyContent: 'center',
               width: '32px',
               height: '32px',
-              borderRadius: '50%',
-              border: '1px solid #E2E8F0',
-              backgroundColor: '#FFFFFF',
-              color: '#64748B',
+              borderRadius: '8px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textSecondary,
               cursor: 'pointer',
-              transition: 'background-color 0.15s, color 0.15s',
+              flexShrink: 0,
+              transition: 'background-color 120ms ease-out, color 120ms ease-out',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#F1F5F9';
-              e.currentTarget.style.color = '#0F172A';
+              e.currentTarget.style.backgroundColor = tokens.surfaceElevated;
+              e.currentTarget.style.color = tokens.textPrimary;
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#FFFFFF';
-              e.currentTarget.style.color = '#64748B';
+              e.currentTarget.style.backgroundColor = tokens.surfaceCard;
+              e.currentTarget.style.color = tokens.textSecondary;
             }}
           >
             <CloseIcon size={16} />

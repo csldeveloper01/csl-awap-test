@@ -55,104 +55,98 @@ export function StudentDashboardPage() {
     <div style={{ maxWidth: '800px' }}>
       {/* 1. Welcome / Student Identity Card */}
       <section
+        className="csl-card"
         style={{
-          backgroundColor: '#ffffff',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
-          padding: '20px',
+          padding: '24px',
           marginBottom: '20px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
         }}
       >
-        <h2 style={{ margin: '0 0 8px 0', fontSize: '1.4rem' }}>
-          Welcome back, {student.name}.
-        </h2>
-        <p style={{ margin: '0', color: '#6b7280', fontSize: '0.95rem' }}>
-          Student ID: <span style={{ color: '#111827', fontWeight: 500 }}>{student.student_id}</span>
-        </p>
+        <div>
+          <h2 style={{ margin: '0 0 6px 0', fontSize: '22px', fontWeight: 700, color: 'var(--csl-text-primary)', letterSpacing: '-0.02em' }}>
+            Welcome back, {student.name}.
+          </h2>
+          <p style={{ margin: 0, color: 'var(--csl-text-muted)', fontSize: '13.5px' }}>
+            Student ID:{' '}
+            <span style={{ color: 'var(--csl-text-primary)', fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", backgroundColor: 'var(--csl-bg-elevated)', border: '1px solid var(--csl-border)', padding: '2px 8px', borderRadius: '6px' }}>
+              {student.student_id}
+            </span>
+          </p>
+        </div>
       </section>
 
       {/* Grid for Cards */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: '20px',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: '18px',
           marginBottom: '20px',
         }}
       >
         {/* 2. Course / Batch Status Card */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '20px',
-          }}
-        >
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}>Course & Batch</h3>
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ color: '#6b7280', display: 'block', fontSize: '0.85rem' }}>Course</span>
-            <span style={{ fontWeight: 500 }}>
+        <div className="csl-card" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Course &amp; Batch</h3>
+          <div style={{ marginBottom: '10px' }}>
+            <span style={{ color: 'var(--csl-text-muted)', display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '2px' }}>Course</span>
+            <span style={{ fontWeight: 600, color: 'var(--csl-text-primary)', fontSize: '14px' }}>
               {isCourseAssigned
                 ? `${student.course} (${student.course_code})`
                 : 'Not assigned'}
             </span>
           </div>
-          <div style={{ marginBottom: '12px' }}>
-            <span style={{ color: '#6b7280', display: 'block', fontSize: '0.85rem' }}>Batch</span>
-            <span style={{ fontWeight: 500 }}>{isBatchAssigned ? student.batch : 'Not assigned'}</span>
+          <div style={{ marginBottom: '10px' }}>
+            <span style={{ color: 'var(--csl-text-muted)', display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '2px' }}>Batch</span>
+            <span style={{ fontWeight: 600, color: 'var(--csl-text-primary)', fontSize: '14px' }}>{isBatchAssigned ? student.batch : 'Not assigned'}</span>
           </div>
 
           {!isCourseAssigned && !isBatchAssigned ? (
-            <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: '#6b7280' }}>
+            <p style={{ margin: '8px 0 0 0', fontSize: '12.5px', color: 'var(--csl-text-muted)' }}>
               Your dashboard will update once you are assigned to a course and batch.
             </p>
           ) : !isBatchAssigned ? (
-            <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: '#6b7280' }}>
+            <p style={{ margin: '8px 0 0 0', fontSize: '12.5px', color: 'var(--csl-text-muted)' }}>
               Your batch assignment is pending.
             </p>
           ) : null}
         </div>
 
         {/* 3. Skill Overview Card */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '20px',
-          }}
-        >
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}>Skills</h3>
+        <div className="csl-card" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Skills</h3>
           {skills.available ? (
             skills.total_skills === 0 ? (
-              <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>
+              <p style={{ margin: 0, color: 'var(--csl-text-muted)', fontSize: '13px' }}>
                 No required skills have been mapped yet.
               </p>
             ) : (
               <div>
-                <div style={{ display: 'flex', gap: '24px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
                   <div>
-                    <span style={{ display: 'block', fontSize: '1.3rem', fontWeight: 600 }}>
+                    <span className="csl-tabular" style={{ display: 'block', fontSize: '22px', fontWeight: 700, color: 'var(--csl-text-primary)' }}>
                       {skills.total_skills}
                     </span>
-                    <span style={{ color: '#6b7280', fontSize: '0.85rem' }}>Required Skills</span>
+                    <span style={{ color: 'var(--csl-text-muted)', fontSize: '12px' }}>Required Skills</span>
                   </div>
                   <div>
-                    <span style={{ display: 'block', fontSize: '1.3rem', fontWeight: 600, color: '#16a34a' }}>
+                    <span className="csl-tabular" style={{ display: 'block', fontSize: '22px', fontWeight: 700, color: '#16A34A' }}>
                       {skills.assessed}
                     </span>
-                    <span style={{ color: '#6b7280', fontSize: '0.85rem' }}>Assessed</span>
+                    <span style={{ color: 'var(--csl-text-muted)', fontSize: '12px' }}>Assessed</span>
                   </div>
                   <div>
-                    <span style={{ display: 'block', fontSize: '1.3rem', fontWeight: 600, color: '#d97706' }}>
+                    <span className="csl-tabular" style={{ display: 'block', fontSize: '22px', fontWeight: 700, color: '#D97706' }}>
                       {skills.unassessed}
                     </span>
-                    <span style={{ color: '#6b7280', fontSize: '0.85rem' }}>Unassessed</span>
+                    <span style={{ color: 'var(--csl-text-muted)', fontSize: '12px' }}>Unassessed</span>
                   </div>
                 </div>
                 {skills.total_subskills > 0 && (
-                  <p style={{ margin: '8px 0 0 0', color: '#6b7280', fontSize: '0.85rem' }}>
+                  <p style={{ margin: '8px 0 0 0', color: 'var(--csl-text-muted)', fontSize: '12.5px' }}>
                     {skills.total_subskills} total sub-skills required
                   </p>
                 )}
@@ -160,8 +154,8 @@ export function StudentDashboardPage() {
             )
           ) : (
             <div>
-              <p style={{ margin: '0 0 4px 0', fontWeight: 500, color: '#6b7280' }}>Not available</p>
-              <p style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>
+              <p style={{ margin: '0 0 4px 0', fontWeight: 500, color: 'var(--csl-text-secondary)' }}>Not available</p>
+              <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--csl-text-muted)' }}>
                 Assign a course and batch to view your skill progress.
               </p>
             </div>
@@ -169,93 +163,50 @@ export function StudentDashboardPage() {
         </div>
 
         {/* 4. Overall Performance Card */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '20px',
-          }}
-        >
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}>Overall Performance</h3>
-          <div style={{ fontSize: '1.8rem', fontWeight: 600, color: '#9ca3af', marginBottom: '4px' }}>
+        <div className="csl-card" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Overall Performance</h3>
+          <div className="csl-tabular" style={{ fontSize: '26px', fontWeight: 700, color: 'var(--csl-text-muted)', marginBottom: '6px' }}>
             —
           </div>
-          <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>
+          <p style={{ margin: 0, color: 'var(--csl-text-muted)', fontSize: '13px' }}>
             {performance.message}
           </p>
         </div>
 
         {/* 5. Activities Card */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '20px',
-          }}
-        >
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}>Activities</h3>
-          <p style={{ margin: '0 0 4px 0', fontWeight: 500, color: '#374151' }}>
+        <div className="csl-card" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Activities</h3>
+          <p style={{ margin: '0 0 4px 0', fontWeight: 600, color: 'var(--csl-text-primary)', fontSize: '14px' }}>
             {activities.message}.
           </p>
-          <p style={{ margin: 0, color: '#6b7280', fontSize: '0.85rem' }}>
+          <p style={{ margin: 0, color: 'var(--csl-text-muted)', fontSize: '13px' }}>
             Your assigned activities will appear here.
           </p>
         </div>
       </div>
 
       {/* 6. Quick Navigation */}
-      <section
-        style={{
-          backgroundColor: '#ffffff',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
-          padding: '20px',
-        }}
-      >
-        <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}>Quick Actions</h3>
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+      <section className="csl-card" style={{ padding: '20px' }}>
+        <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Quick Actions</h3>
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <Link
             to="/student/skills"
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#2563eb',
-              color: '#ffffff',
-              borderRadius: '6px',
-              textDecoration: 'none',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-            }}
+            className="csl-btn-primary"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
           >
             View Skills
           </Link>
           <Link
             to="/student/activities"
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#2563eb',
-              color: '#ffffff',
-              borderRadius: '6px',
-              textDecoration: 'none',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-            }}
+            className="csl-btn-primary"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
           >
             View Activities
           </Link>
           <Link
             to="/student/profile"
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#f3f4f6',
-              color: '#1f2937',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              textDecoration: 'none',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-            }}
+            className="csl-btn-secondary"
+            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
           >
             View Profile
           </Link>

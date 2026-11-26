@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { PageContainer, SectionHeader, StatusBadge, EmptyState } from '../../components/ui';
 import {
   getAdminUsers,
   createAdminUser,
@@ -8,6 +10,7 @@ import {
 } from '../../api/admin';
 
 export function AdminUsersView() {
+  const { tokens } = useAdminTheme();
   const [users, setUsers] = useState<AdminStaffUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -104,101 +107,78 @@ export function AdminUsersView() {
   };
 
   return (
-    <div style={{ padding: '24px 32px' }}>
-      {/* ─── HEADER & ACTIONS ───────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-        <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
-            Administrator & Staff Accounts
-          </h1>
-          <p style={{ margin: '4px 0 0', color: '#556987', fontSize: '14px' }}>
-            Manage privileged user credentials, superusers, and institutional administrator accounts.
-          </p>
-        </div>
-        <button
-          onClick={() => {
-            setCreateError('');
-            setCreateSuccess('');
-            setShowCreateModal(true);
-          }}
-          style={{
-            backgroundColor: '#0B2E6F',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '10px 18px',
-            fontWeight: 700,
-            fontSize: '14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            boxShadow: '0 2px 4px rgba(11,46,111,0.15)',
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          Add New Superuser
-        </button>
-      </div>
+    <PageContainer>
+      <SectionHeader
+        title="Administrator & Staff Accounts"
+        description="Manage privileged user credentials, superusers, and institutional administrator accounts."
+        actions={
+          <button
+            onClick={() => {
+              setCreateError('');
+              setCreateSuccess('');
+              setShowCreateModal(true);
+            }}
+            className="csl-btn-primary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add New Superuser
+          </button>
+        }
+      />
 
       {createSuccess && (
-        <div style={{ padding: '12px 16px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', color: '#15803D', borderRadius: '8px', marginBottom: '20px', fontSize: '13px' }}>
+        <div style={{ padding: '12px 16px', backgroundColor: tokens.successBg, border: `1px solid ${tokens.successBorder}`, color: tokens.successText, borderRadius: '8px', fontSize: '13px', fontWeight: 500 }}>
           ✓ {createSuccess}
         </div>
       )}
 
       {/* ─── USERS TABLE ────────────────────────────────────────────── */}
-      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+      <div className="csl-card" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B', fontWeight: 600 }}>
+          <div style={{ padding: '48px', textAlign: 'center', color: tokens.textMuted, fontWeight: 500 }}>
             Loading administrators...
           </div>
         ) : users.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
-            No staff accounts found.
+          <div style={{ padding: '24px' }}>
+            <EmptyState title="No staff accounts found" description="Create an administrator account to grant portal access." />
           </div>
         ) : (
-          <table style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
+          <table style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13.5px' }}>
             <thead>
-              <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>USER / NAME</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>LOGIN EMAIL</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>ROLE</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>SUPERUSER</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>STATUS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>DATE CREATED</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>ACTIONS</th>
+              <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}`, color: tokens.textMuted }}>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>User / Name</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Login Email</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Role</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Superuser</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Status</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Date Created</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} style={{ borderBottom: '1px solid #F1F5F9', transition: 'background-color 0.15s' }}>
+                <tr key={u.id} style={{ borderBottom: `1px solid ${tokens.borderLight}` }}>
                   <td style={{ padding: '14px 16px' }}>
-                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{u.name || u.username}</div>
-                    <div style={{ fontSize: '12px', color: '#64748B' }}>@{u.username}</div>
+                    <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{u.name || u.username}</div>
+                    <div style={{ fontSize: '12px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>@{u.username}</div>
                   </td>
-                  <td style={{ padding: '14px 16px', fontWeight: 600, color: '#0B2E6F' }}>
+                  <td style={{ padding: '14px 16px', fontWeight: 500, color: tokens.cslBlueSoftText }}>
                     {u.email}
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '12px', padding: '3px 8px', borderRadius: '4px' }}>
-                      {u.role}
-                    </span>
+                    <StatusBadge label={u.role} variant="info" size="sm" dot={false} />
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: u.is_superuser ? '#DCFCE7' : '#F1F5F9', color: u.is_superuser ? '#15803D' : '#64748B', fontWeight: 700, fontSize: '12px', padding: '3px 8px', borderRadius: '4px' }}>
-                      {u.is_superuser ? 'Superuser' : 'Staff'}
-                    </span>
+                    <StatusBadge label={u.is_superuser ? 'Superuser' : 'Staff'} variant={u.is_superuser ? 'success' : 'neutral'} size="sm" dot={false} />
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <span style={{ backgroundColor: u.is_active ? '#DCFCE7' : '#FEE2E2', color: u.is_active ? '#15803D' : '#991B1B', fontWeight: 700, fontSize: '12px', padding: '3px 8px', borderRadius: '4px' }}>
-                      {u.is_active ? 'Active' : 'Inactive'}
-                    </span>
+                    <StatusBadge status={u.is_active ? 'ACTIVE' : 'INACTIVE'} label={u.is_active ? 'Active' : 'Inactive'} size="sm" />
                   </td>
-                  <td style={{ padding: '14px 16px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+                  <td className="csl-tabular" style={{ padding: '14px 16px', textAlign: 'center', color: tokens.textMuted, fontSize: '13px' }}>
                     {u.date_joined ? new Date(u.date_joined).toLocaleDateString() : '—'}
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'right' }}>
@@ -206,13 +186,13 @@ export function AdminUsersView() {
                       <button
                         onClick={() => handleToggleStatus(u)}
                         style={{
-                          padding: '4px 10px',
-                          backgroundColor: u.is_active ? '#FEF3C7' : '#DCFCE7',
-                          color: u.is_active ? '#92400E' : '#15803D',
-                          border: `1px solid ${u.is_active ? '#FDE68A' : '#BBF7D0'}`,
+                          padding: '5px 10px',
+                          backgroundColor: u.is_active ? tokens.warningBg : tokens.successBg,
+                          color: u.is_active ? tokens.warningText : tokens.successText,
+                          border: `1px solid ${u.is_active ? tokens.warningBorder : tokens.successBorder}`,
                           borderRadius: '6px',
                           fontSize: '12px',
-                          fontWeight: 700,
+                          fontWeight: 600,
                           cursor: 'pointer',
                         }}
                         title={u.is_active ? 'Deactivate user' : 'Activate user'}
@@ -222,10 +202,10 @@ export function AdminUsersView() {
                       <button
                         onClick={() => handleDeleteUser(u)}
                         style={{
-                          padding: '4px 10px',
-                          backgroundColor: '#FFF1F2',
-                          color: '#BE123C',
-                          border: '1px solid #FDA4AF',
+                          padding: '5px 10px',
+                          backgroundColor: tokens.dangerBg,
+                          color: tokens.dangerText,
+                          border: `1px solid ${tokens.dangerBorder}`,
                           borderRadius: '6px',
                           fontSize: '12px',
                           fontWeight: 600,
@@ -250,7 +230,8 @@ export function AdminUsersView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -259,35 +240,38 @@ export function AdminUsersView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '24px 28px',
               width: '460px',
               maxWidth: '92vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 Create Administrator Account
               </h2>
               <button
                 onClick={() => setShowCreateModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#94A3B8' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
             </div>
 
             {createError && (
-              <div style={{ padding: '10px 14px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>
+              <div style={{ padding: '10px 14px', backgroundColor: tokens.dangerBg, border: `1px solid ${tokens.dangerBorder}`, color: tokens.dangerText, borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>
                 {createError}
               </div>
             )}
 
             <form onSubmit={handleCreateSubmit}>
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Full Name
                 </label>
                 <input
@@ -295,12 +279,12 @@ export function AdminUsersView() {
                   placeholder="e.g. Lead Administrator"
                   value={createForm.name}
                   onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '14px', boxSizing: 'border-box' }}
                 />
               </div>
 
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Login Email *
                 </label>
                 <input
@@ -309,12 +293,12 @@ export function AdminUsersView() {
                   placeholder="e.g. admin@csl.edu"
                   value={createForm.email}
                   onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '14px', boxSizing: 'border-box' }}
                 />
               </div>
 
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Password * (Min 8 characters)
                 </label>
                 <input
@@ -323,18 +307,19 @@ export function AdminUsersView() {
                   placeholder="Secure administrator password"
                   value={createForm.password}
                   onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '14px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '14px', boxSizing: 'border-box' }}
                 />
               </div>
 
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#334155', cursor: 'pointer' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: tokens.textPrimary, cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     checked={createForm.is_superuser}
                     onChange={(e) => setCreateForm({ ...createForm, is_superuser: e.target.checked })}
+                    style={{ accentColor: tokens.cslBlue }}
                   />
-                  <span>Grant full <strong>Superuser & Staff privileges</strong></span>
+                  <span>Grant full <strong>Superuser &amp; Staff privileges</strong></span>
                 </label>
               </div>
 
@@ -342,14 +327,14 @@ export function AdminUsersView() {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  style={{ backgroundColor: '#F1F5F9', color: '#475569', border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}
+                  className="csl-btn-secondary"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  style={{ backgroundColor: '#0B2E6F', color: '#FFFFFF', border: 'none', borderRadius: '6px', padding: '8px 18px', fontWeight: 700, cursor: 'pointer' }}
+                  className="csl-btn-primary"
                 >
                   {submitting ? 'Creating...' : 'Create Account'}
                 </button>
@@ -358,6 +343,6 @@ export function AdminUsersView() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -30,21 +30,29 @@ export function StudentSkillsPage() {
   }, []);
 
   if (loading) {
-    return <p>Loading skills...</p>;
+    return (
+      <div className="csl-card" style={{ padding: '40px', textAlign: 'center', color: 'var(--csl-text-muted)' }}>
+        Loading skills...
+      </div>
+    );
   }
 
   if (error || !data) {
-    return <p>Unable to load skills.</p>;
+    return (
+      <div className="csl-card" style={{ padding: '32px', color: '#DC2626' }}>
+        Unable to load skills.
+      </div>
+    );
   }
 
   // Unassigned course/batch state
   if (!data.course) {
     return (
-      <div>
-        <h2>My Skills</h2>
-        <p>Course: Not assigned</p>
-        <p>Batch: Not assigned</p>
-        <p style={{ marginTop: '16px', color: '#4b5563' }}>
+      <div className="csl-card" style={{ padding: '28px', maxWidth: '680px' }}>
+        <h2 style={{ margin: '0 0 8px 0', fontSize: '20px', fontWeight: 700, color: 'var(--csl-text-primary)' }}>My Skills</h2>
+        <p style={{ margin: '4px 0', color: 'var(--csl-text-secondary)', fontSize: '14px' }}>Course: Not assigned</p>
+        <p style={{ margin: '4px 0', color: 'var(--csl-text-secondary)', fontSize: '14px' }}>Batch: Not assigned</p>
+        <p style={{ marginTop: '14px', color: 'var(--csl-text-muted)', fontSize: '13.5px' }}>
           Your skill matrix will appear after you are assigned to a course and batch.
         </p>
       </div>
@@ -57,37 +65,55 @@ export function StudentSkillsPage() {
   };
 
   return (
-    <div>
-      <h2>My Skills</h2>
-      <p>Course: {data.course.name} ({data.course.code})</p>
-      <p>Batch: {data.batch ? data.batch.name : 'Not assigned'}</p>
+    <div style={{ maxWidth: '900px' }}>
+      <div className="csl-card" style={{ padding: '22px 24px', marginBottom: '20px' }}>
+        <h2 style={{ margin: '0 0 8px 0', fontSize: '22px', fontWeight: 700, color: 'var(--csl-text-primary)', letterSpacing: '-0.02em' }}>
+          My Skills
+        </h2>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '13.5px', color: 'var(--csl-text-secondary)' }}>
+          <span>
+            Course: <strong style={{ color: 'var(--csl-text-primary)' }}>{data.course.name} ({data.course.code})</strong>
+          </span>
+          <span>
+            Batch: <strong style={{ color: 'var(--csl-text-primary)' }}>{data.batch ? data.batch.name : 'Not assigned'}</strong>
+          </span>
+        </div>
+      </div>
 
-      <div style={{ marginTop: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
         {data.skills.length === 0 ? (
-          <p style={{ color: '#4b5563' }}>No required skills have been mapped for your course yet.</p>
+          <div className="csl-card" style={{ padding: '32px', color: 'var(--csl-text-muted)', gridColumn: '1 / -1' }}>
+            No required skills have been mapped for your course yet.
+          </div>
         ) : (
           data.skills.map((skill) => (
-            <div key={skill.id} style={{ marginBottom: '20px' }}>
-              <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>{skill.name}</h3>
+            <div key={skill.id} className="csl-card" style={{ padding: '20px' }}>
+              <h3 style={{ margin: '0 0 12px 0', fontSize: '15.5px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>
+                {skill.name}
+              </h3>
               {skill.subskills.length === 0 ? (
-                <div style={{ paddingLeft: '16px', color: '#6b7280' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderRadius: '8px', backgroundColor: 'var(--csl-bg-elevated)', fontSize: '13px', color: 'var(--csl-text-secondary)' }}>
                   <span>(entire skill)</span>
-                  <span style={{ marginLeft: '24px' }}>{formatStatus(skill.status)}</span>
+                  <span style={{ fontWeight: 600 }}>{formatStatus(skill.status)}</span>
                 </div>
               ) : (
-                <ul style={{ listStyle: 'none', paddingLeft: '16px', margin: 0 }}>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {skill.subskills.map((sub) => (
                     <li
                       key={sub.id}
                       style={{
                         display: 'flex',
-                        maxWidth: '400px',
                         justifyContent: 'space-between',
-                        padding: '4px 0',
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        borderRadius: '8px',
+                        backgroundColor: 'var(--csl-bg-elevated)',
+                        fontSize: '13px',
+                        color: 'var(--csl-text-primary)',
                       }}
                     >
                       <span>{sub.name}</span>
-                      <span style={{ color: '#6b7280' }}>{formatStatus(sub.status)}</span>
+                      <span style={{ color: 'var(--csl-text-muted)', fontSize: '12px', fontWeight: 600 }}>{formatStatus(sub.status)}</span>
                     </li>
                   ))}
                 </ul>

@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState, ProgressBar } from '../../components/ui';
 import {
   getAdminResults,
   deleteAdminAttempt,
@@ -12,6 +15,7 @@ interface AdminResultsViewProps {
 }
 
 export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
+  const { tokens } = useAdminTheme();
   const [results, setResults] = useState<AdminResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -101,169 +105,161 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
     loadResults();
   }, []);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    loadResults(search);
-  };
+  // Metrics & Score Distribution
+  const evaluatedResults = results.filter((r) => r.delivery_mode !== 'PDF_CODING' && !r.is_manual_evaluation_pending);
+  const avgPct = evaluatedResults.length > 0
+    ? Math.round(evaluatedResults.reduce((sum, r) => sum + (Number(r.percentage) || 0), 0) / evaluatedResults.length)
+    : 0;
+  const passCount = evaluatedResults.filter((r) => (Number(r.percentage) || 0) >= 50).length;
+  const passRatePct = evaluatedResults.length > 0 ? Math.round((passCount / evaluatedResults.length) * 100) : 0;
+  const topScorersCount = evaluatedResults.filter((r) => (Number(r.percentage) || 0) >= 80).length;
+  const pendingEvalCount = results.filter((r) => r.delivery_mode === 'PDF_CODING' || r.is_manual_evaluation_pending).length;
+
+  const bands = [
+    { label: '0–20%', min: 0, max: 20, tone: 'danger' as const },
+    { label: '21–40%', min: 20.01, max: 40, tone: 'warning' as const },
+    { label: '41–60%', min: 40.01, max: 60, tone: 'warning' as const },
+    { label: '61–80%', min: 60.01, max: 80, tone: 'primary' as const },
+    { label: '81–100%', min: 80.01, max: 100, tone: 'success' as const },
+  ].map((b) => {
+    const count = evaluatedResults.filter((r) => {
+      const p = Number(r.percentage) || 0;
+      return p >= b.min && p <= b.max;
+    }).length;
+    const share = evaluatedResults.length > 0 ? Math.round((count / evaluatedResults.length) * 100) : 0;
+    return { ...b, count, share };
+  });
 
   return (
-    <div>
-      {/* Header & Search */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '20px',
-          flexWrap: 'wrap',
-          gap: '12px',
-        }}
-      >
-        <div>
-          <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0', letterSpacing: '-0.02em' }}>
-            Assessment Results & Scorecards
-          </h2>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-            Authoritative results, section breakdowns, and proctoring summaries for finalized attempts.
-          </p>
-        </div>
-
-        <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '8px' }}>
-          <div style={{ position: 'relative' }}>
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#94A3B8"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
-            >
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search candidate, roll no, college..."
-              style={{
-                padding: '8px 12px 8px 36px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                fontSize: '13px',
-                width: '280px',
-                outlineColor: '#1455B8',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#1455B8',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(20, 85, 184, 0.2)',
-            }}
-          >
-            Search
-          </button>
-
-          {search && (
+    <PageContainer>
+      <SectionHeader
+        title="Assessment Results & Scorecards"
+        description="Authoritative results, section breakdowns, score distributions, and proctoring summaries for finalized attempts."
+        actions={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => {
-                setSearch('');
-                loadResults('');
-              }}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '8px',
-                fontSize: '13px',
-                color: '#475569',
-                cursor: 'pointer',
-              }}
+              onClick={() => handleExportResults('csv')}
+              disabled={exportingFormat !== null}
+              className="csl-btn-secondary"
+              style={{ cursor: exportingFormat !== null ? 'not-allowed' : 'pointer' }}
+              title="Download plain standards-compliant CSV"
             >
-              Clear
+              {exportingFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => handleExportResults('xlsx')}
+              disabled={exportingFormat !== null}
+              className="csl-btn-primary"
+              style={{
+                backgroundColor: '#16A34A',
+                cursor: exportingFormat !== null ? 'not-allowed' : 'pointer',
+              }}
+              title="Download styled Excel workbook using Global Export Appearance settings"
+            >
+              {exportingFormat === 'xlsx' ? 'Exporting XLSX...' : 'Export XLSX'}
+            </button>
+          </div>
+        }
+      />
 
-          <button
-            type="button"
-            onClick={() => handleExportResults('xlsx')}
-            disabled={exportingFormat !== null}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: '#16A34A',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: exportingFormat !== null ? 'not-allowed' : 'pointer',
-            }}
-            title="Download styled Excel workbook using Global Export Appearance settings"
-          >
-            {exportingFormat === 'xlsx' ? 'Exporting XLSX...' : 'Export XLSX'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleExportResults('csv')}
-            disabled={exportingFormat !== null}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: '#F8FAFC',
-              color: '#0B2E6F',
-              border: '1px solid #CBD5E1',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: exportingFormat !== null ? 'not-allowed' : 'pointer',
-            }}
-            title="Download plain standards-compliant CSV"
-          >
-            {exportingFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}
-          </button>
-        </form>
+      {/* Metrics Row */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))',
+          gap: '16px',
+        }}
+      >
+        <OdometerCard label="Total Scorecards" value={results.length} subtitle="Completed submissions" />
+        <OdometerCard label="Average Score" value={avgPct} suffix="%" subtitle="Evaluated candidates" accent="blue" />
+        <OdometerCard label="Pass Rate" value={passRatePct} suffix="%" subtitle={`${passCount} qualified (≥50%)`} accent="green" />
+        <OdometerCard label="Top Performers" value={topScorersCount} subtitle="Scored 80%+" accent="indigo" />
+        <OdometerCard label="Pending Manual Eval" value={pendingEvalCount} subtitle="Paper / manual coding" accent="amber" />
       </div>
+
+      {/* Score Distribution Panel */}
+      {evaluatedResults.length > 0 && (
+        <div className="csl-card" style={{ padding: '18px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: tokens.textPrimary }}>
+              Score Distribution ({evaluatedResults.length} Evaluated)
+            </h3>
+            <span className="csl-tabular" style={{ fontSize: '12px', color: tokens.textMuted }}>
+              Pass threshold: 50%
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
+            {bands.map((b) => (
+              <div key={b.label} style={{ backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.borderLight}`, borderRadius: '8px', padding: '10px 12px' }}>
+                <ProgressBar
+                  label={b.label}
+                  rightText={`${b.count} (${b.share}%)`}
+                  value={b.share}
+                  tone={b.tone}
+                  height={6}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Search Toolbar */}
+      <SearchToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search candidate, roll no, college..."
+        onSubmitSearch={() => loadResults()}
+        filters={
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button type="button" onClick={() => loadResults()} className="csl-btn-primary">
+              Search
+            </button>
+            {search && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  loadResults('');
+                }}
+                className="csl-btn-secondary"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        }
+      />
 
       {/* Bulk Action Bar */}
       {selectedAttemptIds.length > 0 && (
         <div
           style={{
-            marginBottom: '16px',
             padding: '12px 18px',
-            backgroundColor: '#EFF6FF',
-            border: '1px solid #BFDBFE',
+            backgroundColor: tokens.cslBlueSoftBg,
+            border: `1px solid ${tokens.cslBlueSoftBorder}`,
             borderRadius: '10px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flexWrap: 'wrap',
             gap: '12px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span
+              className="csl-tabular"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: '24px',
+                minWidth: '24px',
                 height: '24px',
-                borderRadius: '50%',
-                backgroundColor: '#1D4ED8',
+                padding: '0 6px',
+                borderRadius: '9999px',
+                backgroundColor: tokens.cslBlue,
                 color: '#FFFFFF',
                 fontSize: '12px',
                 fontWeight: 700,
@@ -271,7 +267,7 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
             >
               {selectedAttemptIds.length}
             </span>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1E40AF' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: tokens.cslBlueSoftText }}>
               {selectedAttemptIds.length} scorecard attempt{selectedAttemptIds.length === 1 ? '' : 's'} selected
             </span>
           </div>
@@ -279,16 +275,8 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
             <button
               type="button"
               onClick={() => setSelectedAttemptIds([])}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: '#FFFFFF',
-                color: '#475569',
-                border: '1px solid #CBD5E1',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
+              className="csl-btn-secondary"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
             >
               Deselect All
             </button>
@@ -301,9 +289,9 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                 backgroundColor: '#DC2626',
                 color: '#FFFFFF',
                 border: 'none',
-                borderRadius: '6px',
+                borderRadius: '8px',
                 fontSize: '12px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: bulkDeleting ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -322,17 +310,15 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
 
       {/* Results Table */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '14px',
-          border: '1px solid #E2E8F0',
+          padding: 0,
           overflowX: 'auto',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
         }}
       >
         <table style={{ width: '100%', minWidth: '1000px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
           <thead>
-            <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569' }}>
+            <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}`, color: tokens.textMuted }}>
               <th style={{ padding: '12px 16px', width: '40px', textAlign: 'center' }}>
                 <input
                   type="checkbox"
@@ -341,32 +327,35 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                     if (el) el.indeterminate = selectedAttemptIds.length > 0 && selectedAttemptIds.length < results.length;
                   }}
                   onChange={handleToggleSelectAllAttempts}
-                  style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                  style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                   title="Select / Deselect All Results"
                 />
               </th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Candidate Details</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Register / Roll No</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Institution</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'center' }}>Aptitude</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'center' }}>Coding</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'center' }}>Total Score</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'center' }}>Percentage</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Status</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'right' }}>Actions</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Candidate Details</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Register / Roll No</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Institution</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Aptitude</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Coding</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Total Score</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Percentage</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Status</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
+                <td colSpan={10} style={{ padding: '48px', textAlign: 'center', color: tokens.textMuted }}>
                   Loading assessment results from database...
                 </td>
               </tr>
             ) : results.length === 0 ? (
               <tr>
-                <td colSpan={10} style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
-                  No assessment scorecards found matching your query.
+                <td colSpan={10} style={{ padding: '24px' }}>
+                  <EmptyState
+                    title="No assessment scorecards found"
+                    description="No finalized attempt scorecards match your search criteria."
+                  />
                 </td>
               </tr>
             ) : (
@@ -379,12 +368,12 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                   <tr
                     key={res.id}
                     style={{
-                      borderBottom: '1px solid #F1F5F9',
-                      backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
+                      borderBottom: `1px solid ${tokens.borderLight}`,
+                      backgroundColor: isSelected ? tokens.cslBlueSoftBg : 'transparent',
                       transition: 'background-color 0.1s ease',
                     }}
                     onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = '#F8FAFC';
+                      if (!isSelected) e.currentTarget.style.backgroundColor = tokens.surfaceHover;
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
@@ -395,71 +384,57 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleSelectAttempt(res.id)}
-                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                       />
                     </td>
                     <td style={{ padding: '12px 16px' }}>
-                      <div style={{ fontWeight: 700, color: '#0B2E6F' }}>{res.candidate_name}</div>
-                      <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{res.candidate_name}</div>
+                      <div style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span>{res.department} • {res.year_of_study}</span>
                         {res.delivery_mode === 'PDF_CODING' && (
-                          <span style={{ backgroundColor: '#EDE9FE', color: '#6D28D9', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px' }}>
-                            PDF Mode
-                          </span>
+                          <StatusBadge label="PDF Mode" variant="coding" size="sm" dot={false} />
                         )}
                       </div>
                     </td>
-                    <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontWeight: 700, color: '#1E293B' }}>
+                    <td style={{ padding: '12px 16px', fontFamily: tokens.monoFamily, fontWeight: 600, color: tokens.textPrimary }}>
                       {res.register_number}
                     </td>
-                    <td style={{ padding: '12px 16px', color: '#475569' }}>
+                    <td style={{ padding: '12px 16px', color: tokens.textSecondary }}>
                       {res.assessment_code && (
-                        <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '10px', padding: '2px 6px', borderRadius: '4px', marginRight: '6px' }}>
+                        <span style={{ backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}`, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontWeight: 600, fontSize: '11px', padding: '2px 6px', borderRadius: '4px', marginRight: '6px' }}>
                           {res.assessment_code}
                         </span>
                       )}
                       {res.college}
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#1455B8' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: tokens.cslBlueSoftText }}>
                       {res.delivery_mode === 'PDF_CODING' || res.is_manual_evaluation_pending ? (
-                        <span style={{ color: '#94A3B8' }}>—</span>
+                        <span style={{ color: tokens.textMuted }}>—</span>
                       ) : (
-                        <span style={{ backgroundColor: '#EFF6FF', padding: '2px 8px', borderRadius: '4px' }}>
+                        <span style={{ backgroundColor: tokens.cslBlueSoftBg, padding: '2px 8px', borderRadius: '6px' }}>
                           {res.aptitude_score}
                         </span>
                       )}
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#059669' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: tokens.successText }}>
                       {res.delivery_mode === 'PDF_CODING' || res.is_manual_evaluation_pending ? (
-                        <span style={{ color: '#94A3B8' }}>—</span>
+                        <span style={{ color: tokens.textMuted }}>—</span>
                       ) : (
-                        <span style={{ backgroundColor: '#ECFDF5', padding: '2px 8px', borderRadius: '4px' }}>
+                        <span style={{ backgroundColor: tokens.successBg, padding: '2px 8px', borderRadius: '6px' }}>
                           {res.coding_score}
                         </span>
                       )}
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 800, color: '#0B2E6F', fontSize: '14px' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: tokens.textPrimary, fontSize: '14px' }}>
                       {res.delivery_mode === 'PDF_CODING' || res.is_manual_evaluation_pending ? (
-                        <span style={{ fontSize: '12px', color: '#D97706', fontWeight: 700 }}>Paper Eval</span>
+                        <span style={{ fontSize: '12px', color: tokens.warningText, fontWeight: 600 }}>Paper Eval</span>
                       ) : (
-                        <>{res.total_score} <span style={{ fontSize: '11px', color: '#94A3B8', fontWeight: 500 }}>/ {res.assessment_total_marks ?? 50}</span></>
+                        <>{res.total_score} <span style={{ fontSize: '11.5px', color: tokens.textMuted, fontWeight: 500 }}>/ {res.assessment_total_marks ?? 50}</span></>
                       )}
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 16px', textAlign: 'center' }}>
                       {res.delivery_mode === 'PDF_CODING' || res.is_manual_evaluation_pending ? (
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: '6px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
-                          }}
-                        >
-                          Pending
-                        </span>
+                        <StatusBadge status="PENDING" label="Pending" size="sm" dot={false} />
                       ) : (
                         <span
                           style={{
@@ -467,9 +442,9 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                             padding: '3px 8px',
                             borderRadius: '6px',
                             fontSize: '12px',
-                            fontWeight: 800,
-                            backgroundColor: isPass ? '#DCFCE7' : '#FEE2E2',
-                            color: isPass ? '#166534' : '#991B1B',
+                            fontWeight: 700,
+                            backgroundColor: isPass ? tokens.successBg : tokens.dangerBg,
+                            color: isPass ? tokens.successText : tokens.dangerText,
                           }}
                         >
                           {res.percentage}%
@@ -478,56 +453,23 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       {res.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' || res.is_manual_evaluation_pending ? (
-                        <span
-                          style={{
-                            padding: '3px 10px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
-                            display: 'inline-block',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          Pending Manual Eval
-                        </span>
+                        <StatusBadge status="PENDING" label="Pending Manual Eval" size="sm" />
                       ) : (
-                        <span
-                          style={{
-                            padding: '3px 10px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor: res.state === 'SUBMITTED' ? '#DCFCE7' : '#FEE2E2',
-                            color: res.state === 'SUBMITTED' ? '#166534' : '#991B1B',
-                          }}
-                        >
-                          {res.state}
-                        </span>
+                        <StatusBadge status={res.state} size="sm" />
                       )}
                     </td>
                     <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
                         <button
                           onClick={() => onReviewAttempt(res.id)}
+                          className="csl-btn-primary"
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '4px',
-                            padding: '6px 14px',
-                            backgroundColor: '#1455B8',
-                            color: '#FFFFFF',
-                            border: 'none',
-                            borderRadius: '7px',
+                            padding: '6px 12px',
                             fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            boxShadow: '0 1px 3px rgba(20, 85, 184, 0.2)',
-                            transition: 'background-color 0.15s ease',
                           }}
-                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#0B2E6F')}
-                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#1455B8')}
                         >
                           <span>Inspect Review</span>
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -538,10 +480,10 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
                           onClick={() => handleDeleteAttempt(res)}
                           style={{
                             padding: '6px 10px',
-                            backgroundColor: '#FFF1F2',
-                            color: '#BE123C',
-                            border: '1px solid #FDA4AF',
-                            borderRadius: '7px',
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            borderRadius: '8px',
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
@@ -559,6 +501,6 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
           </tbody>
         </table>
       </div>
-    </div>
+    </PageContainer>
   );
 }

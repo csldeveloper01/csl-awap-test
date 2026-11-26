@@ -2,6 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { formatApiError } from '../../utils/errorFormatter';
 import { OdometerCard } from '../../components/admin/OdometerCard';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState, InformationPanel } from '../../components/ui';
+import { PlusIcon, AssessmentsIcon } from '../../components/common/Icons';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
 import {
   getAdminAssessments,
@@ -70,6 +73,7 @@ export function AdminAssessmentsView({
   initialCreateMode,
   initialDriveId,
 }: AdminAssessmentsViewProps) {
+  const { tokens } = useAdminTheme();
   const [searchParams, setSearchParams] = useSearchParams();
   const [assessments, setAssessments] = useState<AdminAssessment[]>([]);
   const [colleges, setColleges] = useState<AdminCollege[]>([]);
@@ -1562,41 +1566,8 @@ export function AdminAssessmentsView({
   const totalAttempts = assessments.reduce((acc, a) => acc + (a.attempts_count || 0), 0);
 
   const getStatusBadge = (status: string, isOpen: boolean) => {
-    let bg = '#F1F5F9';
-    let color = '#475569';
-    if (isOpen || status === 'OPEN') {
-      bg = '#DCFCE7';
-      color = '#15803D';
-    } else if (status === 'READY') {
-      bg = '#DBEAFE';
-      color = '#1D4ED8';
-    } else if (status === 'SCHEDULED') {
-      bg = '#FEF9C3';
-      color = '#A16207';
-    } else if (status === 'CLOSED') {
-      bg = '#F3E8FF';
-      color = '#7E22CE';
-    } else if (status === 'ARCHIVED') {
-      bg = '#E2E8F0';
-      color = '#334155';
-    }
-
-    return (
-      <span
-        style={{
-          display: 'inline-block',
-          padding: '3px 8px',
-          borderRadius: '12px',
-          fontSize: '11px',
-          fontWeight: 800,
-          backgroundColor: bg,
-          color,
-          letterSpacing: '0.04em',
-        }}
-      >
-        {status}
-      </span>
-    );
+    const label = isOpen && status !== 'OPEN' ? `${status} (Open)` : status;
+    return <StatusBadge status={isOpen ? 'OPEN' : status} label={label} />;
   };
 
   if (isCreatingWizard) {
@@ -1611,9 +1582,9 @@ export function AdminAssessmentsView({
         );
 
     return (
-      <div style={{ maxWidth: '960px', margin: '0 auto', paddingBottom: '60px', fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}>
+      <PageContainer maxWidth="960px" style={{ paddingBottom: '60px' }}>
         {/* Navigation & Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <button
               type="button"
@@ -1621,9 +1592,9 @@ export function AdminAssessmentsView({
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#64748B',
+                color: tokens.textMuted,
                 fontSize: '13px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -1633,18 +1604,18 @@ export function AdminAssessmentsView({
             >
               ← Back to Assessments Directory
             </button>
-            <h1 style={{ fontSize: '28px', fontWeight: 900, color: '#0F172A', margin: 0 }}>
+            <h1 style={{ fontSize: '24px', fontWeight: 700, color: tokens.textPrimary, margin: 0, letterSpacing: '-0.02em' }}>
               Create Assessment — 6-Step Setup Wizard
             </h1>
           </div>
 
-          <div style={{ fontSize: '13px', fontWeight: 700, color: '#64748B' }}>
-            Step <strong style={{ color: '#0D52D6', fontSize: '18px' }}>{wizardStep}</strong> of 6
+          <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textSecondary }}>
+            Step <strong style={{ color: tokens.cslBlue, fontSize: '18px' }}>{wizardStep}</strong> of 6
           </div>
         </div>
 
         {/* 6 Steps Progress Bar */}
-        <div style={{ marginBottom: '32px' }}>
+        <div style={{ marginBottom: '8px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px', marginBottom: '8px' }}>
             {[
               { num: 1, label: '1. Details' },
@@ -1659,19 +1630,19 @@ export function AdminAssessmentsView({
                 style={{
                   height: '6px',
                   borderRadius: '3px',
-                  backgroundColor: wizardStep >= step.num ? '#0D52D6' : '#E2E8F0',
+                  backgroundColor: wizardStep >= step.num ? tokens.cslBlue : tokens.border,
                   transition: 'background-color 0.2s ease',
                 }}
               />
             ))}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px', fontSize: '11px', fontWeight: 700, color: '#64748B', textAlign: 'center' }}>
-            <span style={{ color: wizardStep === 1 ? '#0D52D6' : undefined }}>1. Details</span>
-            <span style={{ color: wizardStep === 2 ? '#0D52D6' : undefined }}>2. Questions & Pools</span>
-            <span style={{ color: wizardStep === 3 ? '#0D52D6' : undefined }}>3. Marks & Rules</span>
-            <span style={{ color: wizardStep === 4 ? '#0D52D6' : undefined }}>4. Preview</span>
-            <span style={{ color: wizardStep === 5 ? '#0D52D6' : undefined }}>5. Review</span>
-            <span style={{ color: wizardStep === 6 ? '#0D52D6' : undefined }}>6. Confirmation</span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px', fontSize: '11px', fontWeight: 600, color: tokens.textMuted, textAlign: 'center' }}>
+            <span style={{ color: wizardStep === 1 ? tokens.cslBlue : undefined }}>1. Details</span>
+            <span style={{ color: wizardStep === 2 ? tokens.cslBlue : undefined }}>2. Questions & Pools</span>
+            <span style={{ color: wizardStep === 3 ? tokens.cslBlue : undefined }}>3. Marks & Rules</span>
+            <span style={{ color: wizardStep === 4 ? tokens.cslBlue : undefined }}>4. Preview</span>
+            <span style={{ color: wizardStep === 5 ? tokens.cslBlue : undefined }}>5. Review</span>
+            <span style={{ color: wizardStep === 6 ? tokens.cslBlue : undefined }}>6. Confirmation</span>
           </div>
         </div>
 
@@ -2806,815 +2777,392 @@ export function AdminAssessmentsView({
         {/* Inline Section & Drive Modals mounted inside wizard */}
         {renderInlineSectionModal()}
         {renderInlineDriveModal()}
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div style={{ maxWidth: '1100px' }}>
-      {/* ─── HEADER & ACTIONS (Mockup 3) ─────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1
-          style={{
-            fontSize: '44px',
-            fontWeight: 900,
-            color: '#0F172A',
-            margin: 0,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.1,
-          }}
-        >
-          Assessments
-        </h1>
-
-        <button
-          onClick={handleOpenCreateModal}
-          style={{
-            backgroundColor: '#0D52D6',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: '24px',
-            padding: '10px 22px',
-            fontWeight: 800,
-            fontSize: '14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(13,82,214,0.3)',
-          }}
-        >
-          Create New Assessment
-        </button>
-      </div>
+    <PageContainer>
+      {/* ─── HEADER & ACTIONS ─────────────────────────────────────────── */}
+      <SectionHeader
+        title="Assessments"
+        description="Create, manage, and monitor all standalone and drive-linked assessments."
+        actions={
+          <button
+            type="button"
+            onClick={handleOpenCreateModal}
+            className="csl-btn-primary"
+          >
+            <PlusIcon size={16} color={tokens.onPrimary} />
+            <span>Create New Assessment</span>
+          </button>
+        }
+      />
 
       {actionMessage && (
-        <div
-          style={{
-            padding: '12px 16px',
-            borderRadius: '12px',
-            marginBottom: '20px',
-            fontSize: '13px',
-            fontWeight: 700,
-            backgroundColor: actionMessage.type === 'success' ? '#F0FDF4' : '#FEF2F2',
-            color: actionMessage.type === 'success' ? '#15803D' : '#B91C1C',
-            border: `1px solid ${actionMessage.type === 'success' ? '#BBF7D0' : '#FECDD3'}`,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <span>{formatApiError(actionMessage.text)}</span>
-          <button
-            onClick={() => setActionMessage(null)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 700 }}
-          >
-            ✕
-          </button>
-        </div>
+        <InformationPanel
+          tone={actionMessage.type === 'success' ? 'success' : 'danger'}
+          title={formatApiError(actionMessage.text)}
+          actions={
+            <button
+              type="button"
+              onClick={() => setActionMessage(null)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 700 }}
+            >
+              ✕
+            </button>
+          }
+        />
       )}
 
-      {/* ─── 4 ODOMETER COUNTERS (Mockup 3) ─────────────────────────── */}
-      <div
+      {/* ─── 4 METRIC CARDS ───────────────────────────────────────────── */}
+      <section
+        aria-label="Assessment metrics"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
           gap: '16px',
-          marginBottom: '28px',
         }}
       >
-        <OdometerCard label="Assessments" value={totalCount} />
-        <OdometerCard label="Active" value={openCount} />
-        <OdometerCard label="Attempts" value={totalAttempts} />
-        <OdometerCard label="Colleges" value={colleges.length} />
-      </div>
+        <OdometerCard
+          label="Total Assessments"
+          value={totalCount}
+          icon={<AssessmentsIcon size={18} />}
+        />
+        <OdometerCard
+          label="Active / Open"
+          value={openCount}
+          valueTone="primary"
+          subtitle={`${openCount} open now`}
+          subtitleTone="success"
+        />
+        <OdometerCard
+          label="Total Attempts"
+          value={totalAttempts}
+        />
+        <OdometerCard
+          label="Participating Colleges"
+          value={colleges.length}
+        />
+      </section>
 
-      {/* ─── SEARCH & FILTER PILL BAR (Mockup 3) ─────────────────────── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '16px',
-        }}
-      >
-        {/* Grid/List View Toggle */}
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <button
-            type="button"
-            onClick={() => setViewLayout('GRID')}
-            title="Grid View"
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: viewLayout === 'GRID' ? '#0D52D6' : '#FFFFFF',
-              color: viewLayout === 'GRID' ? '#FFFFFF' : '#64748B',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="7"></rect>
-              <rect x="14" y="3" width="7" height="7"></rect>
-              <rect x="14" y="14" width="7" height="7"></rect>
-              <rect x="3" y="14" width="7" height="7"></rect>
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewLayout('LIST')}
-            title="List View"
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              backgroundColor: viewLayout === 'LIST' ? '#0D52D6' : '#FFFFFF',
-              color: viewLayout === 'LIST' ? '#FFFFFF' : '#64748B',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="8" y1="6" x2="21" y2="6"></line>
-              <line x1="8" y1="12" x2="21" y2="12"></line>
-              <line x1="8" y1="18" x2="21" y2="18"></line>
-              <line x1="3" y1="6" x2="3.01" y2="6"></line>
-              <line x1="3" y1="12" x2="3.01" y2="12"></line>
-              <line x1="3" y1="18" x2="3.01" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-
-        {/* Pill Search Input */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            type="text"
-            placeholder="Search..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{
-              width: '100%',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 42px 10px 18px',
-              fontSize: '13px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              color: '#1E293B',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              right: '4px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </div>
-        </div>
-
-        {/* All Statuses Pill Dropdown */}
-        <div style={{ position: 'relative' }}>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            style={{
-              appearance: 'none',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 36px 10px 18px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#1E293B',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="all">All Statuses</option>
-            <option value="OPEN">Open</option>
-            <option value="READY">Ready</option>
-            <option value="DRAFT">Draft</option>
-            <option value="CLOSED">Closed</option>
-            <option value="ARCHIVED">Archived</option>
-          </select>
-          <div
-            style={{
-              position: 'absolute',
-              right: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              pointerEvents: 'none',
-              color: '#0D52D6',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-        </div>
-
-        {/* Drive Hierarchy Filter (Phase 2.2.2) */}
-        <div style={{ position: 'relative' }}>
-          <select
-            value={driveFilter}
-            onChange={(e) => setDriveFilter(e.target.value)}
-            style={{
-              appearance: 'none',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 36px 10px 18px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#1E293B',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="ALL">All Hierarchy (Drives & Standalone)</option>
-            <option value="STANDALONE">Standalone Only</option>
-            <option value="DRIVE">Drive Associated Only</option>
-            {availableDrives.map((d) => (
-              <option key={d.id} value={d.id}>
-                Drive: {d.name} ({d.code})
-              </option>
-            ))}
-          </select>
-          <div
-            style={{
-              position: 'absolute',
-              right: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              pointerEvents: 'none',
-              color: '#0D52D6',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-        </div>
-      </div>
-
-      {/* ─── ACTION BUTTONS ROW (Mockup 3) ─── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '26px',
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: '#CBD5E1',
-            borderRadius: '20px',
-            padding: '4px 10px 4px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '12px',
-            fontWeight: 800,
-            color: '#1E293B',
-          }}
-        >
-          <span>Bulk Action</span>
-          <input
-            type="checkbox"
-            checked={bulkActionActive}
-            onChange={(e) => setBulkActionActive(e.target.checked)}
-            style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-          />
-        </div>
-      </div>
-
-      {/* ─── BULK ACTIONS BAR (DURING SELECTION) ───────────────────── */}
-      {selectedAssessmentIds.length > 0 && (
-        <div
-          style={{
-            backgroundColor: '#EFF6FF',
-            border: '1.5px solid #BFDBFE',
-            borderRadius: '12px',
-            padding: '12px 20px',
-            marginBottom: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            boxShadow: '0 2px 8px rgba(20, 85, 184, 0.08)',
-            flexWrap: 'wrap',
-            gap: '12px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span
+      {/* ─── SEARCH & FILTERING TOOLBAR ───────────────────────────────── */}
+      <SearchToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search assessments by title, code, or tag..."
+        filters={
+          <>
+            <select
+              aria-label="Filter by status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
               style={{
-                backgroundColor: '#1455B8',
-                color: '#FFFFFF',
-                borderRadius: '6px',
-                padding: '3px 9px',
-                fontSize: '12px',
-                fontWeight: 800,
-              }}
-            >
-              {selectedAssessmentIds.length} Selected
-            </span>
-            <span style={{ fontSize: '13px', color: '#1E3A8A', fontWeight: 600 }}>
-              Bulk operations for assessments. Rounds with existing candidate attempts will be safely archived.
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button
-              onClick={() => setSelectedAssessmentIds([])}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: '#475569',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.inputBg,
+                color: tokens.textPrimary,
+                fontSize: '13px',
+                fontWeight: 500,
+                outline: 'none',
                 cursor: 'pointer',
               }}
             >
-              Deselect All
-            </button>
-            <button
-              onClick={handleBulkDeleteAssessments}
-              disabled={bulkDeleting}
+              <option value="all">Status: All</option>
+              <option value="OPEN">Open</option>
+              <option value="READY">Ready</option>
+              <option value="DRAFT">Draft</option>
+              <option value="CLOSED">Closed</option>
+              <option value="ARCHIVED">Archived</option>
+            </select>
+
+            <select
+              aria-label="Filter by drive hierarchy"
+              value={driveFilter}
+              onChange={(e) => setDriveFilter(e.target.value)}
               style={{
-                padding: '6px 14px',
-                backgroundColor: '#DC2626',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: bulkDeleting ? 'not-allowed' : 'pointer',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.inputBg,
+                color: tokens.textPrimary,
+                fontSize: '13px',
+                fontWeight: 500,
+                outline: 'none',
+                cursor: 'pointer',
+                maxWidth: '240px',
+              }}
+            >
+              <option value="ALL">All Hierarchy (Drives &amp; Standalone)</option>
+              <option value="STANDALONE">Standalone Only</option>
+              <option value="DRIVE">Drive Associated Only</option>
+              {availableDrives.map((d) => (
+                <option key={d.id} value={d.id}>
+                  Drive: {d.name} ({d.code})
+                </option>
+              ))}
+            </select>
+          </>
+        }
+        rightSlot={
+          <>
+            <label
+              style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
+                padding: '6px 10px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.inputBg,
+                color: tokens.textSecondary,
+                fontSize: '12.5px',
+                fontWeight: 500,
+                cursor: 'pointer',
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-              <span>{bulkDeleting ? 'Deleting...' : `Delete / Archive Selected (${selectedAssessmentIds.length})`}</span>
-            </button>
-          </div>
-        </div>
+              <input
+                type="checkbox"
+                checked={bulkActionActive}
+                onChange={(e) => setBulkActionActive(e.target.checked)}
+                style={{ cursor: 'pointer', accentColor: tokens.cslBlue }}
+              />
+              <span>Bulk Select</span>
+            </label>
+
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '3px',
+                borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
+                backgroundColor: tokens.inputBg,
+                gap: '2px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setViewLayout('GRID')}
+                title="Grid View"
+                aria-label="Grid View"
+                style={{
+                  width: '30px',
+                  height: '28px',
+                  borderRadius: '6px',
+                  border: viewLayout === 'GRID' ? `1px solid ${tokens.border}` : '1px solid transparent',
+                  backgroundColor: viewLayout === 'GRID' ? tokens.surfaceCard : 'transparent',
+                  color: viewLayout === 'GRID' ? tokens.textPrimary : tokens.textMuted,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7"></rect>
+                  <rect x="14" y="3" width="7" height="7"></rect>
+                  <rect x="14" y="14" width="7" height="7"></rect>
+                  <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewLayout('LIST')}
+                title="List View"
+                aria-label="List View"
+                style={{
+                  width: '30px',
+                  height: '28px',
+                  borderRadius: '6px',
+                  border: viewLayout === 'LIST' ? `1px solid ${tokens.border}` : '1px solid transparent',
+                  backgroundColor: viewLayout === 'LIST' ? tokens.surfaceCard : 'transparent',
+                  color: viewLayout === 'LIST' ? tokens.textPrimary : tokens.textMuted,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="8" y1="6" x2="21" y2="6"></line>
+                  <line x1="8" y1="12" x2="21" y2="12"></line>
+                  <line x1="8" y1="18" x2="21" y2="18"></line>
+                  <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                  <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                  <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+          </>
+        }
+      />
+
+      {/* ─── BULK ACTIONS BAR ─────────────────────────────────────────── */}
+      {selectedAssessmentIds.length > 0 && (
+        <InformationPanel
+          tone="info"
+          title={`${selectedAssessmentIds.length} selected`}
+          description="Rounds with existing candidate attempts will be safely archived instead of deleted."
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setSelectedAssessmentIds([])}
+                className="csl-btn-secondary"
+              >
+                Deselect All
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDeleteAssessments}
+                disabled={bulkDeleting}
+                style={{
+                  padding: '7px 14px',
+                  backgroundColor: tokens.danger,
+                  color: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: bulkDeleting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {bulkDeleting ? 'Processing...' : `Delete / Archive (${selectedAssessmentIds.length})`}
+              </button>
+            </>
+          }
+        />
       )}
 
-      {/* ─── ASSESSMENTS DISPLAY: GRID (Mockup 3) OR LIST ─────────── */}
+      {/* ─── ASSESSMENTS DISPLAY: GRID OR LIST ────────────────────────── */}
       {loading ? (
-        <div style={{ padding: '60px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-          Loading assessments from PostgreSQL...
-        </div>
-      ) : assessments.length === 0 ? (
         <div
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '24px',
-            border: '1px solid #E2E8F0',
-            padding: '48px 24px',
+            padding: '48px',
             textAlign: 'center',
+            color: tokens.textSecondary,
+            backgroundColor: tokens.surfaceCard,
+            border: `1px solid ${tokens.border}`,
+            borderRadius: '10px',
+            fontWeight: 500,
           }}
         >
-          <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
-            No Assessments Found
-          </div>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 20px 0' }}>
-            Click "Create New Assessment" to configure your first round.
-          </p>
-          <button
-            onClick={handleOpenCreateModal}
-            style={{
-              padding: '10px 22px',
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '20px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            Create New Assessment
-          </button>
+          Loading assessments...
         </div>
+      ) : displayedAssessments.length === 0 ? (
+        <EmptyState
+          title="No Assessments Found"
+          description="Try adjusting your search or filter criteria, or create your first assessment round."
+          action={
+            <button type="button" onClick={handleOpenCreateModal} className="csl-btn-primary">
+              Create New Assessment
+            </button>
+          }
+        />
       ) : viewLayout === 'GRID' ? (
-        /* ─── ASSESSMENT CARDS GRID (Mockup 3) ────────────────────────── */
-        <div
+        /* ─── STITCH ASSESSMENT CARDS GRID ───────────────────────────── */
+        <section
+          aria-label="Assessment list"
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(460px, 1fr))',
-            gap: '22px',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(430px, 1fr))',
+            gap: '20px',
+            alignItems: 'stretch',
           }}
         >
           {displayedAssessments.map((a: AdminAssessment) => {
-            const sectionLabel =
-              a.sections && a.sections.length > 0
-                ? a.sections.map((s) => s.section_name || s.section_code).join(' • ')
-                : a.delivery_mode === 'PDF_CODING'
-                ? 'PDF Assessment'
-                : 'Section Type';
-
             const poolSufficient = a.pool_sufficient ?? true;
+            const isSelected = selectedAssessmentIds.includes(a.id);
 
             return (
-              <div
+              <article
                 key={a.id}
                 style={{
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: '24px',
-                  border: '1px solid #CBD5E1',
-                  padding: '24px 22px 20px',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.04)',
+                  backgroundColor: tokens.surfaceCard,
+                  borderRadius: '10px',
+                  border: `1px solid ${isSelected ? tokens.cslBlue : tokens.border}`,
+                  padding: '22px',
+                  boxShadow: tokens.cardShadow,
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  minHeight: '260px',
+                  gap: '16px',
+                  minWidth: 0,
                 }}
               >
-                {/* Blue Folded Corner Ribbon Accent (Mockup 3) */}
-                <svg
-                  style={{ position: 'absolute', top: 0, right: 0 }}
-                  width="48"
-                  height="48"
-                  viewBox="0 0 48 48"
-                  fill="none"
-                >
-                  <path d="M0 0 L48 0 L48 48 Z" fill="#0D52D6" />
-                </svg>
-
-                {/* Top Row: Title, Section & 3 Odometer Stat Counters */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingRight: '28px' }}>
-                    <div>
-                      <div style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1.25 }}>
-                        {a.title}
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
-                        <span
+                {/* Header */}
+                <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', minWidth: 0 }}>
+                    {bulkActionActive && (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggleSelectAssessment(a.id)}
+                        aria-label={`Select ${a.title}`}
+                        style={{ marginTop: '4px', cursor: 'pointer', accentColor: tokens.cslBlue }}
+                      />
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                        <h3
+                          onClick={() => handleOpenDetail(a)}
                           style={{
-                            display: 'inline-block',
-                            backgroundColor: '#F1F5F9',
-                            color: '#475569',
-                            borderRadius: '12px',
-                            padding: '3px 10px',
-                            fontSize: '11px',
-                            fontWeight: 700,
+                            margin: 0,
+                            fontSize: '17px',
+                            fontWeight: 600,
+                            color: tokens.textPrimary,
+                            lineHeight: '22px',
+                            cursor: 'pointer',
                           }}
                         >
-                          {sectionLabel}
-                        </span>
+                          {a.title}
+                        </h3>
+                        {getStatusBadge(a.status, a.is_open)}
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
                         {a.is_standalone || !a.drives || a.drives.length === 0 ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              backgroundColor: '#F1F5F9',
-                              color: '#64748B',
-                              borderRadius: '12px',
-                              padding: '3px 10px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                            }}
-                          >
-                            Standalone
-                          </span>
+                          <StatusBadge label="Standalone" variant="neutral" size="sm" />
                         ) : (
-                          <span
-                            title={a.drives.map((d: any) => `${d.name} (${d.code})`).join('\n')}
-                            style={{
-                              display: 'inline-block',
-                              backgroundColor: '#EFF6FF',
-                              color: '#0052CC',
-                              border: '1px solid #BFDBFE',
-                              borderRadius: '12px',
-                              padding: '3px 10px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              cursor: 'help',
-                            }}
-                          >
-                            Drive: {a.drives[0].name}{a.drives.length > 1 ? ` (+${a.drives.length - 1})` : ''}
-                          </span>
+                          <StatusBadge
+                            label={`Drive: ${a.drives[0].name}${a.drives.length > 1 ? ` (+${a.drives.length - 1})` : ''}`}
+                            variant="info"
+                            size="sm"
+                          />
                         )}
-                      </div>
-                    </div>
-
-                    {/* 3 Digital Counters (Attempts, Marks, Time) */}
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      {/* Attempts */}
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
-                          Attempts
-                        </div>
-                        <div
-                          style={{
-                            backgroundColor: '#8C96A6',
-                            border: '1.5px solid #788291',
-                            borderRadius: '8px',
-                            padding: '3px 8px',
-                            minWidth: '40px',
-                            textAlign: 'center',
-                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
-                          }}
-                        >
-                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                            {String(a.attempts_count || 0).padStart(2, '0')}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Marks */}
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
-                          Marks
-                        </div>
-                        <div
-                          style={{
-                            backgroundColor: '#8C96A6',
-                            border: '1.5px solid #788291',
-                            borderRadius: '8px',
-                            padding: '3px 8px',
-                            minWidth: '40px',
-                            textAlign: 'center',
-                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
-                          }}
-                        >
-                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                            {String(a.total_marks || 0).padStart(2, '0')}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Time */}
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#475569', marginBottom: '2px' }}>
-                          Time
-                        </div>
-                        <div
-                          style={{
-                            backgroundColor: '#8C96A6',
-                            border: '1.5px solid #788291',
-                            borderRadius: '8px',
-                            padding: '3px 8px',
-                            minWidth: '50px',
-                            textAlign: 'center',
-                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.2)',
-                          }}
-                        >
-                          <span style={{ fontSize: '18px', fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>
-                            {String(a.duration_minutes || 0).padStart(2, '0')}
-                          </span>
-                          <span style={{ fontSize: '9px', fontWeight: 800, color: '#1E293B', marginLeft: '2px' }}>
-                            mins
-                          </span>
-                        </div>
+                        {a.delivery_mode === 'PDF_CODING' ? (
+                          <StatusBadge label="PDF Coding" variant="coding" size="sm" />
+                        ) : a.sections && a.sections.length > 0 ? (
+                          a.sections.slice(0, 3).map((s) => (
+                            <StatusBadge
+                              key={s.id || s.section_code}
+                              label={s.section_name || s.section_code}
+                              variant="neutral"
+                              size="sm"
+                            />
+                          ))
+                        ) : null}
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Bottom Row: 6-Action Grid on Left & Manage Pool / Active on Right */}
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-end',
-                    marginTop: '22px',
-                    paddingTop: '16px',
-                    borderTop: '1px solid #F1F5F9',
-                  }}
-                >
-                  {/* Left: 6 Action Buttons Matrix (2 cols x 3 rows) */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, 70px)',
-                      gap: '8px',
-                    }}
-                  >
-                    {/* Row 1: Open / Close & View */}
-                    {a.status === 'OPEN' ? (
-                      <button
-                        onClick={() => handleOpenCloseModal(a)}
-                        style={{
-                          backgroundColor: '#FEE2E2',
-                          color: '#B91C1C',
-                          border: 'none',
-                          borderRadius: '12px',
-                          padding: '6px 0',
-                          fontSize: '11px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Close
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleOpen(a)}
-                        style={{
-                          backgroundColor: '#DCFCE7',
-                          color: '#15803D',
-                          border: 'none',
-                          borderRadius: '12px',
-                          padding: '6px 0',
-                          fontSize: '11px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Open
-                      </button>
-                    )}
-
-                    <button
-                      onClick={() => handleOpenDetail(a)}
+                  {/* Active Switch & Code */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
+                    <label
+                      title={a.status === 'OPEN' || a.is_open ? 'Click to close assessment' : 'Click to open assessment'}
                       style={{
-                        backgroundColor: '#F1F5F9',
-                        color: '#334155',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      View
-                    </button>
-
-                    {/* Row 2: Archive & Colleges */}
-                    <button
-                      onClick={() => handleArchive(a)}
-                      style={{
-                        backgroundColor: '#F1F5F9',
-                        color: '#64748B',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Archive
-                    </button>
-
-                    <button
-                      onClick={() => handleOpenDetail(a, 'colleges')}
-                      style={{
-                        backgroundColor: '#EFF6FF',
-                        color: '#1D4ED8',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Colleges
-                    </button>
-
-                    {/* Row 3: Edit & Delete */}
-                    <button
-                      onClick={() => handleOpenEdit(a)}
-                      style={{
-                        backgroundColor: '#FEF3C7',
-                        color: '#92400E',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      onClick={() => handleDeleteAssessment(a)}
-                      style={{
-                        backgroundColor: '#FFF1F2',
-                        color: '#BE123C',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Delete
-                    </button>
-
-                    {/* Row 4: Test Run & SEB Config */}
-                    <button
-                      onClick={() => handleTestRun(a.id)}
-                      disabled={runningTestSimulation === a.id}
-                      style={{
-                        backgroundColor: '#EEF2FF',
-                        color: '#3730A3',
-                        border: 'none',
-                        borderRadius: '12px',
-                        padding: '6px 0',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
-                        gridColumn: a.is_seb_required ? 'auto' : 'span 2',
-                      }}
-                      title="Run an isolated admin simulation attempt without affecting candidate statistics"
-                    >
-                      {runningTestSimulation === a.id ? '...' : '🧪 Test Run'}
-                    </button>
-
-                    {a.is_seb_required && (
-                      <button
-                        onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
-                        style={{
-                          backgroundColor: '#FEF3C7',
-                          color: '#92400E',
-                          border: 'none',
-                          borderRadius: '12px',
-                          padding: '6px 0',
-                          fontSize: '11px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                        title="Download Safe Exam Browser (.seb) config"
-                      >
-                        🛡️ .seb
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Right: Manage Question Pool Button, Sufficiency Badge & Active Switch */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
-                    <button
-                      onClick={() => {
-                        handleOpenDetail(a, 'questions');
-                      }}
-                      style={{
-                        backgroundColor: '#0D52D6',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '20px',
-                        padding: '8px 18px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
                         fontSize: '12px',
-                        fontWeight: 800,
+                        fontWeight: 500,
+                        color: tokens.textSecondary,
                         cursor: 'pointer',
-                        boxShadow: '0 2px 6px rgba(13,82,214,0.25)',
                       }}
                     >
-                      Manage Question Pool
-                    </button>
-
-                    <div
-                      style={{
-                        backgroundColor: poolSufficient ? '#22C55E' : '#F59E0B',
-                        color: '#FFFFFF',
-                        borderRadius: '16px',
-                        padding: '4px 12px',
-                        fontSize: '10px',
-                        fontWeight: 800,
-                      }}
-                    >
-                      {poolSufficient ? 'Pool Status: Sufficient' : 'Pool Status: Insufficient'}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Active</span>
+                      <span>{a.status === 'OPEN' || a.is_open ? 'Live' : 'Open'}</span>
                       <input
                         type="checkbox"
                         checked={a.status === 'OPEN' || a.is_open}
@@ -3625,30 +3173,178 @@ export function AdminAssessmentsView({
                             handleOpen(a);
                           }
                         }}
-                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#0D52D6' }}
+                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                       />
+                    </label>
+                    <span style={{ fontSize: '11px', fontFamily: tokens.monoFamily, color: tokens.textMuted }}>
+                      {a.code}
+                    </span>
+                  </div>
+                </header>
+
+                {/* 4-Column Tabular Stats Strip */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: '10px',
+                    padding: '12px 0',
+                    borderTop: `1px solid ${tokens.border}`,
+                    borderBottom: `1px solid ${tokens.border}`,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Attempts</div>
+                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                      {a.attempts_count || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Total Marks</div>
+                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                      {a.total_marks || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Duration</div>
+                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                      {a.duration_minutes || 0} min
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Colleges</div>
+                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                      {a.eligible_colleges_count || 0}
                     </div>
                   </div>
                 </div>
-              </div>
+
+                {/* Pool Sufficiency & Manage Pool Row */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <StatusBadge
+                      label={poolSufficient ? 'Pool Sufficient' : 'Pool Insufficient'}
+                      variant={poolSufficient ? 'success' : 'warning'}
+                      dot
+                    />
+                    <span className="csl-tabular" style={{ fontSize: '12.5px', color: tokens.textSecondary }}>
+                      {a.pool_questions_count || 0} Qs available
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDetail(a, 'questions')}
+                    className="csl-btn-secondary"
+                    style={{ padding: '5px 12px', fontSize: '12px' }}
+                  >
+                    Manage Pool
+                  </button>
+                </div>
+
+                {/* Clean Card Footer Controls */}
+                <footer
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    paddingTop: '12px',
+                    borderTop: `1px solid ${tokens.border}`,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDetail(a)}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(a)}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDetail(a, 'colleges')}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      Colleges
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleArchive(a)}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px', color: tokens.textMuted }}
+                    >
+                      Archive
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAssessment(a)}
+                      className="csl-btn-secondary"
+                      style={{ padding: '5px 10px', fontSize: '12px', color: tokens.danger }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {a.is_seb_required && (
+                      <button
+                        type="button"
+                        onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
+                        className="csl-btn-secondary"
+                        style={{ padding: '5px 10px', fontSize: '12px' }}
+                        title="Download Safe Exam Browser (.seb) config"
+                      >
+                        .seb
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleTestRun(a.id)}
+                      disabled={runningTestSimulation === a.id}
+                      className="csl-btn-secondary"
+                      style={{
+                        padding: '5px 12px',
+                        fontSize: '12px',
+                        color: tokens.cslBlue,
+                        cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
+                      }}
+                      title="Run an isolated admin simulation attempt without affecting candidate statistics"
+                    >
+                      {runningTestSimulation === a.id ? 'Starting...' : '▶ Test Run'}
+                    </button>
+                  </div>
+                </footer>
+              </article>
             );
           })}
-        </div>
+        </section>
       ) : (
-      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+      <div style={{ backgroundColor: tokens.surfaceCard, borderRadius: '10px', border: `1px solid ${tokens.border}`, overflowX: 'auto', boxShadow: tokens.cardShadow }}>
         {loading ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B', fontWeight: 600 }}>
+          <div style={{ padding: '48px', textAlign: 'center', color: tokens.textSecondary, fontWeight: 500 }}>
             Loading assessments...
           </div>
-        ) : assessments.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#0B2E6F', marginBottom: '6px' }}>No assessments found</div>
-            <p style={{ margin: 0, fontSize: '14px' }}>Click "Create New Assessment" to configure your first round.</p>
-          </div>
+        ) : displayedAssessments.length === 0 ? (
+          <EmptyState
+            title="No assessments found"
+            description="Click Create New Assessment to configure your first round."
+            style={{ border: 'none', boxShadow: 'none' }}
+          />
         ) : (
-          <table style={{ width: '100%', minWidth: '1100px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
+          <table style={{ width: '100%', minWidth: '1040px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13.5px' }}>
             <thead>
-              <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+              <tr style={{ backgroundColor: tokens.pageBg, borderBottom: `1px solid ${tokens.border}` }}>
                 <th style={{ padding: '12px 16px', width: '40px', textAlign: 'center' }}>
                   <input
                     type="checkbox"
@@ -3657,32 +3353,32 @@ export function AdminAssessmentsView({
                       if (el) el.indeterminate = selectedAssessmentIds.length > 0 && selectedAssessmentIds.length < assessments.length;
                     }}
                     onChange={handleToggleSelectAllAssessments}
-                    style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                    style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                     title="Select / Deselect All Assessments"
                   />
                 </th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', width: '120px' }}>CODE</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>ASSESSMENT TITLE</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>STATUS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569' }}>DURATION & ALLOCATIONS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>COLLEGES</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>ATTEMPTS</th>
-                <th style={{ padding: '12px 16px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>LIFECYCLE CONTROLS</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, width: '120px' }}>Code</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary }}>Assessment Title</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, textAlign: 'center' }}>Status</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary }}>Duration &amp; Allocations</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, textAlign: 'center' }}>Colleges</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, textAlign: 'center' }}>Attempts</th>
+                <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {assessments.map((a) => {
+              {displayedAssessments.map((a) => {
                 const isSelected = selectedAssessmentIds.includes(a.id);
                 return (
                 <tr
                   key={a.id}
                   style={{
-                    borderBottom: '1px solid #F1F5F9',
-                    backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
-                    transition: 'background-color 0.15s',
+                    borderBottom: `1px solid ${tokens.border}`,
+                    backgroundColor: isSelected ? tokens.cslBlueSoftBg : 'transparent',
+                    transition: 'background-color 120ms ease-out',
                   }}
                   onMouseEnter={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = '#F8FAFC';
+                    if (!isSelected) e.currentTarget.style.backgroundColor = tokens.surfaceHover;
                   }}
                   onMouseLeave={(e) => {
                     if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
@@ -3693,7 +3389,7 @@ export function AdminAssessmentsView({
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => handleToggleSelectAssessment(a.id)}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                      style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                     />
                   </td>
                   <td style={{ padding: '14px 16px' }}>
@@ -3701,13 +3397,14 @@ export function AdminAssessmentsView({
                       onClick={() => handleOpenDetail(a)}
                       title="Click to view assessment details"
                       style={{
-                        backgroundColor: '#EEF2FF',
-                        color: '#3730A3',
-                        fontWeight: 700,
+                        backgroundColor: tokens.surfaceElevated,
+                        color: tokens.textPrimary,
+                        border: `1px solid ${tokens.border}`,
+                        fontFamily: tokens.monoFamily,
+                        fontWeight: 500,
                         fontSize: '12px',
-                        padding: '4px 8px',
+                        padding: '3px 8px',
                         borderRadius: '6px',
-                        letterSpacing: '0.02em',
                         cursor: 'pointer',
                       }}
                     >
@@ -3718,24 +3415,20 @@ export function AdminAssessmentsView({
                     <div
                       onClick={() => handleOpenDetail(a)}
                       title="Click to view assessment details and statistics"
-                      style={{ fontWeight: 700, color: '#0F172A', cursor: 'pointer', transition: 'color 0.15s ease' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = '#1455B8')}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = '#0F172A')}
+                      style={{ fontWeight: 600, color: tokens.textPrimary, cursor: 'pointer' }}
                     >
                       {a.title}
                     </div>
                     {a.description && (
-                      <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontSize: '12px', color: tokens.textSecondary, marginTop: '2px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {a.description}
                       </div>
                     )}
                     {a.delivery_mode === 'PDF_CODING' && (
-                      <div style={{ marginTop: '4px' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700, backgroundColor: '#EDE9FE', color: '#6D28D9' }}>
-                          📄 PDF Assessment Mode
-                        </span>
+                      <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <StatusBadge label="PDF Mode" variant="coding" size="sm" />
                         {a.pdf_filename && (
-                          <span style={{ marginLeft: '6px', fontSize: '11px', color: '#4B5563', fontFamily: 'monospace' }}>
+                          <span style={{ fontSize: '11px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>
                             {a.pdf_filename}
                           </span>
                         )}
@@ -3745,30 +3438,26 @@ export function AdminAssessmentsView({
                   <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                     {getStatusBadge(a.status, a.is_open)}
                   </td>
-                  <td style={{ padding: '14px 16px', color: '#475569' }}>
-                    <div><strong>{a.duration_minutes}</strong> mins • <strong>{a.total_marks}</strong> marks</div>
+                  <td style={{ padding: '14px 16px', color: tokens.textSecondary }}>
+                    <div className="csl-tabular">
+                      <strong style={{ color: tokens.textPrimary }}>{a.duration_minutes}</strong> mins •{' '}
+                      <strong style={{ color: tokens.textPrimary }}>{a.total_marks}</strong> marks
+                    </div>
                     {a.delivery_mode === 'PDF_CODING' ? (
-                      <div style={{ fontSize: '12px', color: '#7C3AED', fontWeight: 600, marginTop: '2px' }}>
+                      <div style={{ fontSize: '12px', color: tokens.codingText, fontWeight: 500, marginTop: '2px' }}>
                         Physical Paper Coding • On-Screen PDF
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                        <div style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '2px' }}>
                           {a.sections && a.sections.length > 0 ? (
                             a.sections.map((s) => `${s.question_count} ${s.section_name || s.section_code}`).join(' + ')
                           ) : (
                             `${a.aptitude_count} Aptitude + ${a.coding_count} Coding`
                           )}
                         </div>
-                        <div style={{ fontSize: '11px', marginTop: '3px' }}>
-                          <span
-                            style={{
-                              fontWeight: 700,
-                              color: a.pool_sufficient ? '#16A34A' : '#DC2626',
-                            }}
-                          >
-                            Pool: {a.pool_questions_count || 0} Qs ({a.pool_sufficient ? '✓ Sufficient' : '⚠ Insufficient'})
-                          </span>
+                        <div style={{ fontSize: '11.5px', marginTop: '3px', color: a.pool_sufficient ? tokens.successText : tokens.warningText, fontWeight: 500 }}>
+                          Pool: {a.pool_questions_count || 0} Qs ({a.pool_sufficient ? 'Sufficient' : 'Insufficient'})
                         </div>
                       </>
                     )}
@@ -3778,65 +3467,49 @@ export function AdminAssessmentsView({
                       type="button"
                       onClick={() => handleOpenDetail(a, 'colleges')}
                       title="Click to edit college assignments for this assessment"
+                      className="csl-btn-secondary"
                       style={{
-                        backgroundColor: a.eligible_colleges_count > 0 ? '#F0F9FF' : '#FEF2F2',
-                        color: a.eligible_colleges_count > 0 ? '#0369A1' : '#B91C1C',
-                        border: '1px solid',
-                        borderColor: a.eligible_colleges_count > 0 ? '#BAE6FD' : '#FECACA',
-                        fontWeight: 700,
+                        padding: '4px 10px',
                         fontSize: '12px',
-                        padding: '4px 8px',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
+                        color: a.eligible_colleges_count > 0 ? tokens.cslBlueSoftText : tokens.dangerText,
                       }}
                     >
-                      <span>{a.eligible_colleges_count} colleges</span>
-                      <span style={{ fontSize: '11px', opacity: 0.8 }}>✎</span>
+                      <span className="csl-tabular">{a.eligible_colleges_count} colleges</span>
                     </button>
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, color: '#0B2E6F' }}>{a.attempts_count}</div>
-                    <div style={{ fontSize: '11px', color: '#64748B' }}>
+                    <div className="csl-tabular" style={{ fontWeight: 600, color: tokens.textPrimary }}>{a.attempts_count}</div>
+                    <div className="csl-tabular" style={{ fontSize: '11px', color: tokens.textMuted }}>
                       {a.in_progress_count} active / {a.submitted_count} submitted
                     </div>
                   </td>
                   <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                      {/* State transition triggers */}
                       {a.status === 'DRAFT' && (
                         <button
+                          type="button"
                           onClick={() => handlePrepare(a)}
                           title="Verify question bank sufficiency and mark READY"
-                          style={{
-                            backgroundColor: '#EFF6FF',
-                            color: '#1D4ED8',
-                            border: '1px solid #BFDBFE',
-                            padding: '6px 10px',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                          }}
+                          className="csl-btn-secondary"
+                          style={{ padding: '5px 10px', fontSize: '12px', color: tokens.cslBlue }}
                         >
-                          Verify & Ready
+                          Verify &amp; Ready
                         </button>
                       )}
 
                       {(a.status === 'READY' || a.status === 'SCHEDULED' || a.status === 'CLOSED') && (
                         <button
+                          type="button"
                           onClick={() => handleOpen(a)}
                           title="Open assessment for candidate attempts"
                           style={{
-                            backgroundColor: '#DCFCE7',
-                            color: '#15803D',
-                            border: '1px solid #86EFAC',
-                            padding: '6px 12px',
+                            backgroundColor: tokens.successBg,
+                            color: tokens.successText,
+                            border: `1px solid ${tokens.successBorder}`,
+                            padding: '5px 10px',
                             borderRadius: '6px',
                             fontSize: '12px',
-                            fontWeight: 700,
+                            fontWeight: 600,
                             cursor: 'pointer',
                           }}
                         >
@@ -3846,80 +3519,71 @@ export function AdminAssessmentsView({
 
                       {a.status === 'OPEN' && (
                         <button
+                          type="button"
                           onClick={() => handleOpenCloseModal(a)}
                           title="Close assessment and stop new attempts"
                           style={{
-                            backgroundColor: '#FEE2E2',
-                            color: '#B91C1C',
-                            border: '1px solid #FCA5A5',
-                            padding: '6px 12px',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Close Assessment
-                        </button>
-                      )}
-
-                      {a.status === 'CLOSED' && (
-                        <button
-                          onClick={() => handleArchive(a)}
-                          title="Archive assessment"
-                          style={{
-                            backgroundColor: '#F1F5F9',
-                            color: '#475569',
-                            border: '1px solid #CBD5E1',
-                            padding: '6px 10px',
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            padding: '5px 10px',
                             borderRadius: '6px',
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
                           }}
                         >
+                          Close
+                        </button>
+                      )}
+
+                      {a.status === 'CLOSED' && (
+                        <button
+                          type="button"
+                          onClick={() => handleArchive(a)}
+                          title="Archive assessment"
+                          className="csl-btn-secondary"
+                          style={{ padding: '5px 10px', fontSize: '12px' }}
+                        >
                           Archive
                         </button>
                       )}
 
                       <button
-                        onClick={() => {
-                          handleOpenDetail(a, 'overview');
-                        }}
-                        title="View and manage Question Pool for this assessment">
-                        Question Pool
+                        type="button"
+                        onClick={() => handleOpenDetail(a, 'overview')}
+                        className="csl-btn-secondary"
+                        style={{ padding: '5px 10px', fontSize: '12px' }}
+                        title="View details & manage Question Pool"
+                      >
+                        Manage
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => handleTestRun(a.id)}
                         disabled={runningTestSimulation === a.id}
-                        title="Run isolated admin simulation attempt"
+                        className="csl-btn-secondary"
                         style={{
-                          backgroundColor: '#EEF2FF',
-                          color: '#3730A3',
-                          border: '1px solid #C7D2FE',
-                          padding: '6px 12px',
-                          borderRadius: '6px',
+                          padding: '5px 10px',
                           fontSize: '12px',
-                          fontWeight: 700,
+                          color: tokens.cslBlue,
                           cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
                         }}
                       >
-                        {runningTestSimulation === a.id ? '...' : '🧪 Test Run'}
+                        {runningTestSimulation === a.id ? '...' : '▶ Test Run'}
                       </button>
 
                       {a.is_seb_required && (
                         <button
+                          type="button"
                           onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
                           title="Download Safe Exam Browser config"
+                          className="csl-btn-secondary"
                           style={{
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
-                            border: '1px solid #FDE68A',
-                            padding: '6px 12px',
-                            borderRadius: '6px',
+                            padding: '5px 10px',
                             fontSize: '12px',
-                            fontWeight: 700,
+                            fontWeight: 600,
                             cursor: 'pointer',
                           }}
                         >
@@ -3928,64 +3592,55 @@ export function AdminAssessmentsView({
                       )}
 
                       <button
+                        type="button"
                         onClick={() => handleOpenEdit(a)}
                         title="Edit assessment parameters, duration, sections, and policies"
+                        className="csl-btn-secondary"
                         style={{
-                          backgroundColor: '#FEF3C7',
-                          color: '#92400E',
-                          border: '1px solid #FDE68A',
-                          padding: '6px 12px',
-                          borderRadius: '6px',
+                          padding: '5px 10px',
                           fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
+                          color: tokens.warningText,
                         }}
                       >
                         Edit
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => handleOpenDetail(a, 'colleges')}
                         title="Edit College Assignment"
+                        className="csl-btn-secondary"
                         style={{
-                          backgroundColor: '#EFF6FF',
-                          color: '#1D4ED8',
-                          border: '1px solid #BFDBFE',
-                          padding: '6px 12px',
-                          borderRadius: '6px',
+                          padding: '5px 10px',
                           fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
+                          color: tokens.cslBlueSoftText,
                         }}
                       >
                         Colleges
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => handleOpenDetail(a)}
                         title="Manage colleges, parameters, and audit trail"
+                        className="csl-btn-primary"
                         style={{
-                          backgroundColor: '#0B2E6F',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          padding: '6px 12px',
-                          borderRadius: '6px',
+                          padding: '5px 12px',
                           fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
                         }}
                       >
                         Details
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => handleDeleteAssessment(a)}
                         title="Permanently delete assessment"
                         style={{
-                          backgroundColor: '#FFF1F2',
-                          color: '#BE123C',
-                          border: '1px solid #FDA4AF',
-                          padding: '6px 10px',
+                          backgroundColor: tokens.dangerBg,
+                          color: tokens.dangerText,
+                          border: `1px solid ${tokens.dangerBorder}`,
+                          padding: '5px 10px',
                           borderRadius: '6px',
                           fontSize: '12px',
                           fontWeight: 600,
@@ -5109,7 +4764,8 @@ export function AdminAssessmentsView({
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -5118,43 +4774,44 @@ export function AdminAssessmentsView({
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '24px 28px',
               width: '480px',
               maxWidth: '90vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
-            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#B91C1C', margin: '0 0 10px' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: tokens.dangerText, margin: '0 0 10px' }}>
               Close Assessment: {selectedAssessment.title}
             </h2>
-            <p style={{ fontSize: '13px', color: '#475569', margin: '0 0 16px', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '13px', color: tokens.textSecondary, margin: '0 0 16px', lineHeight: 1.5 }}>
               Closing this assessment will immediately prevent candidates from beginning new attempts.
               Please select the cutoff policy for candidates currently taking this assessment:
             </p>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', padding: '10px', borderRadius: '6px', border: '1px solid #CBD5E1', marginBottom: '8px', cursor: 'pointer', backgroundColor: closePolicy === 'ALLOW_FINISH' ? '#F0F9FF' : '#FFFFFF' }}>
+              <label style={{ display: 'block', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${closePolicy === 'ALLOW_FINISH' ? tokens.cslBlueSoftBorder : tokens.border}`, marginBottom: '8px', cursor: 'pointer', backgroundColor: closePolicy === 'ALLOW_FINISH' ? tokens.cslBlueSoftBg : tokens.surfaceElevated, color: tokens.textPrimary }}>
                 <input
                   type="radio"
                   name="closePolicy"
                   value="ALLOW_FINISH"
                   checked={closePolicy === 'ALLOW_FINISH'}
                   onChange={() => setClosePolicy('ALLOW_FINISH')}
-                  style={{ marginRight: '8px' }}
+                  style={{ marginRight: '8px', accentColor: tokens.cslBlue }}
                 />
                 <strong>Allow Finish:</strong> Let candidates with active in-progress attempts complete until their deadline.
               </label>
 
-              <label style={{ display: 'block', padding: '10px', borderRadius: '6px', border: '1px solid #CBD5E1', cursor: 'pointer', backgroundColor: closePolicy === 'STRICT_CUTOFF' ? '#FEF2F2' : '#FFFFFF' }}>
+              <label style={{ display: 'block', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${closePolicy === 'STRICT_CUTOFF' ? tokens.dangerBorder : tokens.border}`, cursor: 'pointer', backgroundColor: closePolicy === 'STRICT_CUTOFF' ? tokens.dangerBg : tokens.surfaceElevated, color: tokens.textPrimary }}>
                 <input
                   type="radio"
                   name="closePolicy"
                   value="STRICT_CUTOFF"
                   checked={closePolicy === 'STRICT_CUTOFF'}
                   onChange={() => setClosePolicy('STRICT_CUTOFF')}
-                  style={{ marginRight: '8px' }}
+                  style={{ marginRight: '8px', accentColor: tokens.dangerText }}
                 />
                 <strong>Strict Cutoff:</strong> Immediately terminate and score all active attempts right now.
               </label>
@@ -5164,7 +4821,8 @@ export function AdminAssessmentsView({
               <button
                 type="button"
                 onClick={() => setShowCloseModal(false)}
-                style={{ backgroundColor: '#F1F5F9', color: '#475569', border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}
+                className="csl-btn-secondary"
+                style={{ padding: '8px 16px' }}
               >
                 Cancel
               </button>
@@ -5172,7 +4830,7 @@ export function AdminAssessmentsView({
                 type="button"
                 disabled={closing}
                 onClick={handleConfirmClose}
-                style={{ backgroundColor: '#B91C1C', color: '#FFFFFF', border: 'none', borderRadius: '6px', padding: '8px 18px', fontWeight: 700, cursor: 'pointer' }}
+                style={{ backgroundColor: '#DC2626', color: '#FFFFFF', border: 'none', borderRadius: '8px', padding: '8px 18px', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
               >
                 {closing ? 'Closing...' : 'Confirm Close'}
               </button>
@@ -5187,7 +4845,8 @@ export function AdminAssessmentsView({
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -5199,24 +4858,26 @@ export function AdminAssessmentsView({
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              border: `1px solid ${tokens.border}`,
+              color: tokens.textPrimary,
               borderRadius: '12px',
               padding: '28px',
               width: '840px',
               maxWidth: '94vw',
               maxHeight: '90vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                     {assessmentDetail?.title || selectedAssessment?.title || (detailError ? 'Assessment Details Error' : 'Loading Assessment...')}
                   </h2>
                   {(selectedAssessment?.code || assessmentDetail?.code) && (
-                    <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '12px', padding: '2px 8px', borderRadius: '4px' }}>
+                    <span style={{ backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}`, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontWeight: 600, fontSize: '12px', padding: '2px 8px', borderRadius: '6px' }}>
                       {assessmentDetail?.code || selectedAssessment?.code}
                     </span>
                   )}
@@ -5227,7 +4888,7 @@ export function AdminAssessmentsView({
                     )}
                 </div>
                 {(selectedAssessment || assessmentDetail) && (
-                  <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
+                  <div className="csl-tabular" style={{ fontSize: '13px', color: tokens.textMuted, marginTop: '4px' }}>
                     {assessmentDetail?.duration_minutes ?? selectedAssessment?.duration_minutes ?? 60} Minutes •{' '}
                     {assessmentDetail?.total_marks ?? selectedAssessment?.total_marks ?? 50} Marks
                     {((assessmentDetail?.sections && assessmentDetail.sections.length > 0) ||
@@ -5246,7 +4907,8 @@ export function AdminAssessmentsView({
               </div>
               <button
                 onClick={handleCloseDetail}
-                style={{ background: 'none', border: 'none', fontSize: '22px', cursor: 'pointer', color: '#94A3B8' }}
+                className="csl-btn-secondary"
+                style={{ width: '32px', height: '32px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}
                 title="Close Assessment Details"
               >
                 ✕
@@ -5254,18 +4916,19 @@ export function AdminAssessmentsView({
             </div>
 
             {/* TAB SELECTOR */}
-            <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid #E2E8F0', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', gap: '8px', borderBottom: `1px solid ${tokens.border}`, marginBottom: '20px', overflowX: 'auto' }}>
               <button
                 onClick={() => setDetailTab('overview')}
                 style={{
                   padding: '8px 16px',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   fontSize: '13px',
                   border: 'none',
-                  borderBottom: detailTab === 'overview' ? '2px solid #0B2E6F' : '2px solid transparent',
-                  color: detailTab === 'overview' ? '#0B2E6F' : '#64748B',
+                  borderBottom: detailTab === 'overview' ? `2px solid ${tokens.cslBlue}` : '2px solid transparent',
+                  color: detailTab === 'overview' ? tokens.cslBlue : tokens.textMuted,
                   background: 'none',
                   cursor: 'pointer',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 Overview & Sessions
@@ -5274,13 +4937,14 @@ export function AdminAssessmentsView({
                 onClick={() => setDetailTab('questions')}
                 style={{
                   padding: '8px 16px',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   fontSize: '13px',
                   border: 'none',
-                  borderBottom: detailTab === 'questions' ? '2px solid #0B2E6F' : '2px solid transparent',
-                  color: detailTab === 'questions' ? '#0B2E6F' : '#64748B',
+                  borderBottom: detailTab === 'questions' ? `2px solid ${tokens.cslBlue}` : '2px solid transparent',
+                  color: detailTab === 'questions' ? tokens.cslBlue : tokens.textMuted,
                   background: 'none',
                   cursor: 'pointer',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 Manage Questions & Pools ({poolSources.length})
@@ -7264,6 +6928,6 @@ export function AdminAssessmentsView({
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

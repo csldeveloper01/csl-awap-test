@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { PageContainer, StatusBadge } from '../../components/ui';
 import {
   getAdminAttemptReview,
   updateAdminAttemptReviewStatus,
@@ -15,6 +17,7 @@ interface AdminAttemptReviewViewProps {
 }
 
 export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReviewViewProps) {
+  const { tokens } = useAdminTheme();
   const [review, setReview] = useState<AdminAttemptReview | null>(null);
   const [loading, setLoading] = useState(true);
   const [deletingAttempt, setDeletingAttempt] = useState(false);
@@ -208,57 +211,39 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
   });
 
   return (
-    <div>
+    <PageContainer>
       {/* Top Navigation & Action Toolbar */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '20px',
           flexWrap: 'wrap',
           gap: '12px',
         }}
       >
         <button
           onClick={onBack}
+          className="csl-btn-secondary"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: '8px',
-            padding: '8px 16px',
-            backgroundColor: '#FFFFFF',
-            border: '1.5px solid #CBD5E1',
-            borderRadius: '8px',
-            fontSize: '13px',
-            fontWeight: 700,
-            color: '#0B2E6F',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#FAF7F3')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
         >
           ← Back to Previous List
         </button>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           {review.is_flagged ? (
             <button
               onClick={() => openFlagModal('CLEAR_FLAG')}
+              className="csl-btn-primary"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '8px 18px',
                 backgroundColor: '#16A34A',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '0 2px 6px rgba(22, 163, 74, 0.25)',
               }}
             >
               ✓ Clear Integrity Flag
@@ -270,15 +255,14 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '8px 18px',
+                padding: '8px 16px',
                 backgroundColor: '#DC2626',
                 color: '#FFFFFF',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '13px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: 'pointer',
-                boxShadow: '0 2px 6px rgba(220, 38, 38, 0.25)',
               }}
             >
               ⚠️ Flag for Proctoring Review
@@ -293,14 +277,13 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
               alignItems: 'center',
               gap: '6px',
               padding: '8px 16px',
-              backgroundColor: '#FFF1F2',
-              color: '#BE123C',
-              border: '1.5px solid #FDA4AF',
+              backgroundColor: tokens.dangerBg,
+              color: tokens.dangerText,
+              border: `1px solid ${tokens.dangerBorder}`,
               borderRadius: '8px',
               fontSize: '13px',
-              fontWeight: 700,
+              fontWeight: 600,
               cursor: deletingAttempt ? 'not-allowed' : 'pointer',
-              boxShadow: '0 1px 3px rgba(190, 18, 60, 0.1)',
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -313,16 +296,7 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
       </div>
 
       {/* Candidate & Attempt Banner */}
-      <div
-        style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '16px',
-          border: '1.5px solid rgba(245, 184, 61, 0.35)',
-          padding: '26px',
-          marginBottom: '24px',
-          boxShadow: '0 6px 18px rgba(11, 46, 111, 0.05)',
-        }}
-      >
+      <div className="csl-card" style={{ padding: '24px' }}>
         <div
           style={{
             display: 'flex',
@@ -334,73 +308,43 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
         >
           {/* Candidate Info */}
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-              <span
-                style={{
-                  padding: '3px 12px',
-                  borderRadius: '9999px',
-                  fontSize: '11px',
-                  fontWeight: 800,
-                  backgroundColor: review.state === 'SUBMITTED' ? '#DCFCE7' : (review.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' ? '#FEF3C7' : '#F1F5F9'),
-                  color: review.state === 'SUBMITTED' ? '#166534' : (review.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' ? '#92400E' : '#475569'),
-                }}
-              >
-                {review.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' ? 'Pending Manual Evaluation' : review.state}
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+              <StatusBadge
+                status={review.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' ? 'PENDING' : review.state}
+                label={review.state === 'COMPLETED_PENDING_MANUAL_EVALUATION' ? 'Pending Manual Evaluation' : review.state}
+              />
               {review.delivery_mode === 'PDF_CODING' && (
-                <span
-                  style={{
-                    padding: '3px 12px',
-                    borderRadius: '9999px',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    backgroundColor: '#EDE9FE',
-                    color: '#6D28D9',
-                  }}
-                >
-                  📄 PDF Assessment Mode
-                </span>
+                <StatusBadge label="📄 PDF Assessment Mode" variant="coding" />
               )}
               {review.is_flagged && (
-                <span
-                  style={{
-                    padding: '3px 12px',
-                    borderRadius: '9999px',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    backgroundColor: '#FEE2E2',
-                    color: '#991B1B',
-                  }}
-                >
-                  ⚠️ Flagged for Integrity
-                </span>
+                <StatusBadge status="FLAGGED" label="⚠️ Flagged for Integrity" />
               )}
             </div>
 
-            <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0' }}>
+            <h2 style={{ fontSize: '22px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 6px 0' }}>
               {review.candidate.full_name}
             </h2>
-            <div style={{ fontSize: '13px', color: '#475569', marginBottom: '4px' }}>
-              Register / Roll No: <strong style={{ color: '#0B2E6F' }}>{review.candidate.register_number}</strong> • College:{' '}
-              <strong style={{ color: '#0B2E6F' }}>{review.candidate.college}</strong>
+            <div style={{ fontSize: '13px', color: tokens.textSecondary, marginBottom: '4px' }}>
+              Register / Roll No: <strong style={{ color: tokens.textPrimary, fontFamily: tokens.monoFamily }}>{review.candidate.register_number}</strong> • College:{' '}
+              <strong style={{ color: tokens.textPrimary }}>{review.candidate.college}</strong>
             </div>
-            <div style={{ fontSize: '12px', color: '#64748B' }}>
+            <div style={{ fontSize: '12px', color: tokens.textMuted }}>
               {review.candidate.department} • {review.candidate.year_of_study} • {review.candidate.email}
             </div>
           </div>
 
           {/* Scorecards */}
-          <div style={{ display: 'flex', gap: '14px', textAlign: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '12px', textAlign: 'center', flexWrap: 'wrap' }}>
             <div
               style={{
-                backgroundColor: '#FAF7F3',
-                padding: '14px 22px',
-                borderRadius: '12px',
-                border: '1.5px solid rgba(245, 184, 61, 0.3)',
+                backgroundColor: tokens.surfaceElevated,
+                padding: '14px 20px',
+                borderRadius: '10px',
+                border: `1px solid ${tokens.border}`,
                 minWidth: '110px',
               }}
             >
-              <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 800, textTransform: 'uppercase' }}>
+              <div style={{ fontSize: '11px', color: tokens.textMuted, fontWeight: 600, textTransform: 'uppercase' }}>
                 Total Score
               </div>
               {review.delivery_mode === 'PDF_CODING' || review.is_manual_evaluation_pending ? (
@@ -1410,6 +1354,6 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

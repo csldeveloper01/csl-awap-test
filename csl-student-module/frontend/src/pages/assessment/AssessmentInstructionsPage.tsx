@@ -461,12 +461,12 @@ export function AssessmentInstructionsPage() {
       <div
         style={{
           minHeight: '100vh',
-          backgroundColor: '#FCFAF5',
+          backgroundColor: 'var(--csl-bg-canvas)',
           padding: '36px 16px',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          fontFamily: "'Inter', system-ui, sans-serif",
         }}
       >
         <div style={{ textAlign: 'center' }}>
@@ -474,13 +474,13 @@ export function AssessmentInstructionsPage() {
             style={{
               width: '40px',
               height: '40px',
-              border: '3px solid #E2E8F0',
-              borderTopColor: '#0B2E6F',
+              border: '3px solid var(--csl-border)',
+              borderTopColor: '#1455D9',
               borderRadius: '50%',
               margin: '0 auto 16px',
             }}
           />
-          <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>Loading Assessment...</h3>
+          <h3 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--csl-text-primary)' }}>Loading Assessment...</h3>
         </div>
       </div>
     );
@@ -497,7 +497,7 @@ export function AssessmentInstructionsPage() {
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          fontFamily: "'Inter', system-ui, sans-serif",
         }}
       >
         <ProctoringInitializer
@@ -518,22 +518,20 @@ export function AssessmentInstructionsPage() {
     <div
       style={{
         minHeight: '100vh',
-        backgroundColor: '#FCFAF5',
+        backgroundColor: 'var(--csl-bg-canvas)',
         padding: '36px 16px',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        fontFamily: "'Inter', system-ui, sans-serif",
       }}
     >
       <div
+        className="csl-card"
         style={{
           maxWidth: '820px',
           width: '100%',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '20px',
-          border: '1px solid rgba(245, 184, 61, 0.3)',
-          boxShadow: '0 12px 35px -5px rgba(11, 46, 111, 0.08)',
+          borderRadius: '16px',
           padding: '36px',
           boxSizing: 'border-box',
         }}

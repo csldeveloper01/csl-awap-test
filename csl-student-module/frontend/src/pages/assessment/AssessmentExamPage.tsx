@@ -807,8 +807,8 @@ export function AssessmentExamPage() {
           justifyContent: 'center',
           alignItems: 'center',
           minHeight: '100vh',
-          backgroundColor: '#FCFAF5',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          backgroundColor: '#F5F7FA',
+          fontFamily: "'Inter', system-ui, sans-serif",
         }}
       >
         <div style={{ textAlign: 'center' }}>
@@ -817,13 +817,13 @@ export function AssessmentExamPage() {
               width: '40px',
               height: '40px',
               border: '3px solid #E2E8F0',
-              borderTopColor: '#1455B8',
+              borderTopColor: '#1455D9',
               borderRadius: '50%',
               animation: 'spin 1s linear infinite',
               margin: '0 auto 16px',
             }}
           />
-          <p style={{ fontSize: '15px', color: '#0B2E6F', fontWeight: 700 }}>
+          <p style={{ fontSize: '15px', color: '#0F172A', fontWeight: 600 }}>
             Initializing exam environment...
           </p>
         </div>
@@ -844,9 +844,9 @@ export function AssessmentExamPage() {
           justifyContent: 'center',
           alignItems: 'center',
           minHeight: '100vh',
-          backgroundColor: '#FCFAF5',
+          backgroundColor: '#F5F7FA',
           padding: '16px',
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+          fontFamily: "'Inter', system-ui, sans-serif",
         }}
       >
         <div
@@ -855,9 +855,9 @@ export function AssessmentExamPage() {
             width: '100%',
             backgroundColor: '#FFFFFF',
             padding: '32px',
-            borderRadius: '16px',
-            border: '1px solid rgba(245, 184, 61, 0.3)',
-            boxShadow: '0 10px 25px -5px rgba(11, 46, 111, 0.08)',
+            borderRadius: '14px',
+            border: '1px solid #E2E8F0',
+            boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.08)',
             textAlign: 'center',
           }}
         >
@@ -921,10 +921,10 @@ export function AssessmentExamPage() {
         height: '100vh',
         maxHeight: '100vh',
         overflow: 'hidden',
-        backgroundColor: '#FCFAF5',
+        backgroundColor: '#F5F7FA',
         display: 'flex',
         flexDirection: 'column',
-        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        fontFamily: "'Inter', system-ui, sans-serif",
         boxSizing: 'border-box',
       }}
     >
@@ -947,13 +947,13 @@ export function AssessmentExamPage() {
         </div>
       )}
 
-      {/* ─── 1. TOP HEADER (BRAND ALIGNED WITH MOCKUP) ─────────────────── */}
+      {/* ─── 1. TOP HEADER ─────────────────── */}
       <header
         style={{
-          height: '68px',
-          minHeight: '68px',
+          height: '64px',
+          minHeight: '64px',
           backgroundColor: '#FFFFFF',
-          borderBottom: '1px solid rgba(245, 184, 61, 0.3)',
+          borderBottom: '1px solid #E2E8F0',
           padding: '0 24px',
           display: 'flex',
           justifyContent: 'space-between',

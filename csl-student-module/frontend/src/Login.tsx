@@ -51,39 +51,110 @@ export function Login({ onLoginSuccess }: LoginProps) {
   };
 
   return (
-    <div style={{ maxWidth: 400, margin: '50px auto', textAlign: 'left' }}>
-      <h2>Login</h2>
-      {error && <p style={{ color: 'red', marginBottom: 12 }}>{error}</p>}
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div>
-          <label htmlFor="email" style={{ display: 'block', marginBottom: 4 }}>Email</label>
-          <input
-            id="email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-          />
+    <div
+      style={{
+        minHeight: '100vh',
+        backgroundColor: 'var(--csl-bg-canvas)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 16px',
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+      }}
+    >
+      <div className="csl-card" style={{ width: '100%', maxWidth: '420px', padding: '32px', textAlign: 'left' }}>
+        <div style={{ marginBottom: '20px' }}>
+          <span
+            style={{
+              display: 'inline-block',
+              fontSize: '11px',
+              fontWeight: 700,
+              color: '#1455D9',
+              backgroundColor: 'rgba(20, 85, 217, 0.1)',
+              padding: '3px 8px',
+              borderRadius: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              marginBottom: '8px',
+            }}
+          >
+            Creator Space Lab
+          </span>
+          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: 'var(--csl-text-primary)', letterSpacing: '-0.02em' }}>
+            Sign in to CSL Portal
+          </h2>
+          <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--csl-text-muted)' }}>
+            Enter your account credentials to continue.
+          </p>
         </div>
-        <div>
-          <label htmlFor="password" style={{ display: 'block', marginBottom: 4 }}>Password</label>
-          <input
-            id="password"
-            type="password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-          />
-        </div>
-        <button type="submit" disabled={loading} style={{ padding: '8px 16px', marginTop: 8 }}>
-          {loading ? 'Logging in...' : 'Login'}
-        </button>
-      </form>
-      <p style={{ marginTop: 16 }}>
-        Don't have an account? <Link to="/register">Register</Link>
-      </p>
+
+        {error && (
+          <div style={{ padding: '10px 12px', backgroundColor: '#FEF2F2', border: '1px solid #FCA5A5', color: '#DC2626', borderRadius: '8px', fontSize: '13px', marginBottom: '16px' }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label htmlFor="email" style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: 'var(--csl-text-secondary)', marginBottom: '6px' }}>
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                borderRadius: '8px',
+                border: '1px solid var(--csl-border)',
+                backgroundColor: 'var(--csl-bg-card)',
+                color: 'var(--csl-text-primary)',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <div>
+            <label htmlFor="password" style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: 'var(--csl-text-secondary)', marginBottom: '6px' }}>
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                borderRadius: '8px',
+                border: '1px solid var(--csl-border)',
+                backgroundColor: 'var(--csl-bg-card)',
+                color: 'var(--csl-text-primary)',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="csl-btn-primary"
+            style={{ width: '100%', padding: '10px 16px', marginTop: '4px', fontSize: '14px' }}
+          >
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
+        <p style={{ marginTop: '18px', marginBottom: 0, fontSize: '13px', color: 'var(--csl-text-muted)', textAlign: 'center' }}>
+          Don't have an account?{' '}
+          <Link to="/register" style={{ color: '#1455D9', fontWeight: 600, textDecoration: 'none' }}>
+            Register
+          </Link>
+        </p>
+      </div>
     </div>
   );
 }

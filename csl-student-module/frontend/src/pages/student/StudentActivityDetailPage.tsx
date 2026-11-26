@@ -100,21 +100,19 @@ export function StudentActivityDetailPage() {
   };
 
   return (
-    <div style={{ maxWidth: '800px' }}>
+    <div style={{ maxWidth: '840px' }}>
       <div style={{ marginBottom: '16px' }}>
         <Link
           to="/student/activities"
-          style={{ color: '#2563eb', textDecoration: 'none', fontSize: '0.9rem', fontWeight: 500 }}
+          style={{ color: '#1455D9', textDecoration: 'none', fontSize: '13.5px', fontWeight: 600 }}
         >
           ← Back to Activities
         </Link>
       </div>
 
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#ffffff',
-          border: '1px solid #e5e7eb',
-          borderRadius: '8px',
           padding: '24px',
           marginBottom: '20px',
         }}

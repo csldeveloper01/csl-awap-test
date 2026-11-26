@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
 import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState } from '../../components/ui';
 import {
   getAdminColleges,
   createAdminCollege,
@@ -18,6 +20,7 @@ import {
 } from '../../api/admin';
 
 export function AdminCollegesView() {
+  const { tokens } = useAdminTheme();
   const [colleges, setColleges] = useState<AdminCollege[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -394,138 +397,65 @@ export function AdminCollegesView() {
   const totalCount = colleges.length;
   const activeCount = colleges.filter((c) => c.is_active).length;
   const totalCandidates = colleges.reduce((acc, c) => acc + (c.candidates_count || 0), 0);
+  const verifiedCount = colleges.filter((c) => c.is_verified).length;
 
   return (
-    <div style={{ maxWidth: '1100px' }}>
-      {/* ─── PAGE TITLE & ACTIONS (Mockup 2) ─────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1
-          style={{
-            fontSize: '44px',
-            fontWeight: 900,
-            color: '#0F172A',
-            margin: 0,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.1,
-          }}
-        >
-          Colleges
-        </h1>
+    <PageContainer>
+      <SectionHeader
+        title="Colleges & Institutions"
+        description="Manage participating educational institutions, college verification codes, candidate rosters, and directory imports."
+        actions={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => setShowDirectoryImportModal(true)}
+              className="csl-btn-secondary"
+              style={{ color: tokens.cslBlue }}
+            >
+              Import TN Directory
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="csl-btn-primary"
+            >
+              + Add New Institution
+            </button>
+          </div>
+        }
+      />
 
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={() => setShowDirectoryImportModal(true)}
-            style={{
-              backgroundColor: '#FFFFFF',
-              color: '#0D52D6',
-              border: '1.5px solid #0D52D6',
-              borderRadius: '20px',
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            Import TN Directory
-          </button>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            style={{
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '20px',
-              padding: '8px 18px',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(13,82,214,0.3)',
-            }}
-          >
-            Add New Institution
-          </button>
-        </div>
-      </div>
-
-      {/* ─── 3 ODOMETER COUNTERS (Mockup 2) ─────────────────────────── */}
+      {/* Metrics */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: '16px',
-          marginBottom: '28px',
         }}
       >
-        <OdometerCard label="Colleges" value={totalCount} />
-        <OdometerCard label="Active" value={activeCount} />
-        <OdometerCard label="Students" value={totalCandidates} />
+        <OdometerCard label="Total Colleges" value={totalCount} subtitle="Registered institutions" />
+        <OdometerCard label="Active Colleges" value={activeCount} subtitle="Eligible for drives" accent="green" />
+        <OdometerCard label="Verified" value={verifiedCount} subtitle="Approved directory" accent="blue" />
+        <OdometerCard label="Registered Students" value={totalCandidates} subtitle="Across institutions" accent="blue" />
       </div>
 
-      {/* ─── SEARCH & FILTER PILL BAR (Mockup 2) ─────────────────────── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginBottom: '24px',
-        }}
-      >
-        {/* Pill Search Input: Search by College Name */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <input
-            type="text"
-            placeholder="Search by College Name"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{
-              width: '100%',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 42px 10px 18px',
-              fontSize: '13px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              color: '#1E293B',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              right: '4px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              backgroundColor: '#0D52D6',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </div>
-        </div>
-
-        {/* All Statuses Pill Dropdown */}
-        <div style={{ position: 'relative' }}>
+      {/* Search & Filter Toolbar */}
+      <SearchToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search by college name, code, or location..."
+        filters={
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
             style={{
-              appearance: 'none',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #CBD5E1',
-              borderRadius: '24px',
-              padding: '10px 36px 10px 18px',
+              backgroundColor: tokens.inputBg,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: '8px',
+              padding: '8px 14px',
               fontSize: '13px',
-              fontWeight: 700,
-              color: '#1E293B',
+              fontWeight: 500,
+              color: tokens.textPrimary,
               outline: 'none',
               cursor: 'pointer',
             }}
@@ -534,52 +464,32 @@ export function AdminCollegesView() {
             <option value="true">Active</option>
             <option value="false">Inactive</option>
           </select>
-          <div
-            style={{
-              position: 'absolute',
-              right: '12px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              pointerEvents: 'none',
-              color: '#0D52D6',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Bulk Action Bar */}
       {selectedCollegeIds.length > 0 && (
         <div
           style={{
-            backgroundColor: '#EFF6FF',
-            border: '1px solid #BFDBFE',
-            borderRadius: '16px',
+            backgroundColor: tokens.cslBlueSoftBg,
+            border: `1px solid ${tokens.cslBlueSoftBorder}`,
+            borderRadius: '10px',
             padding: '10px 18px',
-            marginBottom: '16px',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '12px',
           }}
         >
-          <span style={{ fontSize: '13px', fontWeight: 700, color: '#1D4ED8' }}>
+          <span className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.cslBlueSoftText }}>
             {selectedCollegeIds.length} Colleges Selected
           </span>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => setSelectedCollegeIds([])}
-              style={{
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '12px',
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
+              className="csl-btn-secondary"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
             >
               Deselect All
             </button>
@@ -590,10 +500,10 @@ export function AdminCollegesView() {
                 backgroundColor: '#DC2626',
                 color: '#FFFFFF',
                 border: 'none',
-                borderRadius: '12px',
+                borderRadius: '8px',
                 padding: '6px 16px',
                 fontSize: '12px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: bulkDeleting ? 'not-allowed' : 'pointer',
               }}
             >
@@ -603,301 +513,268 @@ export function AdminCollegesView() {
         </div>
       )}
 
-      {/* ─── COLLEGES TABLE CONTAINER (Mockup 2) ────────────────────── */}
+      {/* Colleges Directory Table */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#0D52D6',
-          borderRadius: '24px',
-          padding: '12px 14px 16px',
-          boxShadow: '0 6px 18px rgba(13, 82, 214, 0.15)',
+          padding: 0,
+          overflowX: 'auto',
         }}
       >
-        {/* Table Header Row (Mockup 2) */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.9fr 1fr 1fr 1fr 36px',
-            padding: '10px 16px',
-            color: '#FFFFFF',
-            fontSize: '13px',
-            fontWeight: 800,
-            alignItems: 'center',
-          }}
-        >
-          <div>
-            <input
-              type="checkbox"
-              checked={colleges.length > 0 && selectedCollegeIds.length === colleges.length}
-              onChange={handleToggleSelectAllColleges}
-              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-            />
+        <div style={{ minWidth: '880px' }}>
+          {/* Table Header Row */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.8fr 0.9fr 0.9fr 1fr 36px',
+              padding: '12px 18px',
+              backgroundColor: tokens.surfaceElevated,
+              borderBottom: `1px solid ${tokens.border}`,
+              color: tokens.textMuted,
+              fontSize: '11.5px',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              alignItems: 'center',
+            }}
+          >
+            <div>
+              <input
+                type="checkbox"
+                checked={colleges.length > 0 && selectedCollegeIds.length === colleges.length}
+                onChange={handleToggleSelectAllColleges}
+                style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
+              />
+            </div>
+            <div>Institution Name</div>
+            <div>Location</div>
+            <div>Contact</div>
+            <div style={{ textAlign: 'center' }}>Students</div>
+            <div style={{ textAlign: 'center' }}>Assessments</div>
+            <div>Status</div>
+            <div style={{ textAlign: 'center' }}>Action</div>
+            <div></div>
           </div>
-          <div>Institution Name</div>
-          <div>Location</div>
-          <div>Contact</div>
-          <div style={{ textAlign: 'center' }}>Students</div>
-          <div style={{ textAlign: 'center' }}>Assessments</div>
-          <div>Status</div>
-          <div style={{ textAlign: 'center' }}>Action</div>
-          <div></div>
-        </div>
 
-        {/* College Row Cards (Mockup 2) */}
-        {loading ? (
-          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-            Loading colleges directory...
-          </div>
-        ) : colleges.length === 0 ? (
-          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '40px', textAlign: 'center', color: '#64748B', fontWeight: 700 }}>
-            No colleges found matching the criteria.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
-            {colleges.map((col) => {
-              const isSelected = selectedCollegeIds.includes(col.id);
-              const isExpanded = expandedCollegeId === col.id;
+          {loading ? (
+            <div style={{ padding: '48px', textAlign: 'center', color: tokens.textMuted, fontWeight: 500 }}>
+              Loading colleges directory...
+            </div>
+          ) : colleges.length === 0 ? (
+            <div style={{ padding: '24px' }}>
+              <EmptyState
+                title="No institutions found"
+                description="No colleges match your search or status filter."
+              />
+            </div>
+          ) : (
+            <div>
+              {colleges.map((col) => {
+                const isSelected = selectedCollegeIds.includes(col.id);
+                const isExpanded = expandedCollegeId === col.id;
 
-              return (
-                <div
-                  key={col.id}
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    borderRadius: '16px',
-                    border: isSelected ? '1.5px solid #0D52D6' : '1px solid #E2E8F0',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.02)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {/* Top Grid Row */}
+                return (
                   <div
+                    key={col.id}
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.9fr 1fr 1fr 1fr 36px',
-                      alignItems: 'center',
-                      padding: '14px 18px',
+                      borderBottom: `1px solid ${tokens.borderLight}`,
+                      backgroundColor: isSelected ? tokens.cslBlueSoftBg : 'transparent',
                     }}
                   >
-                    <div>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => handleToggleSelectCollege(col.id)}
-                        style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-                      />
-                    </div>
-
-                    {/* Institution Name */}
-                    <div style={{ paddingRight: '8px' }}>
-                      <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', lineHeight: 1.3 }}>
-                        {col.name}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px', fontFamily: 'monospace' }}>
-                        {col.code} {col.is_verified ? '• Verified' : ''}
-                      </div>
-                    </div>
-
-                    {/* Location */}
-                    <div style={{ fontSize: '13px', color: '#334155' }}>
-                      {col.city || col.district || col.location || '—'}
-                    </div>
-
-                    {/* Contact */}
-                    <div style={{ fontSize: '12px', color: '#334155' }}>
-                      {col.contact_phone || col.contact_email || col.admin_contact_name || '—'}
-                    </div>
-
-                    {/* Students */}
-                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
-                      {String(col.candidates_count || 0).padStart(2, '0')}
-                    </div>
-
-                    {/* Assessments */}
-                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 900, color: '#0F172A' }}>
-                      {String(col.assigned_assessments_count || 0).padStart(2, '0')}
-                    </div>
-
-                    {/* Status */}
-                    <div>
-                      <span
-                        style={{
-                          backgroundColor: col.is_active ? '#DCFCE7' : '#F1F5F9',
-                          color: col.is_active ? '#15803D' : '#64748B',
-                          padding: '3px 12px',
-                          borderRadius: '12px',
-                          fontSize: '11px',
-                          fontWeight: 800,
-                        }}
-                      >
-                        {col.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-
-                    {/* View Button (Mockup 2) */}
-                    <div style={{ textAlign: 'center' }}>
-                      <button
-                        onClick={() => handleOpenDetail(col)}
-                        style={{
-                          backgroundColor: '#0D52D6',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '16px',
-                          padding: '5px 16px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        View
-                      </button>
-                    </div>
-
-                    {/* Expand Chevron Toggle (Mockup 2) */}
-                    <div style={{ textAlign: 'center' }}>
-                      <button
-                        onClick={() => setExpandedCollegeId(isExpanded ? null : col.id)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#0D52D6',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          padding: '4px',
-                        }}
-                      >
-                        <svg
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          style={{
-                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                            transition: 'transform 0.2s ease',
-                          }}
-                        >
-                          <polyline points="6 9 12 15 18 9"></polyline>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Expandable Drawer (Mockup 2) */}
-                  {isExpanded && (
+                    {/* Top Grid Row */}
                     <div
                       style={{
-                        backgroundColor: '#CBD5E1',
-                        borderTop: '1px solid #E2E8F0',
-                        padding: '10px 24px',
-                        display: 'flex',
-                        justifyContent: 'flex-end',
+                        display: 'grid',
+                        gridTemplateColumns: '40px 2.4fr 1.2fr 1.2fr 0.8fr 0.9fr 0.9fr 1fr 36px',
                         alignItems: 'center',
-                        gap: '12px',
+                        padding: '14px 18px',
                       }}
                     >
-                      <button
-                        onClick={() => handleOpenEdit(col)}
-                        style={{
-                          backgroundColor: '#FFFFFF',
-                          color: '#1E293B',
-                          border: '1px solid #94A3B8',
-                          borderRadius: '16px',
-                          padding: '6px 16px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleOpenMerge(col)}
-                        style={{
-                          backgroundColor: '#FFFFFF',
-                          color: '#1E293B',
-                          border: '1px solid #94A3B8',
-                          borderRadius: '16px',
-                          padding: '6px 16px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Merge
-                      </button>
-                      <button
-                        onClick={() => handleOpenImport(col)}
-                        style={{
-                          backgroundColor: '#FFFFFF',
-                          color: '#1E293B',
-                          border: '1px solid #94A3B8',
-                          borderRadius: '16px',
-                          padding: '6px 14px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Import Students
-                      </button>
-                      <button
-                        onClick={() => handleExportCollegeData(col)}
-                        disabled={exportingCollegeId === col.id}
-                        style={{
-                          backgroundColor: '#FFFFFF',
-                          color: '#0B2E6F',
-                          border: '1px solid #94A3B8',
-                          borderRadius: '16px',
-                          padding: '6px 14px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: exportingCollegeId === col.id ? 'wait' : 'pointer',
-                        }}
-                        title="Download formatted Excel export for this college"
-                      >
-                        {exportingCollegeId === col.id ? 'Exporting...' : 'Export Data'}
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(col)}
-                        style={{
-                          backgroundColor: '#F87171',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '16px',
-                          padding: '6px 18px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {col.is_active ? 'Deactivate' : 'Activate'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCollege(col)}
-                        style={{
-                          backgroundColor: '#DC2626',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '16px',
-                          padding: '6px 18px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Delete
-                      </button>
+                      <div>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectCollege(col.id)}
+                          style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
+                        />
+                      </div>
+
+                      {/* Institution Name */}
+                      <div style={{ paddingRight: '10px' }}>
+                        <div style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, lineHeight: 1.35 }}>
+                          {col.name}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '3px', fontFamily: tokens.monoFamily }}>
+                          {col.code} {col.is_verified ? '• Verified' : ''}
+                        </div>
+                      </div>
+
+                      {/* Location */}
+                      <div style={{ fontSize: '13px', color: tokens.textSecondary }}>
+                        {col.city || col.district || col.location || '—'}
+                      </div>
+
+                      {/* Contact */}
+                      <div style={{ fontSize: '12.5px', color: tokens.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '8px' }}>
+                        {col.contact_phone || col.contact_email || col.admin_contact_name || '—'}
+                      </div>
+
+                      {/* Students */}
+                      <div className="csl-tabular" style={{ textAlign: 'center', fontSize: '15px', fontWeight: 700, color: tokens.textPrimary }}>
+                        {String(col.candidates_count || 0).padStart(2, '0')}
+                      </div>
+
+                      {/* Assessments */}
+                      <div className="csl-tabular" style={{ textAlign: 'center', fontSize: '15px', fontWeight: 700, color: tokens.textPrimary }}>
+                        {String(col.assigned_assessments_count || 0).padStart(2, '0')}
+                      </div>
+
+                      {/* Status */}
+                      <div>
+                        <StatusBadge
+                          status={col.is_active ? 'ACTIVE' : 'INACTIVE'}
+                          label={col.is_active ? 'Active' : 'Inactive'}
+                          size="sm"
+                        />
+                      </div>
+
+                      {/* View Button */}
+                      <div style={{ textAlign: 'center' }}>
+                        <button
+                          onClick={() => handleOpenDetail(col)}
+                          className="csl-btn-primary"
+                          style={{
+                            padding: '5px 14px',
+                            fontSize: '12px',
+                          }}
+                        >
+                          View
+                        </button>
+                      </div>
+
+                      {/* Expand Chevron Toggle */}
+                      <div style={{ textAlign: 'center' }}>
+                        <button
+                          onClick={() => setExpandedCollegeId(isExpanded ? null : col.id)}
+                          aria-label="Toggle institution actions"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: tokens.textMuted,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '4px',
+                          }}
+                        >
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            style={{
+                              transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                              transition: 'transform 0.2s ease',
+                            }}
+                          >
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                          </svg>
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+
+                    {/* Expandable Actions Drawer */}
+                    {isExpanded && (
+                      <div
+                        style={{
+                          backgroundColor: tokens.surfaceElevated,
+                          borderTop: `1px solid ${tokens.borderLight}`,
+                          padding: '10px 24px',
+                          display: 'flex',
+                          justifyContent: 'flex-end',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <button
+                          onClick={() => handleOpenEdit(col)}
+                          className="csl-btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '12px' }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleOpenMerge(col)}
+                          className="csl-btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '12px' }}
+                        >
+                          Merge
+                        </button>
+                        <button
+                          onClick={() => handleOpenImport(col)}
+                          className="csl-btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '12px' }}
+                        >
+                          Import Students
+                        </button>
+                        <button
+                          onClick={() => handleExportCollegeData(col)}
+                          disabled={exportingCollegeId === col.id}
+                          className="csl-btn-secondary"
+                          style={{
+                            padding: '5px 12px',
+                            fontSize: '12px',
+                            color: tokens.cslBlue,
+                            cursor: exportingCollegeId === col.id ? 'wait' : 'pointer',
+                          }}
+                          title="Download formatted Excel export for this college"
+                        >
+                          {exportingCollegeId === col.id ? 'Exporting...' : 'Export Data'}
+                        </button>
+                        <button
+                          onClick={() => handleToggleStatus(col)}
+                          style={{
+                            backgroundColor: col.is_active ? tokens.dangerBg : tokens.successBg,
+                            color: col.is_active ? tokens.dangerText : tokens.successText,
+                            border: `1px solid ${col.is_active ? tokens.dangerBorder : tokens.successBorder}`,
+                            borderRadius: '6px',
+                            padding: '5px 12px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {col.is_active ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCollege(col)}
+                          style={{
+                            backgroundColor: '#DC2626',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            borderRadius: '6px',
+                            padding: '5px 12px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ─── CREATE COLLEGE MODAL ────────────────────────────────────── */}
@@ -906,7 +783,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -915,21 +793,24 @@ export function AdminCollegesView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '28px',
               width: '560px',
               maxWidth: '90vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 Register Participating Institution
               </h2>
               <button
                 onClick={() => setShowCreateModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#94A3B8' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1065,7 +946,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1074,26 +956,29 @@ export function AdminCollegesView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '28px',
               width: '620px',
               maxWidth: '90vw',
               maxHeight: '90vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
-                <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                <h2 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                   Import Candidates for {selectedCollege.name}
                 </h2>
-                <span style={{ fontSize: '12px', color: '#64748B' }}>Code: {selectedCollege.code}</span>
+                <span style={{ fontSize: '12px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>Code: {selectedCollege.code}</span>
               </div>
               <button
                 onClick={() => setShowImportModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#94A3B8' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1188,7 +1073,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1197,33 +1083,36 @@ export function AdminCollegesView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '28px',
               width: '740px',
               maxWidth: '92vw',
               maxHeight: '90vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                     {selectedCollege.name}
                   </h2>
-                  <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '12px', padding: '2px 8px', borderRadius: '4px' }}>
+                  <span style={{ backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}`, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontWeight: 600, fontSize: '12px', padding: '2px 8px', borderRadius: '6px' }}>
                     {selectedCollege.code}
                   </span>
                 </div>
-                <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
+                <div style={{ fontSize: '13px', color: tokens.textMuted, marginTop: '4px' }}>
                   {selectedCollege.location || 'Campus'} • Status: {selectedCollege.is_active ? 'Active' : 'Inactive'}
                 </div>
               </div>
               <button
                 onClick={() => setShowDetailModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '22px', cursor: 'pointer', color: '#94A3B8' }}
+                className="csl-btn-secondary"
+                style={{ width: '32px', height: '32px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1343,7 +1232,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1352,23 +1242,26 @@ export function AdminCollegesView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '24px',
               width: '560px',
               maxWidth: '90vw',
               maxHeight: '90vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 Edit Institution Details
               </h3>
               <button
                 onClick={() => setShowEditModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1543,7 +1436,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1552,24 +1446,27 @@ export function AdminCollegesView() {
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '24px',
               width: '540px',
               maxWidth: '90vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '20px' }}>🔀</span>
-                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                   Merge Institution Entry
                 </h3>
               </div>
               <button
                 onClick={() => setShowMergeModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1648,8 +1545,8 @@ export function AdminCollegesView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(11, 46, 111, 0.45)',
-            backdropFilter: 'blur(3px)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
@@ -1661,25 +1558,27 @@ export function AdminCollegesView() {
             style={{
               maxWidth: '560px',
               width: '100%',
-              backgroundColor: '#FFFFFF',
-              borderRadius: '16px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              borderRadius: '12px',
               padding: '28px',
-              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.15)',
-              border: '1px solid #E2E8F0',
+              boxShadow: tokens.modalShadow,
+              border: `1px solid ${tokens.border}`,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                   Import Tamil Nadu Institution Directory
                 </h3>
-                <span style={{ fontSize: '12px', color: '#64748B' }}>
+                <span style={{ fontSize: '12px', color: tokens.textMuted }}>
                   Bulk import verified colleges with districts, type, and affiliations.
                 </span>
               </div>
               <button
                 onClick={() => setShowDirectoryImportModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', color: '#94A3B8', cursor: 'pointer' }}
+                className="csl-btn-secondary"
+                style={{ width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               >
                 ✕
               </button>
@@ -1771,6 +1670,6 @@ export function AdminCollegesView() {
           </div>
         </div>
       )}
-</div>
+    </PageContainer>
   );
 }

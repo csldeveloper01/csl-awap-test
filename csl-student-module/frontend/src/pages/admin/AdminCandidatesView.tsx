@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { OdometerCard } from '../../components/admin/OdometerCard';
+import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState } from '../../components/ui';
 import {
   getAdminCandidates,
   getAdminCandidateDetail,
@@ -19,6 +22,7 @@ interface AdminCandidatesViewProps {
 }
 
 export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProps) {
+  const { tokens } = useAdminTheme();
   const [candidates, setCandidates] = useState<AdminCandidate[]>([]);
   const [colleges, setColleges] = useState<AdminCollege[]>([]);
   const [search, setSearch] = useState('');
@@ -187,11 +191,6 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
     loadCandidates();
   }, [selectedCollegeId]);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    loadCandidates();
-  };
-
   const handleToggleCandidate = async (candId: string) => {
     try {
       const res = await toggleAdminCandidateStatus(candId);
@@ -272,226 +271,167 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
   const isAllSelected = candidates.length > 0 && selectedIds.length === candidates.length;
   const isPartiallySelected = selectedIds.length > 0 && selectedIds.length < candidates.length;
 
+  const activeCandidatesCount = candidates.filter((c) => c.is_active).length;
+  const attemptedCandidatesCount = candidates.filter((c) => (c.attempts_count || 0) > 0).length;
+  const submittedCandidatesCount = candidates.filter((c) => c.latest_state === 'SUBMITTED').length;
+  const inProgressCandidatesCount = candidates.filter((c) => c.latest_state === 'IN_PROGRESS').length;
+
   return (
-    <div>
-      {/* Header & Search */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '20px',
-          flexWrap: 'wrap',
-          gap: '12px',
-        }}
-      >
-        <div>
-          <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0', letterSpacing: '-0.02em' }}>
-            Registered Candidates Directory
-          </h2>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-            Inspect candidate enrollment, institutional affiliations, attempt history, and finalized scores.
-          </p>
-        </div>
-
-        <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <select
-            value={selectedCollegeId}
-            onChange={(e) => setSelectedCollegeId(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              borderRadius: '8px',
-              border: '1px solid #CBD5E1',
-              fontSize: '13px',
-              backgroundColor: '#FFFFFF',
-              outlineColor: '#1455B8',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="">All Institutions</option>
-            {colleges.map((col) => (
-              <option key={col.id} value={col.id}>
-                {col.code} — {col.name}
-              </option>
-            ))}
-          </select>
-
-          <div style={{ position: 'relative' }}>
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#94A3B8"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
-            >
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search candidate, roll no, college..."
-              style={{
-                padding: '8px 12px 8px 36px',
-                borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                fontSize: '13px',
-                width: '260px',
-                outlineColor: '#1455B8',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#1455B8',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(20, 85, 184, 0.2)',
-            }}
-          >
-            Search
-          </button>
-
-          {(search || selectedCollegeId) && (
+    <PageContainer>
+      <SectionHeader
+        title="Registered Candidates"
+        description="Inspect candidate enrollment, institutional affiliations, attempt history, recovery authorizations, and finalized scores."
+        actions={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => {
-                setSearch('');
-                setSelectedCollegeId('');
+              onClick={handleExportCSV}
+              disabled={exportingCSV}
+              className="csl-btn-secondary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: exportingCSV ? 'not-allowed' : 'pointer',
               }}
+              title="Download candidate details as CSV"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              {exportingCSV ? 'Exporting CSV...' : 'Export CSV'}
+            </button>
+            <button
+              type="button"
+              onClick={handleExportXLSX}
+              disabled={exportingXLSX}
+              className="csl-btn-primary"
+              style={{
+                backgroundColor: '#16A34A',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: exportingXLSX ? 'not-allowed' : 'pointer',
+              }}
+              title="Download candidate details & results as styled Excel workbook"
+            >
+              {exportingXLSX ? 'Exporting XLSX...' : 'Export XLSX'}
+            </button>
+          </div>
+        }
+      />
+
+      {/* Metrics Row */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+          gap: '16px',
+        }}
+      >
+        <OdometerCard label="Total Candidates" value={candidates.length} subtitle="Registered directory" />
+        <OdometerCard label="Active Accounts" value={activeCandidatesCount} subtitle="Eligible to test" accent="green" />
+        <OdometerCard label="With Attempts" value={attemptedCandidatesCount} subtitle="Engaged candidates" accent="blue" />
+        <OdometerCard label="Submitted" value={submittedCandidatesCount} subtitle="Completed latest" accent="green" />
+        <OdometerCard label="In Progress" value={inProgressCandidatesCount} subtitle="Active sessions" accent="amber" />
+      </div>
+
+      {/* Search & Institution Filter Toolbar */}
+      <SearchToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search candidate, roll no, college..."
+        onSubmitSearch={() => loadCandidates()}
+        filters={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              value={selectedCollegeId}
+              onChange={(e) => setSelectedCollegeId(e.target.value)}
               style={{
                 padding: '8px 12px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
                 borderRadius: '8px',
+                border: `1px solid ${tokens.border}`,
                 fontSize: '13px',
-                color: '#475569',
+                backgroundColor: tokens.inputBg,
+                color: tokens.textPrimary,
+                outlineColor: tokens.cslBlue,
                 cursor: 'pointer',
+                maxWidth: '240px',
               }}
             >
-              Clear
+              <option value="">All Institutions</option>
+              {colleges.map((col) => (
+                <option key={col.id} value={col.id}>
+                  {col.code} — {col.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => loadCandidates()}
+              className="csl-btn-primary"
+              style={{ padding: '8px 16px' }}
+            >
+              Search
             </button>
-          )}
-
-          <button
-            type="button"
-            onClick={handleExportXLSX}
-            disabled={exportingXLSX}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: '#16A34A',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: exportingXLSX ? 'not-allowed' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-            title="Download candidate details & results as styled Excel workbook"
-          >
-            {exportingXLSX ? 'Exporting XLSX...' : 'Export XLSX'}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            disabled={exportingCSV}
-            style={{
-              padding: '8px 14px',
-              backgroundColor: '#F8FAFC',
-              color: '#0B2E6F',
-              border: '1px solid #CBD5E1',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: exportingCSV ? 'not-allowed' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={(e) => {
-              if (!exportingCSV) e.currentTarget.style.backgroundColor = '#E8EFFD';
-            }}
-            onMouseLeave={(e) => {
-              if (!exportingCSV) e.currentTarget.style.backgroundColor = '#F8FAFC';
-            }}
-            title="Download candidate details as CSV"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            {exportingCSV ? 'Exporting...' : 'Export CSV'}
-          </button>
-        </form>
-      </div>
+            {(search || selectedCollegeId) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setSelectedCollegeId('');
+                }}
+                className="csl-btn-secondary"
+                style={{ padding: '8px 12px' }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        }
+      />
 
       {/* Bulk Action Toolbar */}
       {selectedIds.length > 0 && (
         <div
           style={{
-            backgroundColor: '#EFF6FF',
-            border: '1.5px solid #BFDBFE',
-            borderRadius: '12px',
-            padding: '12px 20px',
-            marginBottom: '16px',
+            backgroundColor: tokens.cslBlueSoftBg,
+            border: `1px solid ${tokens.cslBlueSoftBorder}`,
+            borderRadius: '10px',
+            padding: '12px 18px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            boxShadow: '0 2px 8px rgba(20, 85, 184, 0.08)',
             flexWrap: 'wrap',
             gap: '12px',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span
+              className="csl-tabular"
               style={{
-                backgroundColor: '#1455B8',
+                backgroundColor: tokens.cslBlue,
                 color: '#FFFFFF',
                 borderRadius: '6px',
-                padding: '3px 9px',
+                padding: '3px 10px',
                 fontSize: '12px',
-                fontWeight: 800,
+                fontWeight: 700,
               }}
             >
               {selectedIds.length} Selected
             </span>
-            <span style={{ fontSize: '13px', color: '#1E3A8A', fontWeight: 600 }}>
-              Batch candidate actions: unreferenced candidates will be permanently removed; candidates with attempt history will be safely anonymized.
+            <span style={{ fontSize: '13px', color: tokens.cslBlueSoftText, fontWeight: 500 }}>
+              Batch actions: unreferenced candidates are deleted permanently; candidates with attempts are anonymized.
             </span>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button
               onClick={() => setSelectedIds([])}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: '#475569',
-                cursor: 'pointer',
-              }}
+              className="csl-btn-secondary"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
             >
               Deselect All
             </button>
@@ -503,9 +443,9 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 backgroundColor: '#DC2626',
                 color: '#FFFFFF',
                 border: 'none',
-                borderRadius: '6px',
+                borderRadius: '8px',
                 fontSize: '12px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: deleting ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -524,17 +464,15 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
 
       {/* Table Container */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '14px',
-          border: '1px solid #E2E8F0',
           overflowX: 'auto',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+          padding: 0,
         }}
       >
         <table style={{ width: '100%', minWidth: '1000px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
           <thead>
-            <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569' }}>
+            <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}`, color: tokens.textMuted }}>
               <th style={{ padding: '12px 16px', width: '40px', textAlign: 'center' }}>
                 <input
                   type="checkbox"
@@ -543,31 +481,34 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                     if (el) el.indeterminate = isPartiallySelected;
                   }}
                   onChange={handleToggleSelectAll}
-                  style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                  style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                   title="Select / Deselect All Candidates"
                 />
               </th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Candidate Name</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Roll / Register No</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>College / Institution</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Department & Year</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'center' }}>Attempts</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Latest Status</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700 }}>Latest Score</th>
-              <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'right' }}>Actions</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Candidate Name</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Roll / Register No</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>College / Institution</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Department & Year</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center' }}>Attempts</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Latest Status</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Latest Score</th>
+              <th style={{ padding: '12px 16px', fontWeight: 600, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
+                <td colSpan={9} style={{ padding: '48px', textAlign: 'center', color: tokens.textMuted }}>
                   Loading candidates from database...
                 </td>
               </tr>
             ) : candidates.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ padding: '48px', textAlign: 'center', color: '#64748B' }}>
-                  No candidates found matching the query criteria.
+                <td colSpan={9} style={{ padding: '24px' }}>
+                  <EmptyState
+                    title="No candidates found"
+                    description="No registered candidates match the current search or institution filter."
+                  />
                 </td>
               </tr>
             ) : (
@@ -577,12 +518,12 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   <tr
                     key={cand.id}
                     style={{
-                      borderBottom: '1px solid #F1F5F9',
-                      backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
+                      borderBottom: `1px solid ${tokens.borderLight}`,
+                      backgroundColor: isSelected ? tokens.cslBlueSoftBg : 'transparent',
                       transition: 'background-color 0.1s ease',
                     }}
                     onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = '#F8FAFC';
+                      if (!isSelected) e.currentTarget.style.backgroundColor = tokens.surfaceHover;
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
@@ -593,52 +534,43 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleSelectRow(cand.id)}
-                        style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#1455B8' }}
+                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                       />
                     </td>
-                    <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0B2E6F' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {cand.full_name}
-                        <span
-                          style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '1px 6px',
-                            borderRadius: '8px',
-                            backgroundColor: cand.is_active ? '#DCFCE7' : '#F1F5F9',
-                            color: cand.is_active ? '#15803D' : '#64748B',
-                          }}
-                        >
-                          {cand.is_active ? 'Active' : 'Inactive'}
-                        </span>
+                    <td style={{ padding: '12px 16px', fontWeight: 600, color: tokens.textPrimary }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span>{cand.full_name}</span>
+                        <StatusBadge status={cand.is_active ? 'ACTIVE' : 'INACTIVE'} label={cand.is_active ? 'Active' : 'Inactive'} size="sm" dot={false} />
                       </div>
-                      <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 500, marginTop: '2px' }}>
+                      <div style={{ fontSize: '12px', color: tokens.textMuted, fontWeight: 400, marginTop: '2px' }}>
                         {cand.email} {cand.phone_number && `• ${cand.phone_number}`}
                       </div>
                     </td>
-                    <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontWeight: 700 }}>
+                    <td style={{ padding: '12px 16px', fontFamily: tokens.monoFamily, fontWeight: 600, color: tokens.textPrimary }}>
                       {cand.register_number}
                     </td>
-                    <td style={{ padding: '12px 16px', color: '#334155' }}>
+                    <td style={{ padding: '12px 16px', color: tokens.textSecondary }}>
                       {cand.college_code && (
-                        <span style={{ backgroundColor: '#EEF2FF', color: '#3730A3', fontWeight: 700, fontSize: '11px', padding: '2px 6px', borderRadius: '4px', marginRight: '6px' }}>
+                        <span style={{ backgroundColor: tokens.surfaceElevated, border: `1px solid ${tokens.border}`, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontWeight: 600, fontSize: '11px', padding: '2px 6px', borderRadius: '4px', marginRight: '6px' }}>
                           {cand.college_code}
                         </span>
                       )}
                       {cand.college}
                     </td>
-                    <td style={{ padding: '12px 16px', color: '#475569' }}>
+                    <td style={{ padding: '12px 16px', color: tokens.textSecondary }}>
                       {cand.department}
-                      <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>{cand.year_of_study}</div>
+                      <div style={{ fontSize: '11.5px', color: tokens.textMuted, marginTop: '2px' }}>{cand.year_of_study}</div>
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700 }}>
+                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600 }}>
                       <span
+                        className="csl-tabular"
                         style={{
                           display: 'inline-block',
                           padding: '2px 8px',
                           borderRadius: '6px',
-                          backgroundColor: '#F1F5F9',
-                          color: '#334155',
+                          backgroundColor: tokens.surfaceElevated,
+                          border: `1px solid ${tokens.border}`,
+                          color: tokens.textPrimary,
                         }}
                       >
                         {cand.attempts_count}
@@ -646,34 +578,12 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       {cand.latest_state ? (
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor:
-                              cand.latest_state === 'SUBMITTED'
-                                ? '#DCFCE7'
-                                : cand.latest_state === 'IN_PROGRESS'
-                                ? '#FEF3C7'
-                                : '#F1F5F9',
-                            color:
-                              cand.latest_state === 'SUBMITTED'
-                                ? '#166534'
-                                : cand.latest_state === 'IN_PROGRESS'
-                                ? '#B45309'
-                                : '#475569',
-                          }}
-                        >
-                          {cand.latest_state}
-                        </span>
+                        <StatusBadge status={cand.latest_state} size="sm" />
                       ) : (
-                        <span style={{ color: '#94A3B8', fontSize: '11px' }}>Registered</span>
+                        <span style={{ color: tokens.textMuted, fontSize: '12px' }}>Registered</span>
                       )}
                     </td>
-                    <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0B2E6F' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 16px', fontWeight: 700, color: tokens.textPrimary }}>
                       {cand.latest_score !== null && cand.latest_score !== undefined
                         ? `${cand.latest_score} / 50`
                         : '—'}
@@ -682,15 +592,11 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
                         <button
                           onClick={() => handleSelectCandidate(cand.id)}
+                          className="csl-btn-secondary"
                           style={{
-                            padding: '6px 12px',
-                            backgroundColor: '#FFFFFF',
-                            border: '1px solid #1455B8',
-                            borderRadius: '6px',
-                            color: '#1455B8',
+                            padding: '5px 10px',
                             fontSize: '12px',
-                            fontWeight: 700,
-                            cursor: 'pointer',
+                            color: tokens.cslBlue,
                           }}
                         >
                           View Details
@@ -699,11 +605,11 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                           onClick={() => handleToggleCandidate(cand.id)}
                           title={cand.is_active ? 'Deactivate candidate' : 'Activate candidate'}
                           style={{
-                            padding: '6px 10px',
-                            backgroundColor: cand.is_active ? '#FFF1F2' : '#F0FDF4',
-                            border: `1px solid ${cand.is_active ? '#FECDD3' : '#BBF7D0'}`,
+                            padding: '5px 10px',
+                            backgroundColor: cand.is_active ? tokens.dangerBg : tokens.successBg,
+                            border: `1px solid ${cand.is_active ? tokens.dangerBorder : tokens.successBorder}`,
                             borderRadius: '6px',
-                            color: cand.is_active ? '#E11D48' : '#16A34A',
+                            color: cand.is_active ? tokens.dangerText : tokens.successText,
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
@@ -715,10 +621,10 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                           onClick={() => handleDeleteCandidate(cand)}
                           title="Delete candidate record or anonymize PII"
                           style={{
-                            padding: '6px 10px',
-                            backgroundColor: '#FFF1F2',
-                            color: '#BE123C',
-                            border: '1px solid #FDA4AF',
+                            padding: '5px 10px',
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
+                            border: `1px solid ${tokens.dangerBorder}`,
                             borderRadius: '6px',
                             fontSize: '12px',
                             fontWeight: 600,
@@ -743,7 +649,7 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(11, 46, 111, 0.4)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
             backdropFilter: 'blur(4px)',
             display: 'flex',
             justifyContent: 'center',
@@ -759,30 +665,19 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
               width: '100%',
               maxHeight: '85vh',
               overflowY: 'auto',
-              backgroundColor: '#FFFFFF',
-              borderRadius: '16px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              borderRadius: '12px',
               padding: '28px',
-              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.15)',
-              border: '1px solid #E2E8F0',
+              boxShadow: tokens.modalShadow,
+              border: `1px solid ${tokens.border}`,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
-                <span
-                  style={{
-                    backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                    color: '#1455B8',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    padding: '3px 8px',
-                    borderRadius: '4px',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Candidate Profile
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0B2E6F', margin: '6px 0 2px 0' }}>
+                <StatusBadge label="Candidate Profile" variant="info" size="sm" dot={false} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '6px' }}>
+                  <h3 style={{ fontSize: '20px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                     {selectedCandidate.full_name}
                   </h3>
                   <button
@@ -791,35 +686,25 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                       setReassignReason('');
                       setShowReassignModal(true);
                     }}
+                    className="csl-btn-secondary"
                     style={{
                       padding: '4px 10px',
-                      borderRadius: '6px',
-                      backgroundColor: '#EFF6FF',
-                      color: '#1D4ED8',
-                      border: '1px solid #BFDBFE',
-                      fontSize: '11.5px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
+                      fontSize: '12px',
+                      color: tokens.cslBlue,
                     }}
-                    title="Authorize a genuinely new attempt for this student (Phase 2.1)"
+                    title="Authorize a genuinely new attempt for this student"
                   >
                     + Authorize New Attempt
                   </button>
                 </div>
-                <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-                  {selectedCandidate.email} • {selectedCandidate.register_number}
+                <p style={{ fontSize: '13px', color: tokens.textMuted, margin: '4px 0 0 0' }}>
+                  {selectedCandidate.email} • <span style={{ fontFamily: tokens.monoFamily }}>{selectedCandidate.register_number}</span>
                 </p>
               </div>
               <button
                 onClick={() => setSelectedCandidate(null)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '20px',
-                  color: '#94A3B8',
-                  cursor: 'pointer',
-                  padding: '4px',
-                }}
+                className="csl-btn-secondary"
+                style={{ width: '32px', height: '32px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}
               >
                 ✕
               </button>
@@ -831,34 +716,34 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
                 gap: '12px',
-                backgroundColor: '#F8FAFC',
+                backgroundColor: tokens.surfaceElevated,
                 padding: '16px',
                 borderRadius: '10px',
                 marginBottom: '24px',
                 fontSize: '13px',
-                border: '1px solid #E2E8F0',
+                border: `1px solid ${tokens.border}`,
               }}
             >
               <div>
-                <span style={{ color: '#64748B' }}>College:</span>{' '}
-                <strong style={{ color: '#0B2E6F' }}>{selectedCandidate.college}</strong>
+                <span style={{ color: tokens.textMuted }}>College:</span>{' '}
+                <strong style={{ color: tokens.textPrimary }}>{selectedCandidate.college}</strong>
               </div>
               <div>
-                <span style={{ color: '#64748B' }}>Department:</span>{' '}
-                <strong style={{ color: '#0B2E6F' }}>{selectedCandidate.department}</strong>
+                <span style={{ color: tokens.textMuted }}>Department:</span>{' '}
+                <strong style={{ color: tokens.textPrimary }}>{selectedCandidate.department}</strong>
               </div>
               <div>
-                <span style={{ color: '#64748B' }}>Year of Study:</span>{' '}
-                <strong style={{ color: '#0B2E6F' }}>{selectedCandidate.year_of_study}</strong>
+                <span style={{ color: tokens.textMuted }}>Year of Study:</span>{' '}
+                <strong style={{ color: tokens.textPrimary }}>{selectedCandidate.year_of_study}</strong>
               </div>
               <div>
-                <span style={{ color: '#64748B' }}>Phone:</span>{' '}
-                <strong style={{ color: '#0B2E6F' }}>{selectedCandidate.phone_number || 'N/A'}</strong>
+                <span style={{ color: tokens.textMuted }}>Phone:</span>{' '}
+                <strong style={{ color: tokens.textPrimary }}>{selectedCandidate.phone_number || 'N/A'}</strong>
               </div>
             </div>
 
             {/* Assessment Attempts List */}
-            <h4 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 12px 0' }}>
+            <h4 style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 12px 0' }}>
               Associated Assessment Attempts ({selectedCandidate.attempts?.length || 0})
             </h4>
 
@@ -868,60 +753,30 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   <div
                     key={att.id}
                     style={{
-                      border: '1px solid #E2E8F0',
+                      border: `1px solid ${tokens.border}`,
                       borderRadius: '10px',
                       padding: '14px',
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      backgroundColor: '#FFFFFF',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                      backgroundColor: tokens.surfaceElevated,
                     }}
                   >
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span
-                          style={{
-                            padding: '2px 8px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            backgroundColor:
-                              att.state === 'SUBMITTED' ? '#DCFCE7' : '#FEF3C7',
-                            color: att.state === 'SUBMITTED' ? '#166534' : '#B45309',
-                          }}
-                        >
-                          {att.state}
-                        </span>
-                        <strong style={{ fontSize: '14px', color: '#0B2E6F' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <StatusBadge status={att.state} size="sm" />
+                        <strong className="csl-tabular" style={{ fontSize: '14px', color: tokens.textPrimary }}>
                           Score: {att.total_score}{att.total_questions ? ` / ${att.total_questions}` : ''} ({att.percentage}%)
                         </strong>
-                        {att.is_flagged && (
-                          <span
-                            style={{
-                              color: '#DC2626',
-                              backgroundColor: '#FEF2F2',
-                              padding: '2px 8px',
-                              borderRadius: '9999px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              border: '1px solid #FECACA',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
-                          >
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                            </svg>
-                            Flagged
-                          </span>
-                        )}
+                        {att.is_flagged && <StatusBadge status="FLAGGED" size="sm" />}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>
+                      <div className="csl-tabular" style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '4px' }}>
                         Total Marks: {att.total_score} • Percentage: {att.percentage}% • Tab Switches: {att.tab_switch_count}
-                        {att.recovery_count > 0 && <span style={{ marginLeft: '8px', color: '#D97706', fontWeight: 700 }}>• Recoveries: {att.recovery_count}</span>}
-                        {att.admin_recovery_granted && <span style={{ marginLeft: '8px', color: '#16A34A', fontWeight: 700 }}>• Admin Recovery Granted</span>}
-                        {att.is_reassigned && <span style={{ marginLeft: '8px', color: '#6B7280', fontStyle: 'italic' }}>• (Reassigned)</span>}
+                        {att.recovery_count > 0 && <span style={{ marginLeft: '8px', color: tokens.warningText, fontWeight: 600 }}>• Recoveries: {att.recovery_count}</span>}
+                        {att.admin_recovery_granted && <span style={{ marginLeft: '8px', color: tokens.successText, fontWeight: 600 }}>• Admin Recovery Granted</span>}
+                        {att.is_reassigned && <span style={{ marginLeft: '8px', color: tokens.textMuted, fontStyle: 'italic' }}>• (Reassigned)</span>}
                       </div>
                     </div>
 
@@ -936,12 +791,12 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                           }}
                           style={{
                             padding: '6px 12px',
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
-                            border: '1px solid #FDE68A',
-                            borderRadius: '6px',
+                            backgroundColor: tokens.warningBg,
+                            color: tokens.warningText,
+                            border: `1px solid ${tokens.warningBorder}`,
+                            borderRadius: '8px',
                             fontSize: '12px',
-                            fontWeight: 700,
+                            fontWeight: 600,
                             cursor: 'pointer',
                           }}
                           title="Grant 1 extra session recovery on this in-flight attempt"
@@ -954,18 +809,13 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                           setSelectedCandidate(null);
                           onReviewAttempt(att.id);
                         }}
+                        className="csl-btn-primary"
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: '4px',
                           padding: '6px 14px',
-                          backgroundColor: '#1455B8',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '6px',
                           fontSize: '12px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
                         }}
                       >
                         <span>Inspect Review</span>
@@ -978,7 +828,7 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 ))}
               </div>
             ) : (
-              <p style={{ fontSize: '13px', color: '#6B7280', margin: 0 }}>
+              <p style={{ fontSize: '13px', color: tokens.textMuted, margin: 0 }}>
                 This candidate has not started any attempts yet.
               </p>
             )}
@@ -986,16 +836,8 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
             <div style={{ marginTop: '24px', textAlign: 'right' }}>
               <button
                 onClick={() => setSelectedCandidate(null)}
-                style={{
-                  padding: '8px 18px',
-                  backgroundColor: '#E2E8F0',
-                  color: '#334155',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
+                className="csl-btn-secondary"
+                style={{ padding: '8px 18px' }}
               >
                 Close
               </button>
@@ -1003,14 +845,15 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
           </div>
         </div>
       )}
-          {/* ─── GRANT RECOVERY MODAL (PHASE 2.1) ────────────────────── */}
+
+      {/* ─── GRANT RECOVERY MODAL ─────────────────────────────────── */}
       {showGrantRecoveryModal && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(11, 46, 111, 0.45)',
-            backdropFilter: 'blur(3px)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
@@ -1022,21 +865,23 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
             style={{
               maxWidth: '480px',
               width: '100%',
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: '12px',
               padding: '24px',
-              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.2)',
+              boxShadow: tokens.modalShadow,
             }}
           >
-            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+            <h3 style={{ fontSize: '17px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 8px 0' }}>
               Grant Emergency Recovery Allowance
             </h3>
-            <p style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+            <p style={{ fontSize: '13px', color: tokens.textSecondary, lineHeight: 1.5, margin: '0 0 16px 0' }}>
               Authorizes +1 session recovery on this active attempt. The student can resume their current exam with preserved timer and responses. Mandatory audit reason required.
             </p>
             <form onSubmit={handleGrantRecovery}>
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Reason for Granting Recovery *
                 </label>
                 <textarea
@@ -1047,9 +892,11 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   rows={3}
                   style={{
                     width: '100%',
-                    padding: '8px 12px',
+                    padding: '9px 12px',
                     borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.border}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                   }}
@@ -1059,14 +906,7 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 <button
                   type="button"
                   onClick={() => setShowGrantRecoveryModal(false)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
-                    backgroundColor: '#FFFFFF',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
+                  className="csl-btn-secondary"
                 >
                   Cancel
                 </button>
@@ -1074,13 +914,13 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   type="submit"
                   disabled={grantingRecovery || !recoveryReason.trim()}
                   style={{
-                    padding: '8px 20px',
+                    padding: '8px 18px',
                     borderRadius: '8px',
                     border: 'none',
                     backgroundColor: '#D97706',
                     color: '#FFFFFF',
                     fontSize: '13px',
-                    fontWeight: 700,
+                    fontWeight: 600,
                     cursor: grantingRecovery ? 'not-allowed' : 'pointer',
                   }}
                 >
@@ -1092,14 +932,14 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
         </div>
       )}
 
-      {/* ─── REASSIGN CANDIDATE ATTEMPT MODAL (PHASE 2.1) ────────────── */}
+      {/* ─── REASSIGN CANDIDATE ATTEMPT MODAL ──────────────────────── */}
       {showReassignModal && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(11, 46, 111, 0.45)',
-            backdropFilter: 'blur(3px)',
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
@@ -1111,21 +951,23 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
             style={{
               maxWidth: '480px',
               width: '100%',
-              backgroundColor: '#FFFFFF',
-              borderRadius: '14px',
+              backgroundColor: tokens.surfaceCard,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: '12px',
               padding: '24px',
-              boxShadow: '0 20px 35px -10px rgba(11, 46, 111, 0.2)',
+              boxShadow: tokens.modalShadow,
             }}
           >
-            <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 8px 0' }}>
+            <h3 style={{ fontSize: '17px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 8px 0' }}>
               Authorize Reassignment / New Attempt
             </h3>
-            <p style={{ fontSize: '12.5px', color: '#64748B', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+            <p style={{ fontSize: '13px', color: tokens.textSecondary, lineHeight: 1.5, margin: '0 0 16px 0' }}>
               Creates a genuinely new assessment attempt for candidate <strong>{selectedCandidate?.full_name}</strong>. Previous attempts are preserved for audit records and marked as reassigned.
             </p>
-                        <form onSubmit={handleReassignAttempt}>
+            <form onSubmit={handleReassignAttempt}>
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Target Assessment (Optional - Leave blank for default active)
                 </label>
                 <input
@@ -1135,16 +977,18 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   placeholder="Optional Assessment UUID..."
                   style={{
                     width: '100%',
-                    padding: '8px 12px',
+                    padding: '9px 12px',
                     borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.border}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                   }}
                 />
               </div>
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#0B2E6F', marginBottom: '6px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: tokens.textSecondary, marginBottom: '6px' }}>
                   Mandatory Reassignment Reason *
                 </label>
                 <textarea
@@ -1155,9 +999,11 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                   rows={3}
                   style={{
                     width: '100%',
-                    padding: '8px 12px',
+                    padding: '9px 12px',
                     borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.border}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                   }}
@@ -1167,30 +1013,15 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
                 <button
                   type="button"
                   onClick={() => setShowReassignModal(false)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
-                    backgroundColor: '#FFFFFF',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                  }}
+                  className="csl-btn-secondary"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={reassigning || !reassignReason.trim()}
-                  style={{
-                    padding: '8px 20px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: '#1D4ED8',
-                    color: '#FFFFFF',
-                    fontSize: '13px',
-                    fontWeight: 700,
-                    cursor: reassigning ? 'not-allowed' : 'pointer',
-                  }}
+                  className="csl-btn-primary"
+                  style={{ cursor: reassigning ? 'not-allowed' : 'pointer' }}
                 >
                   {reassigning ? 'Authorizing...' : 'Authorize New Attempt'}
                 </button>
@@ -1199,6 +1030,6 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
           </div>
         </div>
       )}
-</div>
+    </PageContainer>
   );
 }

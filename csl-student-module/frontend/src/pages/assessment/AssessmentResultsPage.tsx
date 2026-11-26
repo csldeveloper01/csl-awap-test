@@ -156,22 +156,20 @@ export function AssessmentResultsPage() {
     <div
       style={{
         minHeight: '100vh',
-        backgroundColor: '#FCFAF5',
+        backgroundColor: 'var(--csl-bg-canvas)',
         padding: '36px 16px',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        fontFamily: "'Manrope', 'Plus Jakarta Sans', system-ui, sans-serif",
+        fontFamily: "'Inter', system-ui, sans-serif",
       }}
     >
       <div
+        className="csl-card"
         style={{
           maxWidth: '560px',
           width: '100%',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '20px',
-          boxShadow: '0 20px 45px -10px rgba(11, 46, 111, 0.08)',
-          border: '1.5px solid rgba(245, 184, 61, 0.28)',
+          borderRadius: '16px',
           padding: '44px 36px',
           textAlign: 'center',
           boxSizing: 'border-box',

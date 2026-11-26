@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { formatApiError } from '../../utils/errorFormatter';
+import { useAdminTheme } from '../../utils/adminTheme';
+import { PageContainer, SectionHeader, StatusBadge } from '../../components/ui';
 import { queryClient } from '../../main';
 import {
   getAdminConfig,
@@ -23,6 +25,7 @@ const DEFAULT_EXPORT_THRESHOLDS: ExportScoreThreshold[] = [
 ];
 
 export function AdminConfigView() {
+  const { tokens } = useAdminTheme();
   const [config, setConfig] = useState<AdminAssessmentConfig | null>(null);
   const [initialConfig, setInitialConfig] = useState<AdminAssessmentConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -330,36 +333,47 @@ export function AdminConfigView() {
   }
 
   return (
-    <div style={{ maxWidth: '1040px', margin: '0 auto', padding: '24px 16px' }}>
-      {/* Header & Status Bar */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: '24px',
-          flexWrap: 'wrap',
-          gap: '16px',
-        }}
-      >
-        <div>
-          <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 6px 0', letterSpacing: '-0.02em' }}>
-            Platform Policy & Section Library
-          </h2>
-          <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-            Authoritative platform-wide parameters, attempt policies, and the centralized library of reusable assessment sections.
-          </p>
-        </div>
+    <PageContainer maxWidth="1040px">
+      <SectionHeader
+        title="Platform Policy & Section Library"
+        description="Authoritative platform-wide parameters, attempt policies, export appearance, and the centralized library of reusable assessment sections."
+        actions={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {isDirty ? (
+              <StatusBadge status="PENDING" label="Unsaved Changes" size="sm" />
+            ) : (
+              <StatusBadge status="ACTIVE" label="Synchronized" size="sm" />
+            )}
 
-        {/* ─── WORKSTREAM 10: CACHE ENGINE MANAGEMENT PANEL ───────────────── */}
+            {isDirty && (
+              <button type="button" onClick={handleReset} className="csl-btn-secondary" style={{ fontSize: '12px' }}>
+                Revert
+              </button>
+            )}
+
+            <button
+              onClick={handleSave}
+              disabled={saving || !isDirty}
+              className="csl-btn-primary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: !isDirty || saving ? 'not-allowed' : 'pointer',
+                opacity: !isDirty || saving ? 0.65 : 1,
+              }}
+            >
+              {saving ? 'Saving...' : 'Save Configuration'}
+            </button>
+          </div>
+        }
+      />
+
+      {/* Cache Engine Management Panel */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '14px',
-          border: '1.5px solid #E2E8F0',
           padding: '18px 22px',
-          marginBottom: '24px',
-          boxShadow: '0 2px 8px rgba(11, 46, 111, 0.04)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -373,8 +387,9 @@ export function AdminConfigView() {
               width: '42px',
               height: '42px',
               borderRadius: '10px',
-              backgroundColor: '#EFF6FF',
-              color: '#1D4ED8',
+              backgroundColor: tokens.cslBlueSoftBg,
+              border: `1px solid ${tokens.cslBlueSoftBorder}`,
+              color: tokens.cslBlue,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -385,25 +400,14 @@ export function AdminConfigView() {
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <strong style={{ fontSize: '15px', color: '#0B2E6F' }}>Platform Cache Engine</strong>
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  backgroundColor: '#DCFCE7',
-                  color: '#166534',
-                  padding: '2px 8px',
-                  borderRadius: '9999px',
-                }}
-              >
-                Redis / LocMem Active
-              </span>
+              <strong style={{ fontSize: '15px', color: tokens.textPrimary }}>Platform Cache Engine</strong>
+              <StatusBadge status="ACTIVE" label="Redis / LocMem Active" size="sm" dot={false} />
             </div>
-            <p style={{ margin: '3px 0 0 0', fontSize: '12.5px', color: '#64748B' }}>
+            <p style={{ margin: '3px 0 0 0', fontSize: '12.5px', color: tokens.textMuted }}>
               High-throughput caching for college directory, question summaries, and admin analytics.
             </p>
             {cacheStatusMessage && (
-              <span style={{ fontSize: '12px', color: '#16A34A', fontWeight: 700, display: 'block', marginTop: '4px' }}>
+              <span style={{ fontSize: '12px', color: tokens.successText, fontWeight: 600, display: 'block', marginTop: '4px' }}>
                 {cacheStatusMessage}
               </span>
             )}
@@ -414,122 +418,17 @@ export function AdminConfigView() {
           type="button"
           onClick={handleClearCache}
           disabled={cacheClearing}
+          className="csl-btn-secondary"
           style={{
-            padding: '9px 18px',
-            backgroundColor: '#F8FAFC',
-            color: '#0B2E6F',
-            border: '1.5px solid #CBD5E1',
-            borderRadius: '8px',
-            fontSize: '13px',
-            fontWeight: 700,
-            cursor: cacheClearing ? 'not-allowed' : 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
             gap: '8px',
+            cursor: cacheClearing ? 'not-allowed' : 'pointer',
           }}
         >
           <span>🔄</span>
           <span>{cacheClearing ? 'Purging Cache...' : 'Clear Platform Cache'}</span>
         </button>
-      </div>
-
-      {/* Action & Dirty Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {isDirty ? (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '5px 12px',
-                borderRadius: '9999px',
-                fontSize: '11px',
-                fontWeight: 700,
-                backgroundColor: '#FEF3C7',
-                color: '#92400E',
-                border: '1px solid #FDE68A',
-              }}
-            >
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#D97706' }} />
-              Unsaved Changes
-            </span>
-          ) : (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '5px 12px',
-                borderRadius: '9999px',
-                fontSize: '11px',
-                fontWeight: 700,
-                backgroundColor: '#F1F5F9',
-                color: '#475569',
-                border: '1px solid #E2E8F0',
-              }}
-            >
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10B981' }} />
-              Synchronized
-            </span>
-          )}
-
-          {isDirty && (
-            <button
-              type="button"
-              onClick={handleReset}
-              style={{
-                padding: '8px 14px',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                borderRadius: '8px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: '#475569',
-                cursor: 'pointer',
-              }}
-            >
-              Revert
-            </button>
-          )}
-
-          <button
-            onClick={handleSave}
-            disabled={saving || !isDirty}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '9px 20px',
-              backgroundColor: !isDirty || saving ? '#94A3B8' : '#1455B8',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: !isDirty || saving ? 'not-allowed' : 'pointer',
-              boxShadow: isDirty ? '0 2px 8px rgba(20, 85, 184, 0.25)' : 'none',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            {saving ? (
-              <>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}>
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-                </svg>
-                <span>Saving...</span>
-              </>
-            ) : (
-              <>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                  <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                  <polyline points="7 3 7 8 15 8"></polyline>
-                </svg>
-                <span>Save Platform Policies</span>
-              </>
-            )}
-          </button>
-        </div>
       </div>
 
       {/* Notifications */}
@@ -583,15 +482,16 @@ export function AdminConfigView() {
 
       {/* Architecture Separation Callout */}
       <div
+        className="csl-card"
         style={{
           display: 'flex',
           gap: '14px',
-          backgroundColor: '#FFFFFF',
-          border: '1px solid rgba(245, 184, 61, 0.45)',
+          backgroundColor: tokens.surfaceCard,
+          border: `1px solid ${tokens.warningBorder}`,
           padding: '16px 20px',
           borderRadius: '12px',
           marginBottom: '24px',
-          boxShadow: '0 2px 8px rgba(11, 46, 111, 0.02)',
+          boxShadow: tokens.cardShadow,
         }}
       >
         <div
@@ -599,8 +499,8 @@ export function AdminConfigView() {
             width: '32px',
             height: '32px',
             borderRadius: '8px',
-            backgroundColor: 'rgba(245, 184, 61, 0.15)',
-            color: '#B45309',
+            backgroundColor: tokens.warningBg,
+            color: tokens.warningText,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -612,25 +512,26 @@ export function AdminConfigView() {
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
           </svg>
         </div>
-        <div style={{ fontSize: '13px', lineHeight: 1.5, color: '#475569' }}>
-          <strong style={{ color: '#0B2E6F', display: 'block', marginBottom: '2px', fontSize: '13px' }}>
+        <div style={{ fontSize: '13px', lineHeight: 1.5, color: tokens.textSecondary }}>
+          <strong style={{ color: tokens.textPrimary, display: 'block', marginBottom: '2px', fontSize: '13px' }}>
             Platform-Wide Governance Active
           </strong>
           Parameters configured here apply as global defaults and security guardrails across the platform.
           Specific assessment rounds independently define their own timing, total marks, and section allocations under
-          the <strong>Assessments</strong> tab.
+          the <strong style={{ color: tokens.textPrimary }}>Assessments</strong> tab.
         </div>
       </div>
 
       <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '24px', marginBottom: '40px' }}>
         {/* Section 1: Assessment Portal Identity & Defaults */}
         <div
+          className="csl-card"
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '14px',
-            border: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '12px',
+            border: `1px solid ${tokens.border}`,
             padding: '24px',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
@@ -639,8 +540,8 @@ export function AdminConfigView() {
                 width: '28px',
                 height: '28px',
                 borderRadius: '6px',
-                backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                color: '#1455B8',
+                backgroundColor: tokens.infoBg,
+                color: tokens.cslBlue,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -651,14 +552,14 @@ export function AdminConfigView() {
                 <polyline points="12 6 12 12 16 14"></polyline>
               </svg>
             </div>
-            <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
               1. Platform Assessment Identity & Status
             </h3>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Default Assessment Portal Title
               </label>
               <input
@@ -670,19 +571,21 @@ export function AdminConfigView() {
                   width: '100%',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
                   fontSize: '14px',
-                  outlineColor: '#1455B8',
+                  outlineColor: tokens.cslBlue,
                   boxSizing: 'border-box',
                 }}
               />
-              <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
                 Displayed as the fallback title on candidate registration and test instructions.
               </span>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Assessment Engine Active
               </label>
               <select
@@ -693,25 +596,26 @@ export function AdminConfigView() {
                   width: '100%',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
                   fontSize: '14px',
-                  outlineColor: '#1455B8',
+                  outlineColor: tokens.cslBlue,
                   boxSizing: 'border-box',
-                  backgroundColor: '#FFFFFF',
                   fontWeight: 600,
                 }}
               >
                 <option value="true">Enabled (Accepting Test Sessions)</option>
                 <option value="false">Disabled (Maintenance Mode)</option>
               </select>
-              <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
                 Global switch governing student assessment eligibility.
               </span>
             </div>
           </div>
 
           <div style={{ marginTop: '16px' }}>
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
               Default Instructions & Guidelines
             </label>
             <textarea
@@ -724,9 +628,11 @@ export function AdminConfigView() {
                 width: '100%',
                 padding: '10px 14px',
                 borderRadius: '8px',
-                border: '1px solid #CBD5E1',
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.inputBg,
+                color: tokens.textPrimary,
                 fontSize: '13px',
-                outlineColor: '#1455B8',
+                outlineColor: tokens.cslBlue,
                 boxSizing: 'border-box',
               }}
             />
@@ -735,12 +641,13 @@ export function AdminConfigView() {
 
         {/* Section 2: Proctoring & Attempt Policy */}
         <div
+          className="csl-card"
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '14px',
-            border: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '12px',
+            border: `1px solid ${tokens.border}`,
             padding: '24px',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
@@ -749,8 +656,8 @@ export function AdminConfigView() {
                 width: '28px',
                 height: '28px',
                 borderRadius: '6px',
-                backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                color: '#1455B8',
+                backgroundColor: tokens.infoBg,
+                color: tokens.cslBlue,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -760,14 +667,14 @@ export function AdminConfigView() {
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
               </svg>
             </div>
-            <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
               2. Platform Proctoring & Attempt Policies
             </h3>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Default Max Attempts per Candidate
               </label>
               <input
@@ -776,25 +683,28 @@ export function AdminConfigView() {
                 min={1}
                 value={config.max_attempts}
                 onChange={handleChange}
+                className="csl-tabular"
                 style={{
                   width: '100%',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
                   fontSize: '14px',
-                  outlineColor: '#1455B8',
+                  outlineColor: tokens.cslBlue,
                   boxSizing: 'border-box',
-                  fontFamily: 'monospace',
+                  fontFamily: tokens.monoFamily,
                   fontWeight: 700,
                 }}
               />
-              <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
                 Default: 1 Attempt (Strict Single-Session)
               </span>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Permitted Tab-Switch Warnings
               </label>
               <input
@@ -803,19 +713,22 @@ export function AdminConfigView() {
                 min={1}
                 value={config.max_tab_switches_warning}
                 onChange={handleChange}
+                className="csl-tabular"
                 style={{
                   width: '100%',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: '1px solid #CBD5E1',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
                   fontSize: '14px',
-                  outlineColor: '#1455B8',
+                  outlineColor: tokens.cslBlue,
                   boxSizing: 'border-box',
-                  fontFamily: 'monospace',
+                  fontFamily: tokens.monoFamily,
                   fontWeight: 700,
                 }}
               />
-              <span style={{ fontSize: '11px', color: '#64748B', marginTop: '4px', display: 'block' }}>
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
                 Default: 2 warnings. The 3rd tab switch triggers immediate automated submission.
               </span>
             </div>
@@ -827,8 +740,8 @@ export function AdminConfigView() {
               marginTop: '20px',
               padding: '14px 18px',
               borderRadius: '10px',
-              backgroundColor: '#F8FAFC',
-              border: '1px solid #E2E8F0',
+              backgroundColor: tokens.surfaceMuted,
+              border: `1px solid ${tokens.border}`,
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
@@ -844,16 +757,16 @@ export function AdminConfigView() {
               style={{
                 width: '18px',
                 height: '18px',
-                accentColor: '#1455B8',
+                accentColor: tokens.cslBlue,
                 cursor: 'pointer',
               }}
               onClick={(e) => e.stopPropagation()}
             />
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: tokens.textPrimary }}>
                 Automated Submission on Threshold Violation
               </div>
-              <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>
+              <div style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '2px' }}>
                 When enabled, the student portal immediately halts testing, collects answered responses, and submits the attempt on the 3rd tab switch without manual intervention.
               </div>
             </div>
@@ -862,34 +775,36 @@ export function AdminConfigView() {
 
         {/* Section 3: Global XLSX Export Appearance Formatting */}
         <div
+          className="csl-card"
           style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: '14px',
-            border: '1px solid #E2E8F0',
+            backgroundColor: tokens.surfaceCard,
+            borderRadius: '12px',
+            border: `1px solid ${tokens.border}`,
             padding: '24px',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+            boxShadow: tokens.cardShadow,
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
             <div>
-              <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0B2E6F', margin: '0 0 4px 0' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 700, color: tokens.textPrimary, margin: '0 0 4px 0' }}>
                 3. Export Spreadsheet Appearance (Excel / XLSX Only)
               </h3>
-              <p style={{ fontSize: '12px', color: '#64748B', margin: 0 }}>
+              <p style={{ fontSize: '12px', color: tokens.textMuted, margin: 0 }}>
                 Colors apply exclusively to formatted Excel (.xlsx) exports. CSV downloads remain plain standards-compliant unstyled text.
               </p>
             </div>
             <button
               type="button"
               onClick={handleResetExportPalette}
+              className="csl-btn-secondary"
               style={{
                 padding: '6px 12px',
                 borderRadius: '8px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#F8FAFC',
-                color: '#334155',
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.surfaceMuted,
+                color: tokens.textPrimary,
                 fontSize: '12px',
-                fontWeight: 700,
+                fontWeight: 600,
                 cursor: 'pointer',
               }}
             >
@@ -897,9 +812,9 @@ export function AdminConfigView() {
             </button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))', gap: '16px', marginBottom: '18px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '18px' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Header Fill Color
               </label>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -907,7 +822,7 @@ export function AdminConfigView() {
                   type="color"
                   value={config.export_header_bg_color || '#1E293B'}
                   onChange={(e) => setConfig({ ...config, export_header_bg_color: e.target.value.toUpperCase() })}
-                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                  style={{ width: '40px', height: '36px', border: `1px solid ${tokens.borderStrong}`, borderRadius: '6px', backgroundColor: tokens.inputBg, cursor: 'pointer', padding: '2px' }}
                 />
                 <input
                   type="text"
@@ -915,13 +830,13 @@ export function AdminConfigView() {
                   value={config.export_header_bg_color || '#1E293B'}
                   onChange={handleChange}
                   maxLength={7}
-                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontSize: '13px' }}
                 />
               </div>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Header Text Color
               </label>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -929,7 +844,7 @@ export function AdminConfigView() {
                   type="color"
                   value={config.export_header_text_color || '#FFFFFF'}
                   onChange={(e) => setConfig({ ...config, export_header_text_color: e.target.value.toUpperCase() })}
-                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                  style={{ width: '40px', height: '36px', border: `1px solid ${tokens.borderStrong}`, borderRadius: '6px', backgroundColor: tokens.inputBg, cursor: 'pointer', padding: '2px' }}
                 />
                 <input
                   type="text"
@@ -937,13 +852,13 @@ export function AdminConfigView() {
                   value={config.export_header_text_color || '#FFFFFF'}
                   onChange={handleChange}
                   maxLength={7}
-                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontSize: '13px' }}
                 />
               </div>
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
                 Alternating Row Shade
               </label>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -951,14 +866,14 @@ export function AdminConfigView() {
                   type="checkbox"
                   checked={config.enable_alt_row_styling ?? true}
                   onChange={(e) => setConfig({ ...config, enable_alt_row_styling: e.target.checked })}
-                  style={{ width: '18px', height: '18px', accentColor: '#1455B8' }}
+                  style={{ width: '18px', height: '18px', accentColor: tokens.cslBlue }}
                 />
                 <input
                   type="color"
                   value={config.export_alt_row_color || '#F8FAFC'}
                   onChange={(e) => setConfig({ ...config, export_alt_row_color: e.target.value.toUpperCase() })}
                   disabled={config.enable_alt_row_styling === false}
-                  style={{ width: '40px', height: '36px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', padding: '2px' }}
+                  style={{ width: '40px', height: '36px', border: `1px solid ${tokens.borderStrong}`, borderRadius: '6px', backgroundColor: tokens.inputBg, cursor: 'pointer', padding: '2px' }}
                 />
                 <input
                   type="text"
@@ -967,7 +882,7 @@ export function AdminConfigView() {
                   onChange={handleChange}
                   disabled={config.enable_alt_row_styling === false}
                   maxLength={7}
-                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '13px' }}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontSize: '13px' }}
                 />
               </div>
             </div>
@@ -975,7 +890,7 @@ export function AdminConfigView() {
 
           {/* Score / Status Highlight Bands */}
           <div style={{ marginBottom: '18px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 800, color: '#0B2E6F', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: tokens.textPrimary, marginBottom: '8px' }}>
               Score Percentage & Status Highlight Rules (XLSX)
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -987,13 +902,13 @@ export function AdminConfigView() {
                   key={idx}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1.3fr 90px 90px 140px',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
                     gap: '10px',
                     alignItems: 'center',
                     padding: '8px 12px',
                     borderRadius: '8px',
-                    backgroundColor: '#F8FAFC',
-                    border: '1px solid #E2E8F0',
+                    backgroundColor: tokens.surfaceMuted,
+                    border: `1px solid ${tokens.border}`,
                   }}
                 >
                   <input
@@ -1001,7 +916,7 @@ export function AdminConfigView() {
                     value={band.label}
                     onChange={(e) => handleThresholdChange(idx, 'label', e.target.value)}
                     placeholder="Band Label"
-                    style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px', fontWeight: 600 }}
+                    style={{ padding: '6px 10px', borderRadius: '6px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '12.5px', fontWeight: 600 }}
                   />
                   <input
                     type="number"
@@ -1011,7 +926,7 @@ export function AdminConfigView() {
                     value={band.min}
                     onChange={(e) => handleThresholdChange(idx, 'min', e.target.value)}
                     title="Min %"
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px' }}
+                    style={{ padding: '6px 8px', borderRadius: '6px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '12.5px' }}
                   />
                   <input
                     type="number"
@@ -1021,21 +936,21 @@ export function AdminConfigView() {
                     value={band.max}
                     onChange={(e) => handleThresholdChange(idx, 'max', e.target.value)}
                     title="Max %"
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12.5px' }}
+                    style={{ padding: '6px 8px', borderRadius: '6px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '12.5px' }}
                   />
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     <input
                       type="color"
                       value={band.color.startsWith('#') ? band.color : `#${band.color}`}
                       onChange={(e) => handleThresholdChange(idx, 'color', e.target.value.toUpperCase())}
-                      style={{ width: '34px', height: '30px', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer' }}
+                      style={{ width: '34px', height: '30px', border: `1px solid ${tokens.borderStrong}`, borderRadius: '6px', backgroundColor: tokens.inputBg, cursor: 'pointer' }}
                     />
                     <input
                       type="text"
                       value={band.color}
                       onChange={(e) => handleThresholdChange(idx, 'color', e.target.value.toUpperCase())}
                       maxLength={7}
-                      style={{ width: '82px', padding: '5px 8px', borderRadius: '6px', border: '1px solid #CBD5E1', fontFamily: 'monospace', fontSize: '12px' }}
+                      style={{ flex: 1, minWidth: '72px', padding: '5px 8px', borderRadius: '6px', border: `1px solid ${tokens.borderStrong}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                   </div>
                 </div>
@@ -1044,8 +959,8 @@ export function AdminConfigView() {
           </div>
 
           {/* Live XLSX Style Preview Swatch */}
-          <div style={{ border: '1px solid #CBD5E1', borderRadius: '10px', overflow: 'hidden' }}>
-            <div style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, color: '#64748B', backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+          <div style={{ border: `1px solid ${tokens.borderStrong}`, borderRadius: '10px', overflow: 'hidden', overflowX: 'auto' }}>
+            <div style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, color: tokens.textMuted, backgroundColor: tokens.surfaceMuted, borderBottom: `1px solid ${tokens.border}` }}>
               Live XLSX Workbook Preview (Sample Rows)
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
@@ -1075,11 +990,11 @@ export function AdminConfigView() {
                     ? (config.export_alt_row_color || '#F8FAFC')
                     : '#FFFFFF';
                   return (
-                    <tr key={rowIdx} style={{ backgroundColor: rowBg, borderTop: '1px solid #E2E8F0' }}>
-                      <td style={{ padding: '7px 12px', fontWeight: 600 }}>{sample.name}</td>
+                    <tr key={rowIdx} style={{ backgroundColor: rowBg, color: '#0F172A', borderTop: '1px solid #E2E8F0' }}>
+                      <td style={{ padding: '7px 12px', fontWeight: 600, color: '#0F172A' }}>{sample.name}</td>
                       <td style={{ padding: '7px 12px', color: '#475569' }}>{sample.college}</td>
-                      <td style={{ padding: '7px 12px', textAlign: 'right', backgroundColor: bandColor, fontWeight: 700 }}>{sample.pct}</td>
-                      <td style={{ padding: '7px 12px', textAlign: 'center', backgroundColor: bandColor, fontWeight: 700 }}>{sample.status}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'right', backgroundColor: bandColor, color: '#0F172A', fontWeight: 700 }}>{sample.pct}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'center', backgroundColor: bandColor, color: '#0F172A', fontWeight: 700 }}>{sample.status}</td>
                     </tr>
                   );
                 })}
@@ -1093,12 +1008,13 @@ export function AdminConfigView() {
           SECTION 3: REUSABLE ASSESSMENT SECTION LIBRARY
           ───────────────────────────────────────────────────────────────────────────── */}
       <div
+        className="csl-card"
         style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: '14px',
-          border: '1px solid #E2E8F0',
+          backgroundColor: tokens.surfaceCard,
+          borderRadius: '12px',
+          border: `1px solid ${tokens.border}`,
           padding: '24px',
-          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
+          boxShadow: tokens.cardShadow,
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap', gap: '12px' }}>
@@ -1109,8 +1025,8 @@ export function AdminConfigView() {
                   width: '28px',
                   height: '28px',
                   borderRadius: '6px',
-                  backgroundColor: 'rgba(20, 85, 184, 0.08)',
-                  color: '#1455B8',
+                  backgroundColor: tokens.infoBg,
+                  color: tokens.cslBlue,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -1123,11 +1039,11 @@ export function AdminConfigView() {
                   <rect x="3" y="14" width="7" height="7"></rect>
                 </svg>
               </div>
-              <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h3 style={{ fontSize: '16px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 Reusable Assessment Section Library
               </h3>
             </div>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: '4px 0 0 0' }}>
+            <p style={{ fontSize: '13px', color: tokens.textMuted, margin: '4px 0 0 0' }}>
               Define reusable sections (e.g. Aptitude, Coding, Logical Reasoning, Verbal). Selected sections can be dynamically allocated to any assessment.
             </p>
           </div>
@@ -1135,26 +1051,26 @@ export function AdminConfigView() {
           <button
             type="button"
             onClick={handleOpenCreateSection}
+            className="csl-btn-primary"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
               padding: '9px 16px',
-              backgroundColor: '#0B2E6F',
-              color: '#FFFFFF',
+              backgroundColor: tokens.cslBlue,
+              color: tokens.onPrimary,
               border: 'none',
               borderRadius: '8px',
               fontSize: '13px',
               fontWeight: 700,
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(11, 46, 111, 0.15)',
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
-            + Create Reusable Section
+            Create Reusable Section
           </button>
         </div>
 
@@ -1162,9 +1078,9 @@ export function AdminConfigView() {
           <div
             style={{
               padding: '10px 14px',
-              backgroundColor: '#ECFDF5',
-              border: '1px solid #A7F3D0',
-              color: '#065F46',
+              backgroundColor: tokens.successBg,
+              border: `1px solid ${tokens.successBorder}`,
+              color: tokens.successText,
               borderRadius: '8px',
               fontSize: '13px',
               fontWeight: 600,
@@ -1181,13 +1097,14 @@ export function AdminConfigView() {
             style={{
               marginBottom: '16px',
               padding: '12px 18px',
-              backgroundColor: '#EFF6FF',
-              border: '1px solid #BFDBFE',
+              backgroundColor: tokens.infoBg,
+              border: `1px solid ${tokens.infoBorder}`,
               borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: '12px',
+              flexWrap: 'wrap',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1199,15 +1116,15 @@ export function AdminConfigView() {
                   width: '24px',
                   height: '24px',
                   borderRadius: '50%',
-                  backgroundColor: '#1D4ED8',
-                  color: '#FFFFFF',
+                  backgroundColor: tokens.cslBlue,
+                  color: tokens.onPrimary,
                   fontSize: '12px',
                   fontWeight: 700,
                 }}
               >
                 {selectedSectionIds.length}
               </span>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: '#1E40AF' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: tokens.infoText }}>
                 {selectedSectionIds.length} section{selectedSectionIds.length === 1 ? '' : 's'} selected
               </span>
             </div>
@@ -1217,9 +1134,9 @@ export function AdminConfigView() {
                 onClick={() => setSelectedSectionIds([])}
                 style={{
                   padding: '6px 12px',
-                  backgroundColor: '#FFFFFF',
-                  color: '#475569',
-                  border: '1px solid #CBD5E1',
+                  backgroundColor: tokens.surfaceCard,
+                  color: tokens.textSecondary,
+                  border: `1px solid ${tokens.borderStrong}`,
                   borderRadius: '6px',
                   fontSize: '12px',
                   fontWeight: 600,
@@ -1234,7 +1151,7 @@ export function AdminConfigView() {
                 disabled={bulkDeletingSections}
                 style={{
                   padding: '6px 14px',
-                  backgroundColor: '#DC2626',
+                  backgroundColor: tokens.danger,
                   color: '#FFFFFF',
                   border: 'none',
                   borderRadius: '6px',
@@ -1258,18 +1175,18 @@ export function AdminConfigView() {
 
         {/* Section Table */}
         {sectionsLoading ? (
-          <div style={{ padding: '32px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+          <div style={{ padding: '32px', textAlign: 'center', color: tokens.textMuted, fontSize: '13px' }}>
             Loading sections library...
           </div>
         ) : sections.length === 0 ? (
-          <div style={{ padding: '32px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
-            No reusable sections defined yet. Click "+ Create Reusable Section" to create one.
+          <div style={{ padding: '32px', textAlign: 'center', color: tokens.textMuted, fontSize: '13px' }}>
+            No reusable sections defined yet. Click "Create Reusable Section" to create one.
           </div>
         ) : (
-          <div style={{ overflowX: 'auto', border: '1px solid #E2E8F0', borderRadius: '8px' }}>
+          <div style={{ overflowX: 'auto', border: `1px solid ${tokens.border}`, borderRadius: '8px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
-                <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                <tr style={{ backgroundColor: tokens.surfaceMuted, borderBottom: `1px solid ${tokens.border}` }}>
                   <th style={{ padding: '10px 14px', width: '40px', textAlign: 'center' }}>
                     <input
                       type="checkbox"
@@ -1278,16 +1195,16 @@ export function AdminConfigView() {
                         if (el) el.indeterminate = selectedSectionIds.length > 0 && selectedSectionIds.length < sections.length;
                       }}
                       onChange={handleToggleSelectAllSections}
-                      style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: '#1455B8' }}
+                      style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                       title="Select / Deselect All Sections"
                     />
                   </th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569' }}>SECTION ID</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569' }}>SECTION TITLE & DESCRIPTION</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>QUESTIONS POOL</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>ASSESSMENTS USING</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569', textAlign: 'center' }}>STATUS</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 700, color: '#475569', textAlign: 'right' }}>ACTIONS</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary }}>SECTION ID</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary }}>SECTION TITLE & DESCRIPTION</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'center' }}>QUESTIONS POOL</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'center' }}>ASSESSMENTS USING</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'center' }}>STATUS</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700, color: tokens.textSecondary, textAlign: 'right' }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
@@ -1297,9 +1214,8 @@ export function AdminConfigView() {
                   <tr
                     key={sec.id}
                     style={{
-                      borderBottom: '1px solid #F1F5F9',
-                      backgroundColor: isSelected ? '#F0F7FF' : 'transparent',
-                      transition: 'background-color 0.15s',
+                      borderBottom: `1px solid ${tokens.borderLight}`,
+                      backgroundColor: isSelected ? tokens.infoBg : 'transparent',
                     }}
                   >
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
@@ -1307,16 +1223,18 @@ export function AdminConfigView() {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleSelectSection(sec.id)}
-                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: '#1455B8' }}
+                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
                       />
                     </td>
                     <td style={{ padding: '12px 14px' }}>
                       <span
                         style={{
-                          backgroundColor: '#EEF2FF',
-                          color: '#3730A3',
+                          backgroundColor: tokens.codingBg,
+                          color: tokens.codingText,
+                          border: `1px solid ${tokens.codingBorder}`,
                           fontWeight: 700,
                           fontSize: '11px',
+                          fontFamily: tokens.monoFamily,
                           padding: '3px 8px',
                           borderRadius: '4px',
                         }}
@@ -1325,32 +1243,21 @@ export function AdminConfigView() {
                       </span>
                     </td>
                     <td style={{ padding: '12px 14px' }}>
-                      <div style={{ fontWeight: 700, color: '#0F172A' }}>{sec.name}</div>
+                      <div style={{ fontWeight: 700, color: tokens.textPrimary }}>{sec.name}</div>
                       {sec.description && (
-                        <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                        <div style={{ fontSize: '12px', color: tokens.textMuted, marginTop: '2px' }}>
                           {sec.description}
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#0B2E6F' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: tokens.textPrimary }}>
                       {sec.question_count ?? 0}
                     </td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#0B2E6F' }}>
+                    <td className="csl-tabular" style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: tokens.textPrimary }}>
                       {sec.assessment_count ?? 0}
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      <span
-                        style={{
-                          padding: '2px 8px',
-                          borderRadius: '10px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          backgroundColor: sec.is_active ? '#DCFCE7' : '#F1F5F9',
-                          color: sec.is_active ? '#15803D' : '#64748B',
-                        }}
-                      >
-                        {sec.is_active ? 'Active' : 'Inactive'}
-                      </span>
+                      <StatusBadge status={sec.is_active ? 'ACTIVE' : 'INACTIVE'} label={sec.is_active ? 'Active' : 'Inactive'} />
                     </td>
                     <td style={{ padding: '12px 14px', textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
@@ -1359,12 +1266,12 @@ export function AdminConfigView() {
                           onClick={() => handleOpenEditSection(sec)}
                           style={{
                             padding: '4px 10px',
-                            backgroundColor: '#FEF3C7',
-                            color: '#92400E',
-                            border: '1px solid #FDE68A',
-                            borderRadius: '5px',
+                            backgroundColor: tokens.warningBg,
+                            color: tokens.warningText,
+                            border: `1px solid ${tokens.warningBorder}`,
+                            borderRadius: '6px',
                             fontSize: '12px',
-                            fontWeight: 700,
+                            fontWeight: 600,
                             cursor: 'pointer',
                           }}
                         >
@@ -1375,10 +1282,10 @@ export function AdminConfigView() {
                           onClick={() => handleDeleteSection(sec)}
                           style={{
                             padding: '4px 10px',
-                            backgroundColor: '#FFF1F2',
-                            color: '#BE123C',
-                            border: '1px solid #FDA4AF',
-                            borderRadius: '5px',
+                            backgroundColor: tokens.dangerBg,
+                            color: tokens.dangerText,
+                            border: `1px solid ${tokens.dangerBorder}`,
+                            borderRadius: '6px',
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
@@ -1405,31 +1312,34 @@ export function AdminConfigView() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backgroundColor: 'rgba(0, 0, 0, 0.55)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 100,
+            padding: '16px',
           }}
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: tokens.surfaceCard,
+              border: `1px solid ${tokens.border}`,
               borderRadius: '12px',
               padding: '24px 28px',
               width: '460px',
               maxWidth: '90vw',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: tokens.modalShadow,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '17px', fontWeight: 800, color: '#0B2E6F', margin: 0 }}>
+              <h3 style={{ fontSize: '17px', fontWeight: 700, color: tokens.textPrimary, margin: 0 }}>
                 {editingSection ? `Edit Section: ${editingSection.name}` : 'Create Reusable Section'}
               </h3>
               <button
                 type="button"
                 onClick={() => setSectionModalOpen(false)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#94A3B8' }}
+                aria-label="Close modal"
+                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: tokens.textMuted }}
               >
                 ✕
               </button>
@@ -1439,9 +1349,9 @@ export function AdminConfigView() {
               <div
                 style={{
                   padding: '8px 12px',
-                  backgroundColor: '#FEF2F2',
-                  border: '1px solid #FCA5A5',
-                  color: '#B91C1C',
+                  backgroundColor: tokens.dangerBg,
+                  border: `1px solid ${tokens.dangerBorder}`,
+                  color: tokens.dangerText,
                   borderRadius: '6px',
                   fontSize: '12px',
                   marginBottom: '14px',
@@ -1453,7 +1363,7 @@ export function AdminConfigView() {
 
             <form onSubmit={handleSaveSection}>
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Section Name *
                 </label>
                 <input
@@ -1466,7 +1376,9 @@ export function AdminConfigView() {
                     width: '100%',
                     padding: '8px 12px',
                     borderRadius: '6px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.borderStrong}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                   }}
@@ -1474,7 +1386,7 @@ export function AdminConfigView() {
               </div>
 
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Section Code * (Uppercase, Unique)
                 </label>
                 <input
@@ -1487,7 +1399,10 @@ export function AdminConfigView() {
                     width: '100%',
                     padding: '8px 12px',
                     borderRadius: '6px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.borderStrong}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
+                    fontFamily: tokens.monoFamily,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                     textTransform: 'uppercase',
@@ -1496,7 +1411,7 @@ export function AdminConfigView() {
               </div>
 
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}>
                   Description (Optional)
                 </label>
                 <textarea
@@ -1508,7 +1423,9 @@ export function AdminConfigView() {
                     width: '100%',
                     padding: '8px 12px',
                     borderRadius: '6px',
-                    border: '1px solid #CBD5E1',
+                    border: `1px solid ${tokens.borderStrong}`,
+                    backgroundColor: tokens.inputBg,
+                    color: tokens.textPrimary,
                     fontSize: '13px',
                     boxSizing: 'border-box',
                   }}
@@ -1521,9 +1438,9 @@ export function AdminConfigView() {
                   id="section-is-active"
                   checked={sectionForm.is_active}
                   onChange={(e) => setSectionForm({ ...sectionForm, is_active: e.target.checked })}
-                  style={{ width: '16px', height: '16px' }}
+                  style={{ width: '16px', height: '16px', accentColor: tokens.cslBlue }}
                 />
-                <label htmlFor="section-is-active" style={{ fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 600 }}>
+                <label htmlFor="section-is-active" style={{ fontSize: '13px', color: tokens.textPrimary, cursor: 'pointer', fontWeight: 600 }}>
                   Active (Available for assessment allocation)
                 </label>
               </div>
@@ -1533,9 +1450,9 @@ export function AdminConfigView() {
                   type="button"
                   onClick={() => setSectionModalOpen(false)}
                   style={{
-                    backgroundColor: '#F1F5F9',
-                    color: '#475569',
-                    border: 'none',
+                    backgroundColor: tokens.surfaceMuted,
+                    color: tokens.textSecondary,
+                    border: `1px solid ${tokens.border}`,
                     borderRadius: '6px',
                     padding: '8px 14px',
                     fontSize: '13px',
@@ -1548,9 +1465,10 @@ export function AdminConfigView() {
                 <button
                   type="submit"
                   disabled={sectionSaving}
+                  className="csl-btn-primary"
                   style={{
-                    backgroundColor: '#0B2E6F',
-                    color: '#FFFFFF',
+                    backgroundColor: tokens.cslBlue,
+                    color: tokens.onPrimary,
                     border: 'none',
                     borderRadius: '6px',
                     padding: '8px 18px',
@@ -1566,6 +1484,6 @@ export function AdminConfigView() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }
