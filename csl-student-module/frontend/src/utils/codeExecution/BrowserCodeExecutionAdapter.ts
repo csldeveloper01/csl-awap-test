@@ -2,7 +2,9 @@ import type {
   BrowserExecutionRequest,
   BrowserExecutionResult,
   BrowserRuntimeState,
+  EvaluationPipelineResult,
   LanguageExecutionDriver,
+  OutputComparisonMode,
   SampleSuiteExecutionResult,
   SampleTestCaseSpec,
   SampleTestExecutionResult,
@@ -12,9 +14,14 @@ export const DEFAULT_MAX_INPUT_CHARS = 256_000;
 export const DEFAULT_MAX_OUTPUT_CHARS = 100_000;
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 5_000;
 export const RUNTIME_INIT_GRACE_MS = 30_000;
+export const DEFAULT_COMPARISON_MODE: OutputComparisonMode = 'TRIMMED';
+export const BROWSER_ENGINE_VERSIONS = {
+  python: 'pyodide-worker-v1',
+  java: 'teavm-wasm-0.14.1',
+} as const;
 
 /**
- * Authoritative output comparison normalizer aligned with backend coding_service.py:
+ * Authoritative output comparison normalizer (default TRIMMED policy):
  * - Normalizes CRLF/CR -> LF
  * - Strips trailing whitespace per line and leading/trailing blank lines
  */
@@ -25,6 +32,35 @@ export function normalizeCodeOutput(text?: string | null): string {
   while (lines.length > 0 && lines[0] === '') lines.shift();
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n');
+}
+
+/**
+ * Strict, configurable output comparator supporting:
+ * - EXACT: LF-normalized only (no trimming or whitespace collapse)
+ * - TRIMMED (default): trims trailing horizontal spaces per line & leading/trailing empty lines
+ * - WHITESPACE_NORMALIZED: collapses horizontal space/tab runs per line while preserving line breaks
+ */
+export function compareOutputs(
+  actual?: string | null,
+  expected?: string | null,
+  mode: OutputComparisonMode = DEFAULT_COMPARISON_MODE
+): boolean {
+  const actualRaw = (actual ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const expectedRaw = (expected ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  if (mode === 'EXACT') {
+    return actualRaw === expectedRaw;
+  }
+  if (mode === 'WHITESPACE_NORMALIZED') {
+    const normalizeLines = (s: string) =>
+      normalizeCodeOutput(s)
+        .split('\n')
+        .map((line) => line.trim().replace(/[ \t]+/g, ' '))
+        .filter((line) => line.length > 0)
+        .join('\n');
+    return normalizeLines(actualRaw) === normalizeLines(expectedRaw);
+  }
+  return normalizeCodeOutput(actualRaw) === normalizeCodeOutput(expectedRaw);
 }
 
 export function normalizeCanonicalLanguage(lang: string): 'python' | 'java' | string {
@@ -628,6 +664,23 @@ export class BrowserCodeExecutionAdapter {
     return driver?.getRuntimeState?.() ?? 'IDLE';
   }
 
+  getEngineVersion(language: string): string {
+    const canonical = normalizeCanonicalLanguage(language);
+    if (canonical === 'python') return BROWSER_ENGINE_VERSIONS.python;
+    if (canonical === 'java') return BROWSER_ENGINE_VERSIONS.java;
+    return `browser-${canonical || 'unknown'}-v1`;
+  }
+
+  private resolveEffectiveComparisonMode(
+    caseMode?: OutputComparisonMode | 'INHERIT',
+    questionMode: OutputComparisonMode = DEFAULT_COMPARISON_MODE
+  ): OutputComparisonMode {
+    if (caseMode === 'EXACT' || caseMode === 'TRIMMED' || caseMode === 'WHITESPACE_NORMALIZED') {
+      return caseMode;
+    }
+    return questionMode;
+  }
+
   isBrowserExecutionSupported(language: string): boolean {
     const driver = this.getDriver(language);
     return Boolean(driver && driver.isSupported());
@@ -767,9 +820,8 @@ export class BrowserCodeExecutionAdapter {
           stdin: tc.input_text || '',
         });
 
-        const actualClean = normalizeCodeOutput(execRes.stdout);
-        const expectedClean = normalizeCodeOutput(tc.expected_output);
-        const passed = execRes.status === 'ACCEPTED' && actualClean === expectedClean;
+        const mode = this.resolveEffectiveComparisonMode(tc.comparison_mode, DEFAULT_COMPARISON_MODE);
+        const passed = execRes.status === 'ACCEPTED' && compareOutputs(execRes.stdout, tc.expected_output, mode);
         const caseStatus =
           execRes.status === 'ACCEPTED'
             ? passed
@@ -782,6 +834,8 @@ export class BrowserCodeExecutionAdapter {
         results.push({
           testCaseId: tc.id,
           index: idx + 1,
+          visibilityScope: tc.visibility_scope || (tc.is_public ? 'SAMPLE' : 'SAMPLE'),
+          isPublic: tc.is_public ?? true,
           inputText: tc.input_text || '',
           expectedOutput: tc.expected_output || '',
           actualOutput: execRes.stdout,
@@ -791,6 +845,7 @@ export class BrowserCodeExecutionAdapter {
           status: caseStatus,
           passed,
           executionTimeMs: execRes.executionTimeMs,
+          marksWeightage: tc.marks_weightage ?? 1.0,
           explanation: tc.explanation,
           truncated: execRes.truncated,
         });
@@ -803,6 +858,7 @@ export class BrowserCodeExecutionAdapter {
           return {
             overallStatus: caseStatus,
             passedCount,
+            failedCount: sampleCases.length - passedCount,
             totalCount: sampleCases.length,
             compilationErrors: execRes.compilationErrors || undefined,
             runtimeErrors: execRes.runtimeErrors || undefined,
@@ -820,7 +876,202 @@ export class BrowserCodeExecutionAdapter {
     return {
       overallStatus: firstFailure ? firstFailure.status : 'ACCEPTED',
       passedCount,
+      failedCount: sampleCases.length - passedCount,
       totalCount: sampleCases.length,
+      results,
+    };
+  }
+
+  /**
+   * Executes ALL configured assessment test cases (Sample + Additional + Hidden) in the browser
+   * and computes bounded weighted marks. Client results remain non-authoritative telemetry until
+   * validated & bounded by Django.
+   */
+  async evaluateTestCases(
+    req: Omit<BrowserExecutionRequest, 'stdin'>,
+    testCases: SampleTestCaseSpec[],
+    questionComparisonMode: OutputComparisonMode = DEFAULT_COMPARISON_MODE,
+    maxMarks = 1
+  ): Promise<EvaluationPipelineResult> {
+    const engineVersion = this.getEngineVersion(req.language);
+    const safeMaxMarks = Math.max(0, Number(maxMarks) || 0);
+
+    if (!req.sourceCode || !req.sourceCode.trim()) {
+      return {
+        overallStatus: 'COMPILATION_ERROR',
+        passedCount: 0,
+        failedCount: testCases.length,
+        totalCount: testCases.length,
+        scoreAwarded: 0,
+        maxMarks: safeMaxMarks,
+        comparisonMode: questionComparisonMode,
+        engineVersion,
+        totalExecutionTimeMs: 0,
+        compilationErrors: 'Source code cannot be empty.',
+        runtimeErrors: '',
+        results: [],
+      };
+    }
+
+    const driver = this.getDriver(req.language);
+    if (!driver || !driver.isSupported()) {
+      const reason = this.getUnsupportedReason(req.language);
+      return {
+        overallStatus: 'BROWSER_RUNTIME_UNSUPPORTED',
+        passedCount: 0,
+        failedCount: testCases.length,
+        totalCount: testCases.length,
+        scoreAwarded: 0,
+        maxMarks: safeMaxMarks,
+        comparisonMode: questionComparisonMode,
+        engineVersion,
+        totalExecutionTimeMs: 0,
+        compilationErrors: '',
+        runtimeErrors: reason,
+        results: [],
+      };
+    }
+
+    if (testCases.length === 0) {
+      return {
+        overallStatus: 'ACCEPTED',
+        passedCount: 0,
+        failedCount: 0,
+        totalCount: 0,
+        scoreAwarded: 0,
+        maxMarks: safeMaxMarks,
+        comparisonMode: questionComparisonMode,
+        engineVersion,
+        totalExecutionTimeMs: 0,
+        compilationErrors: '',
+        runtimeErrors: '',
+        results: [],
+      };
+    }
+
+    this.cancelledFlag = false;
+    this.activeDriver = driver;
+    const results: SampleTestExecutionResult[] = [];
+    let passedCount = 0;
+    let passedWeight = 0;
+    let totalWeight = 0;
+    let totalMs = 0;
+    let compilationErrors = '';
+    let runtimeErrors = '';
+
+    for (const tc of testCases) {
+      totalWeight += Math.max(0.01, Number(tc.marks_weightage ?? 1.0) || 1.0);
+    }
+
+    try {
+      for (let idx = 0; idx < testCases.length; idx++) {
+        if (this.cancelledFlag) {
+          return {
+            overallStatus: 'CANCELLED',
+            passedCount,
+            failedCount: testCases.length - passedCount,
+            totalCount: testCases.length,
+            scoreAwarded: 0,
+            maxMarks: safeMaxMarks,
+            comparisonMode: questionComparisonMode,
+            engineVersion,
+            totalExecutionTimeMs: Math.round(totalMs * 10) / 10,
+            compilationErrors,
+            runtimeErrors: 'Evaluation cancelled by user or proctoring termination.',
+            results,
+          };
+        }
+
+        const tc = testCases[idx];
+        const caseWeight = Math.max(0.01, Number(tc.marks_weightage ?? 1.0) || 1.0);
+        const execRes = await driver.execute({
+          ...req,
+          stdin: tc.input_text || '',
+        });
+        totalMs += execRes.executionTimeMs || 0;
+
+        const effectiveMode = this.resolveEffectiveComparisonMode(tc.comparison_mode, questionComparisonMode);
+        const passed = execRes.status === 'ACCEPTED' && compareOutputs(execRes.stdout, tc.expected_output, effectiveMode);
+        const caseStatus =
+          execRes.status === 'ACCEPTED'
+            ? passed
+              ? 'ACCEPTED'
+              : 'WRONG_ANSWER'
+            : execRes.status;
+
+        if (passed) {
+          passedCount += 1;
+          passedWeight += caseWeight;
+        }
+        if (execRes.compilationErrors && !compilationErrors) {
+          compilationErrors = execRes.compilationErrors;
+        }
+        if (execRes.runtimeErrors && !runtimeErrors) {
+          runtimeErrors = execRes.runtimeErrors;
+        }
+
+        results.push({
+          testCaseId: tc.id,
+          index: idx + 1,
+          visibilityScope: tc.visibility_scope || (tc.is_public ? 'SAMPLE' : 'HIDDEN'),
+          isPublic: Boolean(tc.is_public || tc.visibility_scope === 'SAMPLE'),
+          inputText: tc.input_text || '',
+          expectedOutput: tc.expected_output || '',
+          actualOutput: execRes.stdout,
+          stderr: execRes.stderr,
+          compilationErrors: execRes.compilationErrors,
+          runtimeErrors: execRes.runtimeErrors,
+          status: caseStatus,
+          passed,
+          executionTimeMs: execRes.executionTimeMs,
+          marksWeightage: caseWeight,
+          explanation: tc.explanation,
+          truncated: execRes.truncated,
+        });
+
+        if (
+          caseStatus === 'COMPILATION_ERROR' ||
+          caseStatus === 'RUNTIME_LOAD_ERROR' ||
+          caseStatus === 'CANCELLED'
+        ) {
+          return {
+            overallStatus: caseStatus,
+            passedCount,
+            failedCount: testCases.length - passedCount,
+            totalCount: testCases.length,
+            scoreAwarded: 0,
+            maxMarks: safeMaxMarks,
+            comparisonMode: questionComparisonMode,
+            engineVersion,
+            totalExecutionTimeMs: Math.round(totalMs * 10) / 10,
+            compilationErrors,
+            runtimeErrors,
+            results,
+          };
+        }
+      }
+    } finally {
+      if (this.activeDriver === driver) {
+        this.activeDriver = null;
+      }
+    }
+
+    const rawScore = totalWeight > 0 ? (passedWeight / totalWeight) * safeMaxMarks : 0;
+    const boundedScore = Math.min(safeMaxMarks, Math.max(0, Math.round(rawScore * 100) / 100));
+    const firstFailure = results.find((r) => !r.passed);
+
+    return {
+      overallStatus: firstFailure ? firstFailure.status : 'ACCEPTED',
+      passedCount,
+      failedCount: testCases.length - passedCount,
+      totalCount: testCases.length,
+      scoreAwarded: boundedScore,
+      maxMarks: safeMaxMarks,
+      comparisonMode: questionComparisonMode,
+      engineVersion,
+      totalExecutionTimeMs: Math.round(totalMs * 10) / 10,
+      compilationErrors,
+      runtimeErrors,
       results,
     };
   }

@@ -25,7 +25,7 @@ const DEFAULT_EXPORT_THRESHOLDS: ExportScoreThreshold[] = [
 ];
 
 export function AdminConfigView() {
-  const { tokens } = useAdminTheme();
+  const { tokens, setAdvancedAnimations } = useAdminTheme();
   const [config, setConfig] = useState<AdminAssessmentConfig | null>(null);
   const [initialConfig, setInitialConfig] = useState<AdminAssessmentConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,6 +75,9 @@ export function AdminConfigView() {
       const data = await getAdminConfig();
       setConfig(data);
       setInitialConfig(data);
+      if (typeof data.enable_advanced_animations === 'boolean') {
+        setAdvancedAnimations(data.enable_advanced_animations);
+      }
     } catch {
       setError('Failed to fetch platform configuration.');
     } finally {
@@ -164,6 +167,9 @@ export function AdminConfigView() {
       const updated = await updateAdminConfig(config);
       setConfig(updated);
       setInitialConfig(updated);
+      if (typeof updated.enable_advanced_animations === 'boolean') {
+        setAdvancedAnimations(updated.enable_advanced_animations);
+      }
       setMessage('Platform-wide configuration updated and persisted successfully.');
     } catch (err: unknown) {
       setError(formatApiError(err, 'Failed to update configuration.'));
@@ -732,6 +738,186 @@ export function AdminConfigView() {
                 Default: 2 warnings. The 3rd tab switch triggers immediate automated submission.
               </span>
             </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                Max Camera / Face Violations
+              </label>
+              <input
+                type="number"
+                name="max_camera_violations"
+                min={1}
+                value={config.max_camera_violations ?? 3}
+                onChange={handleChange}
+                className="csl-tabular"
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
+                  fontSize: '14px',
+                  outlineColor: tokens.cslBlue,
+                  boxSizing: 'border-box',
+                  fontFamily: tokens.monoFamily,
+                  fontWeight: 700,
+                }}
+              />
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
+                Camera disconnects / prolonged face absence threshold
+              </span>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                Face Absence Threshold (Seconds)
+              </label>
+              <input
+                type="number"
+                name="max_face_absence_seconds"
+                min={3}
+                value={config.max_face_absence_seconds ?? 15}
+                onChange={handleChange}
+                className="csl-tabular"
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
+                  fontSize: '14px',
+                  outlineColor: tokens.cslBlue,
+                  boxSizing: 'border-box',
+                  fontFamily: tokens.monoFamily,
+                  fontWeight: 700,
+                }}
+              />
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
+                Continuous absence duration before logging a violation
+              </span>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                Multiple Faces Auto-Submit Limit
+              </label>
+              <input
+                type="number"
+                name="multiple_face_threshold"
+                min={1}
+                value={config.multiple_face_threshold ?? 2}
+                onChange={handleChange}
+                className="csl-tabular"
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
+                  fontSize: '14px',
+                  outlineColor: tokens.cslBlue,
+                  boxSizing: 'border-box',
+                  fontFamily: tokens.monoFamily,
+                  fontWeight: 700,
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                Permitted DevTools Strikes
+              </label>
+              <input
+                type="number"
+                name="max_devtools_incidents"
+                min={1}
+                value={config.max_devtools_incidents ?? 1}
+                onChange={handleChange}
+                className="csl-tabular"
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
+                  fontSize: '14px',
+                  outlineColor: tokens.cslBlue,
+                  boxSizing: 'border-box',
+                  fontFamily: tokens.monoFamily,
+                  fontWeight: 700,
+                }}
+              />
+              <span style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '4px', display: 'block' }}>
+                1 = Warn on Strike 1, Auto-Submit on Strike 2
+              </span>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
+                Screen Share Interruption Policy
+              </label>
+              <select
+                name="screen_share_policy"
+                value={config.screen_share_policy || 'WARN'}
+                onChange={(e) => setConfig({ ...config, screen_share_policy: e.target.value as any })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: `1px solid ${tokens.borderStrong}`,
+                  backgroundColor: tokens.inputBg,
+                  color: tokens.textPrimary,
+                  fontSize: '13.5px',
+                  fontWeight: 600,
+                  boxSizing: 'border-box',
+                }}
+              >
+                <option value="WARN">Warn & Log Incident Only</option>
+                <option value="REQUIRED">Require Reconnection</option>
+                <option value="AUTO_SUBMIT">Auto-Submit on Stop</option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: '14px',
+              padding: '14px 18px',
+              borderRadius: '10px',
+              backgroundColor: tokens.surfaceMuted,
+              border: `1px solid ${tokens.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              cursor: 'pointer',
+            }}
+            onClick={() =>
+              setConfig({
+                ...config,
+                proctoring_auto_submit_enabled: !(config.proctoring_auto_submit_enabled ?? true),
+              })
+            }
+          >
+            <input
+              type="checkbox"
+              name="proctoring_auto_submit_enabled"
+              checked={config.proctoring_auto_submit_enabled ?? true}
+              onChange={(e) => setConfig({ ...config, proctoring_auto_submit_enabled: e.target.checked })}
+              onClick={(e) => e.stopPropagation()}
+              style={{ width: '18px', height: '18px', accentColor: tokens.cslBlue, cursor: 'pointer' }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: tokens.textPrimary }}>
+                Automated Submission on Camera / Multi-Face / DevTools Violations
+              </div>
+              <div style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '2px' }}>
+                When enabled, exceeding any configured Sentinel camera or DevTools strike limit saves candidate drafts and transitions the attempt to AUTO_SUBMITTED.
+              </div>
+            </div>
           </div>
 
           {/* Auto submit checkbox toggle */}
@@ -768,6 +954,51 @@ export function AdminConfigView() {
               </div>
               <div style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '2px' }}>
                 When enabled, the student portal immediately halts testing, collects answered responses, and submits the attempt on the 3rd tab switch without manual intervention.
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: `1px solid ${tokens.border}`,
+              backgroundColor: tokens.surfaceMuted,
+              marginTop: '12px',
+              cursor: 'pointer',
+            }}
+            onClick={() => {
+              const nextVal = !(config.enable_advanced_animations ?? true);
+              setConfig({ ...config, enable_advanced_animations: nextVal });
+              setAdvancedAnimations(nextVal);
+            }}
+          >
+            <input
+              type="checkbox"
+              name="enable_advanced_animations"
+              data-testid="config-enable-advanced-animations"
+              checked={config.enable_advanced_animations ?? true}
+              onChange={(e) => {
+                setConfig({ ...config, enable_advanced_animations: e.target.checked });
+                setAdvancedAnimations(e.target.checked);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: '18px',
+                height: '18px',
+                accentColor: tokens.cslBlue,
+                cursor: 'pointer',
+              }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: tokens.textPrimary }}>
+                Enable Advanced Interface Animations
+              </div>
+              <div style={{ fontSize: '11px', color: tokens.textMuted, marginTop: '2px' }}>
+                Controls the top-right circular clip-path theme ripple, sweeping skeleton loaders, and subtle surface transitions across Admin and Student workspaces.
               </div>
             </div>
           </div>

@@ -99,11 +99,15 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
     """
     Student-facing question serializer.
     STRICT SECURITY: correct_option_key is NEVER included.
-    Includes programming_details and sample test cases for coding questions.
+    Includes programming_details, comparison_mode, public sample_test_cases, and
+    evaluation_test_cases for local browser execution.
+    Note: Test cases sent to candidate browsers execute locally and are inspectable client-side.
     """
     question_id = serializers.IntegerField(source="question.id", read_only=True)
     options = serializers.SerializerMethodField()
     category = serializers.CharField(source="question.category", read_only=True)
+    difficulty = serializers.CharField(source="question.difficulty", read_only=True)
+    marks = serializers.SerializerMethodField()
     programming_details = serializers.SerializerMethodField()
 
     class Meta:
@@ -113,11 +117,18 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
             "question_id",
             "section_type",
             "category",
+            "difficulty",
+            "marks",
             "prompt",
             "options",
             "selected_option",
             "programming_details",
         ]
+
+    def get_marks(self, obj):
+        if getattr(obj, "programming_data", None) and obj.programming_data.get("marks"):
+            return obj.programming_data.get("marks")
+        return getattr(obj.question, "marks", 1) or 1
 
     def get_options(self, obj):
         return [
@@ -132,6 +143,7 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
             # 1. Prefer immutable snapshot
             if getattr(obj, "programming_data", None):
                 prog = obj.programming_data
+                all_cases = prog.get("test_cases", []) or []
                 sample_cases = [
                     {
                         "id": str(tc.get("id")),
@@ -139,15 +151,18 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
                         "expected_output": tc.get("expected_output", ""),
                         "explanation": tc.get("explanation", ""),
                         "marks_weightage": tc.get("marks_weightage", 1.0),
+                        "visibility_scope": tc.get("visibility_scope") or ("SAMPLE" if tc.get("is_public") else "HIDDEN"),
+                        "comparison_mode": tc.get("comparison_mode") or "INHERIT",
                     }
-                    for tc in prog.get("test_cases", [])
-                    if tc.get("is_public")
+                    for tc in all_cases
+                    if tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE"
                 ]
                 return {
                     "problem_statement": prog.get("problem_statement") or obj.prompt,
                     "constraints": prog.get("constraints", ""),
                     "input_format": prog.get("input_format", ""),
                     "output_format": prog.get("output_format", ""),
+                    "comparison_mode": prog.get("comparison_mode") or "TRIMMED",
                     "allowed_languages": prog.get("allowed_languages") or ["python", "java"],
                     "boilerplate_code": prog.get("boilerplate_code") or {
                         "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
@@ -162,6 +177,7 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
             q = obj.question
             if hasattr(q, "programming_details") and q.programming_details:
                 prog = q.programming_details
+                active_cases = list(prog.test_cases.filter(is_active=True).order_by("order", "created_at"))
                 sample_cases = [
                     {
                         "id": str(tc.id),
@@ -169,14 +185,18 @@ class QuestionSnapshotStudentSerializer(serializers.ModelSerializer):
                         "expected_output": tc.expected_output,
                         "explanation": tc.explanation,
                         "marks_weightage": tc.marks_weightage,
+                        "visibility_scope": getattr(tc, "visibility_scope", "SAMPLE"),
+                        "comparison_mode": getattr(tc, "comparison_mode", "INHERIT") or "INHERIT",
                     }
-                    for tc in prog.test_cases.filter(is_public=True, is_active=True).order_by("order", "created_at")
+                    for tc in active_cases
+                    if tc.is_public or getattr(tc, "visibility_scope", "") == "SAMPLE"
                 ]
                 return {
                     "problem_statement": prog.problem_statement or q.prompt,
                     "constraints": prog.constraints,
                     "input_format": prog.input_format,
                     "output_format": prog.output_format,
+                    "comparison_mode": getattr(prog, "comparison_mode", "TRIMMED") or "TRIMMED",
                     "allowed_languages": prog.allowed_languages or ["python", "java"],
                     "boilerplate_code": prog.boilerplate_code or {
                         "python": "# Write your Python solution here\ndef solve():\n    pass\n\nif __name__ == '__main__':\n    solve()\n",
@@ -828,6 +848,7 @@ class ProctoringEvidenceOutputSerializer(serializers.ModelSerializer):
 class ProctoringSessionSerializer(serializers.ModelSerializer):
     calibration = ProctoringCalibrationSerializer(read_only=True)
     recent_events = serializers.SerializerMethodField()
+    proctoring_policy = serializers.SerializerMethodField()
 
     class Meta:
         model = ProctoringSession
@@ -847,11 +868,16 @@ class ProctoringSessionSerializer(serializers.ModelSerializer):
             "risk_level",
             "risk_breakdown",
             "review_status",
+            "proctoring_policy",
             "calibration",
             "recent_events",
             "created_at",
             "updated_at",
         ]
+
+    def get_proctoring_policy(self, obj):
+        from .services import get_effective_proctoring_policy
+        return get_effective_proctoring_policy(obj.assessment_session)
 
     def get_recent_events(self, obj):
         events = obj.events.order_by("-created_at")[:10]

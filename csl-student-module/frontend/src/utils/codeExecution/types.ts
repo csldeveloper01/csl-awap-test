@@ -10,6 +10,10 @@ export type BrowserExecutionStatus =
 
 export type BrowserRuntimeState = 'IDLE' | 'LOADING_RUNTIME' | 'READY' | 'EXECUTING' | 'ERROR';
 
+export type OutputComparisonMode = 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
+
+export type TestCaseVisibilityScope = 'SAMPLE' | 'ADDITIONAL' | 'HIDDEN';
+
 export interface BrowserExecutionRequest {
   sourceCode: string;
   language: string;
@@ -36,11 +40,17 @@ export interface SampleTestCaseSpec {
   input_text: string;
   expected_output: string;
   explanation?: string;
+  marks_weightage?: number;
+  is_public?: boolean;
+  visibility_scope?: TestCaseVisibilityScope;
+  comparison_mode?: OutputComparisonMode | 'INHERIT';
 }
 
 export interface SampleTestExecutionResult {
   testCaseId: string;
   index: number;
+  visibilityScope?: TestCaseVisibilityScope;
+  isPublic?: boolean;
   inputText: string;
   expectedOutput: string;
   actualOutput: string;
@@ -50,6 +60,7 @@ export interface SampleTestExecutionResult {
   status: BrowserExecutionStatus;
   passed: boolean;
   executionTimeMs: number;
+  marksWeightage?: number;
   explanation?: string;
   truncated?: boolean;
 }
@@ -57,11 +68,27 @@ export interface SampleTestExecutionResult {
 export interface SampleSuiteExecutionResult {
   overallStatus: BrowserExecutionStatus;
   passedCount: number;
+  failedCount?: number;
   totalCount: number;
   results: SampleTestExecutionResult[];
   compilationErrors?: string;
   runtimeErrors?: string;
   unsupportedReason?: string;
+}
+
+export interface EvaluationPipelineResult {
+  overallStatus: BrowserExecutionStatus;
+  passedCount: number;
+  failedCount: number;
+  totalCount: number;
+  scoreAwarded: number;
+  maxMarks: number;
+  comparisonMode: OutputComparisonMode;
+  engineVersion: string;
+  totalExecutionTimeMs: number;
+  compilationErrors: string;
+  runtimeErrors: string;
+  results: SampleTestExecutionResult[];
 }
 
 export interface LanguageExecutionDriver {

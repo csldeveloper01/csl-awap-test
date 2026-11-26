@@ -19,6 +19,7 @@ from .views import (
     ResolveAccessCodeView,
     DriveLinkCandidateView,
     StudentCodeRunView,
+    StudentCodeEvaluationCasesView,
     StudentCodeSubmitView,
     CandidateLoginView,
     CandidateAssessmentSebConfigView,
@@ -32,6 +33,7 @@ from .views import (
     ProctoringEvidenceUploadView,
     ProctoringSessionStatusView,
     ProctoringSessionEndView,
+    PublicAppearanceConfigView,
 )
 
 urlpatterns = [
@@ -57,6 +59,7 @@ urlpatterns = [
     path("drives/<str:code_or_id>/public/", PublicDriveDetailView.as_view(), name="public-drive-detail"),
     path("resolve-code/", ResolveAccessCodeView.as_view(), name="resolve-access-code"),
     path("code/run/", StudentCodeRunView.as_view(), name="student-code-run"),
+    path("code/evaluation-cases/", StudentCodeEvaluationCasesView.as_view(), name="student-code-evaluation-cases"),
     path("code/submit/", StudentCodeSubmitView.as_view(), name="student-code-submit"),
     path("recover/", StudentAttemptRecoveryView.as_view(), name="assessment-recover"),
     path("start/", StartAssessmentView.as_view(), name="assessment-start"),
@@ -70,4 +73,5 @@ urlpatterns = [
     path("attempts/<uuid:attempt_id>/finalize/", FinalizeAssessmentView.as_view(), name="assessment-finalize"),
     path("attempts/<uuid:attempt_id>/result/", AssessmentResultView.as_view(), name="assessment-result"),
     path("bank-summary/", QuestionBankSummaryView.as_view(), name="assessment-bank-summary"),
+    path("appearance-config/", PublicAppearanceConfigView.as_view(), name="public-appearance-config"),
 ]

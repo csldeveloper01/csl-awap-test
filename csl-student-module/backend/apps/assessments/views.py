@@ -2038,6 +2038,92 @@ class StudentCodeRunView(APIView):
             })
 
 
+class StudentCodeEvaluationCasesView(APIView):
+    """
+    Loads the frozen evaluation test-case suite (SAMPLE, ADDITIONAL, HIDDEN) for an active
+    candidate attempt so browser-based WebAssembly grading can execute all configured test cases
+    when Submit is triggered.
+
+    SECURITY NOTE: Because evaluation runs inside the candidate-controlled browser, test cases
+    delivered to the browser are inspectable client-side and scores returned from browser execution
+    are never trusted blindly without Django validation and max-mark bounds.
+    """
+    authentication_classes = [CandidateAssessmentAuthentication]
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        candidate = get_authorized_candidate(request)
+        if not candidate:
+            return Response({"detail": "Valid candidate authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        attempt_id = request.query_params.get("attempt_id")
+        raw_question_id = request.query_params.get("question_id")
+        if not attempt_id or not raw_question_id:
+            return Response({"detail": "attempt_id and question_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            question_id = int(raw_question_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid question_id."}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt = get_object_or_404(AssessmentAttempt, id=attempt_id)
+        if attempt.candidate_id != candidate.id:
+            return Response({"detail": "Access forbidden: you do not own this assessment attempt."}, status=status.HTTP_403_FORBIDDEN)
+        if attempt.state in AssessmentAttempt.TERMINAL_STATES or attempt.is_expired():
+            return Response({"detail": "Attempt is no longer active."}, status=status.HTTP_403_FORBIDDEN)
+
+        snapshot = attempt.question_snapshots.filter(question_id=question_id).first()
+        if not snapshot:
+            return Response({"detail": f"Question {question_id} does not belong to attempt {attempt.id}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import ProgrammingQuestion
+        prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
+        prog_data = snapshot.programming_data or {}
+        raw_cases = prog_data.get("test_cases")
+        if not raw_cases and prog_q:
+            raw_cases = [
+                {
+                    "id": str(tc.id),
+                    "input_text": tc.input_text or "",
+                    "expected_output": tc.expected_output or "",
+                    "is_public": tc.is_public,
+                    "visibility_scope": getattr(tc, "visibility_scope", "SAMPLE" if tc.is_public else "HIDDEN"),
+                    "comparison_mode": getattr(tc, "comparison_mode", "INHERIT") or "INHERIT",
+                    "marks_weightage": tc.marks_weightage,
+                    "explanation": tc.explanation if tc.is_public else "",
+                }
+                for tc in prog_q.test_cases.filter(is_active=True).order_by("order", "created_at")
+            ]
+
+        max_marks = float(prog_data.get("marks") or (prog_q.question.marks if prog_q else 1) or 1)
+        if attempt.assessment_id:
+            sec_code = (snapshot.section_type or "CODING") or "CODING"
+            alloc = attempt.assessment.section_allocations.filter(section__code__iexact=sec_code).first()
+            if alloc and alloc.marks_per_question:
+                max_marks = float(alloc.marks_per_question)
+
+        return Response(
+            {
+                "question_id": question_id,
+                "comparison_mode": prog_data.get("comparison_mode") or (getattr(prog_q, "comparison_mode", "TRIMMED") if prog_q else "TRIMMED"),
+                "max_marks": max_marks,
+                "test_cases": [
+                    {
+                        "id": str(tc.get("id")),
+                        "input_text": tc.get("input_text", ""),
+                        "expected_output": tc.get("expected_output", ""),
+                        "is_public": bool(tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE"),
+                        "visibility_scope": tc.get("visibility_scope") or ("SAMPLE" if tc.get("is_public") else "HIDDEN"),
+                        "comparison_mode": tc.get("comparison_mode") or "INHERIT",
+                        "marks_weightage": float(tc.get("marks_weightage") or 1.0),
+                        "explanation": tc.get("explanation", "") if (tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE") else "",
+                    }
+                    for tc in (raw_cases or [])
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class StudentCodeSubmitView(APIView):
     """
     Browser-First Coding Submission Persistence Endpoint.
@@ -2067,6 +2153,9 @@ class StudentCodeSubmitView(APIView):
         language = self._normalize_lang(request.data.get("language") or "python")
         source_code = request.data.get("source_code", "")
         raw_browser_meta = request.data.get("browser_execution_metadata") or request.data.get("browser_metadata")
+        raw_eval_summary = request.data.get("evaluation_summary")
+        raw_tc_results = request.data.get("test_case_results")
+        engine_version = str(request.data.get("engine_version") or "").strip()[:80]
 
         if not attempt_id:
             return Response({"detail": "attempt_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2103,7 +2192,8 @@ class StudentCodeSubmitView(APIView):
 
         from django.db import transaction
         from django.utils import timezone
-        from .models import ProgrammingQuestion, CodeSubmission, QuestionBank
+        from .models import ProgrammingQuestion, CodeSubmission, CodeTestResult, QuestionBank
+        from .services import recalculate_attempt_coding_scores
 
         prog_q = ProgrammingQuestion.objects.filter(question_id=question_id).first()
         is_coding_snapshot = bool(
@@ -2163,43 +2253,177 @@ class StudentCodeSubmitView(APIView):
             sanitized_meta["untrusted_telemetry"] = True
             sanitized_meta["recorded_at"] = timezone.now().isoformat()
 
+        # Determine whether client supplied a browser-side automatic evaluation summary
+        has_browser_evaluation = isinstance(raw_eval_summary, dict) or isinstance(raw_tc_results, list)
+        eval_dict = raw_eval_summary if isinstance(raw_eval_summary, dict) else {}
+        tc_items = raw_tc_results if isinstance(raw_tc_results, list) else []
+
+        valid_verdicts = set(CodeSubmission.Verdict.values)
+        raw_verdict = str(eval_dict.get("verdict") or eval_dict.get("overall_status") or "").strip().upper()
+
+        if has_browser_evaluation:
+            verdict = raw_verdict if raw_verdict in valid_verdicts else CodeSubmission.Verdict.PENDING
+            review_status = CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED
+
+            # Strict server-side score bound enforcement: never allow client-submitted score to exceed max_marks or go < 0
+            try:
+                client_raw_score = float(eval_dict.get("score_awarded", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                client_raw_score = 0.0
+            validated_score = round(min(max(0.0, client_raw_score), max_marks), 2)
+            score_clamped = client_raw_score > max_marks or client_raw_score < 0.0
+
+            try:
+                total_cases = max(0, int(eval_dict.get("total_test_cases", len(tc_items)) or 0))
+            except (TypeError, ValueError):
+                total_cases = len(tc_items)
+            try:
+                passed_cases = max(0, min(total_cases or len(tc_items), int(eval_dict.get("passed_count", 0) or 0)))
+            except (TypeError, ValueError):
+                passed_cases = 0
+            try:
+                exec_ms = max(0.0, float(eval_dict.get("execution_time_ms", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                exec_ms = 0.0
+
+            compile_out = str(eval_dict.get("compilation_errors") or "")[:4000]
+            sanitized_eval_summary = {
+                "total_test_cases": total_cases,
+                "passed_count": passed_cases,
+                "failed_count": max(0, total_cases - passed_cases),
+                "score_awarded": validated_score,
+                "client_submitted_score_raw": client_raw_score,
+                "score_clamped": score_clamped,
+                "max_marks": max_marks,
+                "comparison_mode": str(eval_dict.get("comparison_mode") or "TRIMMED")[:32],
+                "verdict": verdict,
+                "execution_time_ms": exec_ms,
+                "engine_version": engine_version or str(eval_dict.get("engine_version") or "browser-wasm-v1")[:80],
+                "untrusted_browser_evaluation": True,
+                "is_authoritative": False,
+                "security_note": "Candidate-controlled browsers can manipulate local execution and evaluation results.",
+                "recorded_at": timezone.now().isoformat(),
+            }
+            if not engine_version:
+                engine_version = sanitized_eval_summary["engine_version"]
+        else:
+            verdict = CodeSubmission.Verdict.PENDING
+            review_status = CodeSubmission.ReviewStatus.PENDING_REVIEW
+            validated_score = 0.0
+            total_cases = 0
+            passed_cases = 0
+            exec_ms = 0.0
+            compile_out = ""
+            sanitized_eval_summary = {}
+
+        # Lookup existing test case objects for safe relational linking without leaking hidden test details back
+        tc_by_id = {str(tc.id): tc for tc in prog_q.test_cases.all()}
+        public_ids = {
+            str(tc.get("id"))
+            for tc in ((snapshot.programming_data or {}).get("test_cases", []) if snapshot else [])
+            if tc.get("is_public") or tc.get("visibility_scope") == "SAMPLE"
+        } or {str(tc.id) for tc in prog_q.test_cases.filter(is_public=True)}
+
         with transaction.atomic():
+            seq_num = CodeSubmission.objects.filter(attempt=attempt, programming_question=prog_q).count() + 1
             submission = CodeSubmission.objects.create(
                 attempt=attempt,
                 candidate=candidate,
                 programming_question=prog_q,
                 language=language,
                 source_code=source_code,
-                verdict=CodeSubmission.Verdict.PENDING,
-                review_status=CodeSubmission.ReviewStatus.PENDING_REVIEW,
-                score_awarded=0.0,
+                submission_sequence=seq_num,
+                engine_version=engine_version,
+                verdict=verdict,
+                review_status=review_status,
+                score_awarded=validated_score,
                 max_marks=max_marks,
-                total_test_cases=0,
-                passed_test_cases=0,
-                execution_time_ms=0.0,
+                total_test_cases=total_cases,
+                passed_test_cases=passed_cases,
+                execution_time_ms=exec_ms,
+                compile_output=compile_out,
+                evaluation_summary=sanitized_eval_summary,
                 browser_execution_metadata=sanitized_meta,
             )
+
+            created_results = []
+            if has_browser_evaluation and tc_items:
+                result_objs = []
+                for idx, item in enumerate(tc_items[:200]):
+                    if not isinstance(item, dict):
+                        continue
+                    tc_id_str = str(item.get("test_case_id") or "").strip()
+                    tc_obj = tc_by_id.get(tc_id_str)
+                    item_status = str(item.get("status") or "PENDING").strip().upper()
+                    if item_status not in valid_verdicts:
+                        item_status = CodeSubmission.Verdict.WRONG_ANSWER if not item.get("passed") else CodeSubmission.Verdict.ACCEPTED
+                    try:
+                        case_ms = max(0.0, float(item.get("execution_time_ms", 0.0) or 0.0))
+                    except (TypeError, ValueError):
+                        case_ms = 0.0
+                    passed_flag = bool(item.get("passed", False))
+                    result_objs.append(
+                        CodeTestResult(
+                            submission=submission,
+                            test_case=tc_obj,
+                            snapshot_test_case_id=tc_id_str[:100],
+                            status=item_status,
+                            actual_output=str(item.get("actual_output") or "")[:8000],
+                            error_message=str(item.get("error_message") or "")[:4000],
+                            execution_time_ms=case_ms,
+                            passed=passed_flag,
+                        )
+                    )
+                if result_objs:
+                    CodeTestResult.objects.bulk_create(result_objs)
+                    for idx, tr in enumerate(result_objs):
+                        is_pub = (tr.snapshot_test_case_id in public_ids) or bool(tr.test_case and tr.test_case.is_public)
+                        created_results.append(
+                            {
+                                "index": idx + 1,
+                                "test_case_id": tr.snapshot_test_case_id or None,
+                                "is_public": is_pub,
+                                "status": tr.status,
+                                "passed": tr.passed,
+                                "execution_time_ms": tr.execution_time_ms,
+                                "actual_output": tr.actual_output if is_pub else None,
+                                "error_message": tr.error_message if is_pub else (tr.status if not tr.passed else ""),
+                            }
+                        )
+
             if snapshot:
                 snapshot.answered_at = timezone.now()
                 snapshot.save(update_fields=["answered_at", "updated_at"])
 
+            if has_browser_evaluation:
+                recalculate_attempt_coding_scores(attempt)
+
         return Response(
             {
                 "submission_id": str(submission.id),
+                "submission_sequence": submission.submission_sequence,
                 "question_id": question_id,
                 "language": submission.language,
+                "engine_version": submission.engine_version,
                 "status": submission.review_status,
                 "review_status": submission.review_status,
                 "verdict": submission.verdict,
-                "score_awarded": 0.0,
-                "score": 0.0,
+                "score_awarded": submission.score_awarded,
+                "score": submission.score_awarded,
                 "max_marks": max_marks,
+                "total_test_cases": submission.total_test_cases,
+                "passed_test_cases": submission.passed_test_cases,
                 "is_authoritative_score": False,
-                "requires_manual_evaluation": True,
-                "results": [],
+                "requires_manual_evaluation": not has_browser_evaluation,
+                "evaluation_summary": submission.evaluation_summary,
+                "results": created_results,
                 "browser_execution_metadata": submission.browser_execution_metadata,
                 "created_at": submission.created_at.isoformat() if submission.created_at else None,
-                "message": "Solution submitted successfully and is pending evaluation.",
+                "message": (
+                    f"Solution evaluated ({submission.passed_test_cases}/{submission.total_test_cases} cases passed) and stored."
+                    if has_browser_evaluation
+                    else "Solution submitted successfully and is pending evaluation."
+                ),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -2527,14 +2751,17 @@ class ProctoringCameraStatusView(APIView):
         old_status = session.camera_status
         session.camera_status = new_status
 
+        enforcement = {"auto_submitted": False, "attempt_state": session.assessment_session.state, "auto_submitted_reason": ""}
         if new_status == ProctoringSession.CameraStatus.DISCONNECTED and old_status == ProctoringSession.CameraStatus.ACTIVE:
-            ProctoringEvent.objects.create(
+            ev = ProctoringEvent.objects.create(
                 proctoring_session=session,
                 event_type=ProctoringEvent.EventType.CAMERA_DISCONNECTED,
                 severity=ProctoringEvent.Severity.WARNING,
                 metadata=request.data.get("metadata", {}),
             )
             session.recalculate_risk_score()
+            from .services import evaluate_and_enforce_proctoring_policy
+            enforcement = evaluate_and_enforce_proctoring_policy(session, ev, session.assessment_session)
         elif new_status == ProctoringSession.CameraStatus.ACTIVE and old_status in (
             ProctoringSession.CameraStatus.DISCONNECTED,
             ProctoringSession.CameraStatus.ERROR,
@@ -2551,6 +2778,9 @@ class ProctoringCameraStatusView(APIView):
             "success": True,
             "camera_status": session.camera_status,
             "risk_score": session.risk_score,
+            "auto_submitted": enforcement.get("auto_submitted", False),
+            "attempt_state": enforcement.get("attempt_state"),
+            "auto_submitted_reason": enforcement.get("auto_submitted_reason", ""),
         })
 
 
@@ -2666,20 +2896,26 @@ class ProctoringScreenShareStatusView(APIView):
                 metadata=request.data.get("metadata", {}),
             )
             session.recalculate_risk_score()
-        elif new_status == ProctoringSession.ScreenShareStatus.STOPPED:
-            ProctoringEvent.objects.create(
+        enforcement = {"auto_submitted": False, "attempt_state": session.assessment_session.state, "auto_submitted_reason": ""}
+        if new_status == ProctoringSession.ScreenShareStatus.STOPPED:
+            ev = ProctoringEvent.objects.create(
                 proctoring_session=session,
                 event_type=ProctoringEvent.EventType.SCREEN_SHARE_STOPPED,
                 severity=ProctoringEvent.Severity.CRITICAL,
                 metadata=request.data.get("metadata", {}),
             )
             session.recalculate_risk_score()
+            from .services import evaluate_and_enforce_proctoring_policy
+            enforcement = evaluate_and_enforce_proctoring_policy(session, ev, session.assessment_session)
 
         session.save(update_fields=["screen_share_status", "updated_at"])
         return Response({
             "success": True,
             "screen_share_status": session.screen_share_status,
             "risk_score": session.risk_score,
+            "auto_submitted": enforcement.get("auto_submitted", False),
+            "attempt_state": enforcement.get("attempt_state"),
+            "auto_submitted_reason": enforcement.get("auto_submitted_reason", ""),
         })
 
 
@@ -2727,6 +2963,11 @@ class ProctoringEventIngestView(APIView):
             }, status=status.HTTP_200_OK)
 
         with transaction.atomic():
+            locked_attempt = (
+                AssessmentAttempt.objects.select_for_update()
+                .select_related("assessment", "config")
+                .get(id=session.assessment_session_id)
+            )
             ev = ProctoringEvent.objects.create(
                 proctoring_session=session,
                 event_type=ev_type,
@@ -2737,41 +2978,20 @@ class ProctoringEventIngestView(APIView):
             )
             session.recalculate_risk_score()
 
-            # Synchronize tab-switch events with AssessmentAttempt
-            if ev_type == ProctoringEvent.EventType.TAB_SWITCHED:
-                attempt = session.assessment_session
-                attempt.tab_switch_count += 1
-                allowed = (
-                    attempt.assessment.max_tab_switches_warning
-                    if attempt.assessment
-                    else (attempt.config.max_tab_switches_warning if attempt.config else 2)
-                )
-                auto_submit = (
-                    attempt.assessment.auto_submit_on_tab_limit
-                    if attempt.assessment
-                    else (attempt.config.auto_submit_on_tab_limit if attempt.config else True)
-                )
-                if auto_submit and attempt.tab_switch_count > allowed:
-                    attempt.is_flagged = True
-                    attempt.flag_reason = (
-                        f"TAB_SWITCH_LIMIT_EXCEEDED: Exceeded permitted tab switches "
-                        f"({attempt.tab_switch_count} switches recorded, limit is {allowed})"
-                    )
-                attempt.save(update_fields=["tab_switch_count", "is_flagged", "flag_reason", "updated_at"])
-                if auto_submit and attempt.tab_switch_count > allowed:
-                    finalize_assessment_attempt(attempt, final_state=AssessmentAttempt.State.FLAGGED_FOR_REVIEW)
+            from .services import evaluate_and_enforce_proctoring_policy
+            enforcement = evaluate_and_enforce_proctoring_policy(session, ev, locked_attempt)
 
-            elif ev_type == ProctoringEvent.EventType.FULLSCREEN_EXITED:
-                attempt = session.assessment_session
-                attempt.fullscreen_exit_count += 1
-                attempt.save(update_fields=["fullscreen_exit_count", "updated_at"])
-
+        occurrence_count = session.events.filter(event_type=ev_type).count()
         return Response({
             "status": "recorded",
             "event_id": ev.id,
             "event_type": ev.event_type,
             "risk_score": session.risk_score,
             "risk_level": session.risk_level,
+            "occurrence_count": occurrence_count,
+            "auto_submitted": enforcement.get("auto_submitted", False),
+            "attempt_state": enforcement.get("attempt_state"),
+            "auto_submitted_reason": enforcement.get("auto_submitted_reason", ""),
         }, status=status.HTTP_201_CREATED)
 
 
@@ -2879,4 +3099,17 @@ class ProctoringSessionEndView(APIView):
             "status": session.status,
             "ended_at": session.ended_at,
         }, status=status.HTTP_200_OK)
+
+
+class PublicAppearanceConfigView(APIView):
+    """
+    Exposes global non-sensitive UI appearance flags (e.g. enable_advanced_animations)
+    so student, login, and admin routes synchronize animation preferences cleanly.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        config = AssessmentConfig.objects.filter(is_active=True).order_by("-updated_at").first()
+        enabled = bool(getattr(config, "enable_advanced_animations", True)) if config else True
+        return Response({"enable_advanced_animations": enabled}, status=status.HTTP_200_OK)
 

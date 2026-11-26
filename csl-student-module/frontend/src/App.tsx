@@ -7,6 +7,8 @@ import { Pending } from './Pending';
 import { Rejected } from './Rejected';
 import { Welcome } from './Welcome';
 import { api } from './api';
+import { fetchPublicAppearanceConfig } from './api/assessment';
+import { setStoredAdvancedAnimations } from './utils/adminTheme';
 import { ProtectedRoute } from './routes/ProtectedRoute';
 import { StudentLayout } from './layouts/StudentLayout';
 import { StudentDashboardPage } from './pages/student/StudentDashboardPage';
@@ -41,6 +43,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    fetchPublicAppearanceConfig()
+      .then((cfg) => {
+        if (typeof cfg?.enable_advanced_animations === 'boolean') {
+          setStoredAdvancedAnimations(cfg.enable_advanced_animations);
+        }
+      })
+      .catch(() => {
+        // Offline/sandbox default remains active cleanly
+      });
+
     // Check if session is already authenticated
     api.get('/me/')
       .then((res) => {

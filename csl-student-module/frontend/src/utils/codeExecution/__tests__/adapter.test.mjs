@@ -25,6 +25,7 @@ function loadAdapterModule() {
 const adapterMod = await loadAdapterModule();
 const {
   normalizeCodeOutput,
+  compareOutputs,
   normalizeCanonicalLanguage,
   extractJavaMainClass,
   BrowserCodeExecutionAdapter,
@@ -103,4 +104,42 @@ test('BrowserCodeExecutionAdapter rejects empty source code locally with COMPILA
     assert.equal(res.status, 'COMPILATION_ERROR');
     assert.match(res.compilationErrors, /empty/i);
   }
+});
+
+test('Phase 2.3: compareOutputs supports EXACT, TRIMMED, and WHITESPACE_NORMALIZED without ignoring meaningful differences', () => {
+  // EXACT rejects leading/trailing whitespace differences
+  assert.equal(compareOutputs('42\n', '42', 'EXACT'), false);
+  assert.equal(compareOutputs('42\r\n', '42\n', 'EXACT'), true);
+  assert.equal(compareOutputs('hello', 'Hello', 'EXACT'), false);
+
+  // TRIMMED (default) strips trailing spaces & boundary blank lines cleanly, preserves internal meaning
+  assert.equal(compareOutputs('  42\r\n\n', '  42\n', 'TRIMMED'), true);
+  assert.equal(compareOutputs('1 2', '1  2', 'TRIMMED'), false);
+  assert.equal(compareOutputs('hello', 'Hello', 'TRIMMED'), false);
+
+  // WHITESPACE_NORMALIZED collapses internal horizontal spaces, keeps line structure & token boundaries
+  assert.equal(compareOutputs('1   2\n3   4\n', '1 2\n3 4', 'WHITESPACE_NORMALIZED'), true);
+  assert.equal(compareOutputs('12', '1 2', 'WHITESPACE_NORMALIZED'), false);
+});
+
+test('Phase 2.2: evaluateTestCases computes weighted score and stops cleanly on empty/unsupported runtimes', async () => {
+  const adapter = new BrowserCodeExecutionAdapter();
+  const emptyEval = await adapter.evaluateTestCases(
+    { sourceCode: '   ', language: 'python' },
+    [{ id: 'tc1', input_text: '1', expected_output: '1' }],
+    'TRIMMED',
+    10
+  );
+  assert.equal(emptyEval.overallStatus, 'COMPILATION_ERROR');
+  assert.equal(emptyEval.scoreAwarded, 0);
+  assert.equal(emptyEval.failedCount, 1);
+
+  const customDriverRes = await adapter.evaluateTestCases(
+    { sourceCode: 'print(1)', language: 'ruby' },
+    [{ id: 'tc1', input_text: '1', expected_output: '1' }],
+    'TRIMMED',
+    10
+  );
+  assert.equal(customDriverRes.overallStatus, 'BROWSER_RUNTIME_UNSUPPORTED');
+  assert.equal(customDriverRes.scoreAwarded, 0);
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { getAdminStats, type AdminStats } from '../../api/admin';
 import { useAdminTheme } from '../../utils/adminTheme';
 import {
@@ -26,26 +26,20 @@ interface AdminOverviewViewProps {
 
 export function AdminOverviewView({ onNavigateTab }: AdminOverviewViewProps) {
   const { tokens } = useAdminTheme();
-  const [stats, setStats] = useState<AdminStats | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string>('');
-
-  const loadStats = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const data = await getAdminStats();
-      setStats(data);
-    } catch {
-      setError('Failed to fetch administrative metrics from server.');
-    } finally {
-      setLoading(false);
-    }
+  const {
+    data: stats = null,
+    isLoading: loading,
+    isError,
+    refetch,
+  } = useQuery<AdminStats>({
+    queryKey: ['admin', 'stats'],
+    queryFn: () => getAdminStats(),
+    staleTime: 30_000,
+  });
+  const error = isError ? 'Failed to fetch administrative metrics from server.' : '';
+  const loadStats = () => {
+    void refetch();
   };
-
-  useEffect(() => {
-    loadStats();
-  }, []);
 
   if (loading) {
     return (

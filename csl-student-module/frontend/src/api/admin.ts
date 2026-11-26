@@ -193,6 +193,12 @@ export interface AdminAssessment {
   max_attempts: number;
   max_tab_switches_warning: number;
   auto_submit_on_tab_limit: boolean;
+  proctoring_auto_submit_enabled?: boolean;
+  max_camera_violations?: number;
+  max_face_absence_seconds?: number;
+  multiple_face_threshold?: number;
+  max_devtools_incidents?: number;
+  screen_share_policy?: 'WARN' | 'REQUIRED' | 'AUTO_SUBMIT';
   scheduled_start_time?: string | null;
   scheduled_end_time?: string | null;
   opened_at?: string | null;
@@ -306,10 +312,17 @@ export interface AdminAssessmentConfig {
   max_attempts: number;
   max_tab_switches_warning: number;
   auto_submit_on_tab_limit: boolean;
+  proctoring_auto_submit_enabled?: boolean;
+  max_camera_violations?: number;
+  max_face_absence_seconds?: number;
+  multiple_face_threshold?: number;
+  max_devtools_incidents?: number;
+  screen_share_policy?: 'WARN' | 'REQUIRED' | 'AUTO_SUBMIT';
   export_header_bg_color: string;
   export_header_text_color: string;
   export_alt_row_color: string;
   enable_alt_row_styling: boolean;
+  enable_advanced_animations?: boolean;
   export_score_thresholds: ExportScoreThreshold[];
   is_active: boolean;
   updated_at: string;
@@ -407,10 +420,26 @@ export interface AdminAttemptReview {
     question_title: string;
     language: string;
     source_code: string;
+    submission_sequence?: number;
+    engine_version?: string;
     verdict: string;
     review_status?: string;
     score_awarded: number;
     max_marks?: number;
+    evaluation_summary?: {
+      total_test_cases?: number;
+      passed_count?: number;
+      failed_count?: number;
+      score_awarded?: number;
+      max_marks?: number;
+      comparison_mode?: string;
+      verdict?: string;
+      execution_time_ms?: number;
+      engine_version?: string;
+      untrusted_browser_evaluation?: boolean;
+      security_note?: string;
+      score_clamped?: boolean;
+    };
     reviewed_by?: string | null;
     reviewed_at?: string | null;
     review_notes?: string;
@@ -1812,6 +1841,8 @@ export async function exportCandidateDataCsv(filters?: {
 export interface AdminProgrammingTestCase {
   id?: string;
   is_public: boolean;
+  visibility_scope?: 'SAMPLE' | 'ADDITIONAL' | 'HIDDEN';
+  comparison_mode?: 'INHERIT' | 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
   input_text: string;
   expected_output: string;
   marks_weightage: number;
@@ -1827,6 +1858,7 @@ export interface AdminProgrammingDetails {
   constraints: string;
   input_format: string;
   output_format: string;
+  comparison_mode?: 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
   allowed_languages: string[];
   boilerplate_code: Record<string, string>;
   time_limit_seconds: number;
@@ -2117,6 +2149,54 @@ export async function reviewAdminProctoringSession(
 
 export async function fetchAdminProctoringEvidenceBlob(evidenceId: string): Promise<Blob> {
   const res = await adminApi.get(`/proctoring/evidence/${evidenceId}/view/`, { responseType: 'blob' });
+  return res.data;
+}
+
+export interface AdminProctoringIncidentItem {
+  id: number;
+  proctoring_session_id: string;
+  attempt_id: string | null;
+  attempt_state: string | null;
+  candidate_id: string | null;
+  candidate_name: string;
+  candidate_email: string;
+  register_number: string;
+  assessment_id: string | null;
+  assessment_title: string;
+  assessment_code: string;
+  event_type: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  timestamp: string;
+  created_at: string;
+  metadata: Record<string, any>;
+  occurrence_count: number;
+  auto_action_taken: string;
+  auto_submitted_reason: string;
+  review_status: 'PENDING' | 'ACKNOWLEDGED' | 'CLEARED' | 'CONFIRMED';
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+}
+
+export async function getAdminProctoringIncidents(params?: {
+  search?: string;
+  assessment_id?: string;
+  attempt_id?: string;
+  event_type?: string;
+  severity?: string;
+  review_status?: string;
+  auto_submitted_only?: boolean;
+}): Promise<{ incidents: AdminProctoringIncidentItem[]; count: number }> {
+  const res = await adminApi.get('/proctoring/incidents/', { params });
+  return res.data;
+}
+
+export async function reviewAdminProctoringIncident(
+  eventId: number,
+  reviewStatus: 'PENDING' | 'ACKNOWLEDGED' | 'CLEARED' | 'CONFIRMED'
+): Promise<{ success: boolean; id: number; review_status: string }> {
+  const res = await adminApi.post(`/proctoring/incidents/${eventId}/review/`, {
+    review_status: reviewStatus,
+  });
   return res.data;
 }
 

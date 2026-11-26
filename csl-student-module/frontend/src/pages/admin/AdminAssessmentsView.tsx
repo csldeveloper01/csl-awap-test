@@ -7,6 +7,15 @@ import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState, I
 import { PlusIcon, AssessmentsIcon } from '../../components/common/Icons';
 import { generateCodeFromTitle } from '../../utils/codeGenerator';
 import {
+  toggleAssessmentSelection,
+  toggleSelectAllAssessments,
+  areAllVisibleAssessmentsSelected,
+  areSomeVisibleAssessmentsSelected,
+  getAssessmentLifecycleAction,
+  getAssessmentQuestionCount,
+  formatAssessmentScheduleLabel,
+} from './assessmentSelection';
+import {
   getAdminAssessments,
   getAdminAssessmentDetail,
   createAdminAssessment,
@@ -89,11 +98,10 @@ export function AdminAssessmentsView({
   const [runningTestSimulation, setRunningTestSimulation] = useState<string | null>(null);
   const [isEditLocked, setIsEditLocked] = useState(false);
 
-  // View Mode: Grid (Mockup 3) vs List
+  // View Mode: Grid (3/2/1 Responsive) vs List
   const [viewLayout, setViewLayout] = useState<'GRID' | 'LIST'>('GRID');
-  const [bulkActionActive, setBulkActionActive] = useState(false);
 
-  // Bulk Selection & Deletion State
+  // Frontend-only Bulk Selection & Deletion State (completely decoupled from lifecycle status & Open navigation)
   const [selectedAssessmentIds, setSelectedAssessmentIds] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
@@ -487,18 +495,12 @@ export function AdminAssessmentsView({
     }
   };
 
-  const handleToggleSelectAllAssessments = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.checked) {
-      setSelectedAssessmentIds(assessments.map((a) => a.id));
-    } else {
-      setSelectedAssessmentIds([]);
-    }
+  const handleToggleSelectAllAssessments = () => {
+    setSelectedAssessmentIds((prev) => toggleSelectAllAssessments(displayedAssessments, prev));
   };
 
   const handleToggleSelectAssessment = (id: string) => {
-    setSelectedAssessmentIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
+    setSelectedAssessmentIds((prev) => toggleAssessmentSelection(prev, id));
   };
 
   const handleBulkDeleteAssessments = async () => {
@@ -2908,6 +2910,7 @@ export function AdminAssessmentsView({
         rightSlot={
           <>
             <label
+              title="Select or deselect all currently visible assessments for bulk operations"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -2924,11 +2927,17 @@ export function AdminAssessmentsView({
             >
               <input
                 type="checkbox"
-                checked={bulkActionActive}
-                onChange={(e) => setBulkActionActive(e.target.checked)}
+                data-testid="assessments-select-all"
+                checked={areAllVisibleAssessmentsSelected(displayedAssessments, selectedAssessmentIds)}
+                ref={(el) => {
+                  if (el) {
+                    el.indeterminate = areSomeVisibleAssessmentsSelected(displayedAssessments, selectedAssessmentIds);
+                  }
+                }}
+                onChange={handleToggleSelectAllAssessments}
                 style={{ cursor: 'pointer', accentColor: tokens.cslBlue }}
               />
-              <span>Bulk Select</span>
+              <span>Select All ({displayedAssessments.length})</span>
             </label>
 
             <div
@@ -3062,247 +3071,258 @@ export function AdminAssessmentsView({
           }
         />
       ) : viewLayout === 'GRID' ? (
-        /* ─── STITCH ASSESSMENT CARDS GRID ───────────────────────────── */
+        /* ─── COMPACT RESPONSIVE ASSESSMENT CARDS GRID (3 / 2 / 1 cols) ─── */
         <section
           aria-label="Assessment list"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(430px, 1fr))',
-            gap: '20px',
-            alignItems: 'stretch',
-          }}
+          className="csl-assessment-grid"
+          data-testid="assessments-responsive-grid"
         >
           {displayedAssessments.map((a: AdminAssessment) => {
             const poolSufficient = a.pool_sufficient ?? true;
             const isSelected = selectedAssessmentIds.includes(a.id);
+            const lifecycleAction = getAssessmentLifecycleAction(a);
+            const questionCount = getAssessmentQuestionCount(a);
+            const scheduleLabel = formatAssessmentScheduleLabel(a);
 
             return (
               <article
                 key={a.id}
+                data-testid={`assessment-card-${a.id}`}
                 style={{
                   backgroundColor: tokens.surfaceCard,
                   borderRadius: '10px',
                   border: `1px solid ${isSelected ? tokens.cslBlue : tokens.border}`,
-                  padding: '22px',
+                  padding: '14px 16px',
                   boxShadow: tokens.cardShadow,
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  gap: '16px',
+                  gap: '10px',
+                  height: '100%',
                   minWidth: 0,
+                  boxSizing: 'border-box',
                 }}
               >
-                {/* Header */}
-                <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', minWidth: 0 }}>
-                    {bulkActionActive && (
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => handleToggleSelectAssessment(a.id)}
-                        aria-label={`Select ${a.title}`}
-                        style={{ marginTop: '4px', cursor: 'pointer', accentColor: tokens.cslBlue }}
-                      />
-                    )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                        <h3
-                          onClick={() => handleOpenDetail(a)}
-                          style={{
-                            margin: 0,
-                            fontSize: '17px',
-                            fontWeight: 600,
-                            color: tokens.textPrimary,
-                            lineHeight: '22px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {a.title}
-                        </h3>
-                        {getStatusBadge(a.status, a.is_open)}
-                      </div>
-
-                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
-                        {a.is_standalone || !a.drives || a.drives.length === 0 ? (
-                          <StatusBadge label="Standalone" variant="neutral" size="sm" />
-                        ) : (
-                          <StatusBadge
-                            label={`Drive: ${a.drives[0].name}${a.drives.length > 1 ? ` (+${a.drives.length - 1})` : ''}`}
-                            variant="info"
-                            size="sm"
-                          />
-                        )}
-                        {a.delivery_mode === 'PDF_CODING' ? (
-                          <StatusBadge label="PDF Coding" variant="coding" size="sm" />
-                        ) : a.sections && a.sections.length > 0 ? (
-                          a.sections.slice(0, 3).map((s) => (
-                            <StatusBadge
-                              key={s.id || s.section_code}
-                              label={s.section_name || s.section_code}
-                              variant="neutral"
-                              size="sm"
-                            />
-                          ))
-                        ) : null}
+                {/* Header: Bulk Checkbox (selection-only) + Title + StatusBadge */}
+                <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, flex: 1 }}>
+                    <input
+                      type="checkbox"
+                      data-testid={`assessment-select-${a.id}`}
+                      checked={isSelected}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => handleToggleSelectAssessment(a.id)}
+                      aria-label={`Select ${a.title}`}
+                      title="Select assessment for bulk operations"
+                      style={{
+                        marginTop: '3px',
+                        width: '15px',
+                        height: '15px',
+                        flexShrink: 0,
+                        cursor: 'pointer',
+                        accentColor: tokens.cslBlue,
+                      }}
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0, flex: 1 }}>
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontSize: '15px',
+                          fontWeight: 600,
+                          color: tokens.textPrimary,
+                          lineHeight: '20px',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                      >
+                        {a.title}
+                      </h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '11px', fontFamily: tokens.monoFamily, color: tokens.textMuted }}>
+                          {a.code}
+                        </span>
+                        <span style={{ fontSize: '11px', color: tokens.textMuted }}>•</span>
+                        <span style={{ fontSize: '11px', color: tokens.textSecondary }}>{scheduleLabel}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Active Switch & Code */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
-                    <label
-                      title={a.status === 'OPEN' || a.is_open ? 'Click to close assessment' : 'Click to open assessment'}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: tokens.textSecondary,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span>{a.status === 'OPEN' || a.is_open ? 'Live' : 'Open'}</span>
-                      <input
-                        type="checkbox"
-                        checked={a.status === 'OPEN' || a.is_open}
-                        onChange={() => {
-                          if (a.status === 'OPEN') {
-                            handleOpenCloseModal(a);
-                          } else {
-                            handleOpen(a);
-                          }
-                        }}
-                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
-                      />
-                    </label>
-                    <span style={{ fontSize: '11px', fontFamily: tokens.monoFamily, color: tokens.textMuted }}>
-                      {a.code}
-                    </span>
-                  </div>
+                  <div style={{ flexShrink: 0 }}>{getStatusBadge(a.status, a.is_open)}</div>
                 </header>
 
-                {/* 4-Column Tabular Stats Strip */}
+                {/* Hierarchy & Delivery Mode Badges */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '5px' }}>
+                  {a.is_standalone || !a.drives || a.drives.length === 0 ? (
+                    <StatusBadge label="Standalone" variant="neutral" size="sm" />
+                  ) : (
+                    <StatusBadge
+                      label={`Drive: ${a.drives[0].name}${a.drives.length > 1 ? ` (+${a.drives.length - 1})` : ''}`}
+                      variant="info"
+                      size="sm"
+                    />
+                  )}
+                  {a.delivery_mode === 'PDF_CODING' ? (
+                    <StatusBadge label="PDF Coding" variant="coding" size="sm" />
+                  ) : a.sections && a.sections.length > 0 ? (
+                    a.sections.slice(0, 2).map((s) => (
+                      <StatusBadge
+                        key={s.id || s.section_code}
+                        label={s.section_name || s.section_code}
+                        variant="neutral"
+                        size="sm"
+                      />
+                    ))
+                  ) : null}
+                  {a.delivery_mode !== 'PDF_CODING' && (
+                    <StatusBadge
+                      label={poolSufficient ? 'Pool Ready' : 'Pool Low'}
+                      variant={poolSufficient ? 'success' : 'warning'}
+                      size="sm"
+                      dot
+                    />
+                  )}
+                </div>
+
+                {/* Compact 4-Column Tabular Metrics Strip */}
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(4, 1fr)',
-                    gap: '10px',
-                    padding: '12px 0',
+                    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                    gap: '6px',
+                    padding: '8px 0',
                     borderTop: `1px solid ${tokens.border}`,
                     borderBottom: `1px solid ${tokens.border}`,
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Attempts</div>
-                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
-                      {a.attempts_count || 0}
+                    <div style={{ fontSize: '10.5px', fontWeight: 500, color: tokens.textMuted }}>Questions</div>
+                    <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary }}>
+                      {questionCount} <span style={{ fontSize: '10.5px', color: tokens.textMuted, fontWeight: 400 }}>({a.pool_questions_count || 0})</span>
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Total Marks</div>
-                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
+                    <div style={{ fontSize: '10.5px', fontWeight: 500, color: tokens.textMuted }}>Marks</div>
+                    <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary }}>
                       {a.total_marks || 0}
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Duration</div>
-                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
-                      {a.duration_minutes || 0} min
+                    <div style={{ fontSize: '10.5px', fontWeight: 500, color: tokens.textMuted }}>Duration</div>
+                    <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary }}>
+                      {a.duration_minutes || 0}m
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: '11px', fontWeight: 500, color: tokens.textMuted }}>Colleges</div>
-                    <div className="csl-tabular" style={{ fontSize: '14px', fontWeight: 600, color: tokens.textPrimary, marginTop: '2px' }}>
-                      {a.eligible_colleges_count || 0}
+                    <div style={{ fontSize: '10.5px', fontWeight: 500, color: tokens.textMuted }}>Attempts</div>
+                    <div className="csl-tabular" style={{ fontSize: '13px', fontWeight: 600, color: tokens.textPrimary }}>
+                      {a.attempts_count || 0}
                     </div>
                   </div>
                 </div>
 
-                {/* Pool Sufficiency & Manage Pool Row */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <StatusBadge
-                      label={poolSufficient ? 'Pool Sufficient' : 'Pool Insufficient'}
-                      variant={poolSufficient ? 'success' : 'warning'}
-                      dot
-                    />
-                    <span className="csl-tabular" style={{ fontSize: '12.5px', color: tokens.textSecondary }}>
-                      {a.pool_questions_count || 0} Qs available
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenDetail(a, 'questions')}
-                    className="csl-btn-secondary"
-                    style={{ padding: '5px 12px', fontSize: '12px' }}
-                  >
-                    Manage Pool
-                  </button>
-                </div>
-
-                {/* Clean Card Footer Controls */}
+                {/* Card Footer: Explicit Open + Explicit Lifecycle + Management Controls */}
                 <footer
                   style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     flexWrap: 'wrap',
-                    gap: '8px',
-                    paddingTop: '12px',
-                    borderTop: `1px solid ${tokens.border}`,
+                    gap: '6px',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
+                      data-testid={`assessment-open-${a.id}`}
                       onClick={() => handleOpenDetail(a)}
-                      className="csl-btn-secondary"
-                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                      className="csl-btn-primary"
+                      style={{ padding: '4px 10px', fontSize: '12px' }}
+                      title="Open assessment details"
                     >
-                      View
+                      Open
                     </button>
+
+                    {lifecycleAction?.type === 'PREPARE' && (
+                      <button
+                        type="button"
+                        data-testid={`assessment-lifecycle-${a.id}`}
+                        onClick={() => handlePrepare(a)}
+                        title={lifecycleAction.title}
+                        className="csl-btn-secondary"
+                        style={{ padding: '4px 9px', fontSize: '11.5px', color: tokens.cslBlue }}
+                      >
+                        {lifecycleAction.label}
+                      </button>
+                    )}
+                    {lifecycleAction?.type === 'ACTIVATE' && (
+                      <button
+                        type="button"
+                        data-testid={`assessment-lifecycle-${a.id}`}
+                        onClick={() => handleOpen(a)}
+                        title={lifecycleAction.title}
+                        style={{
+                          padding: '4px 9px',
+                          fontSize: '11.5px',
+                          fontWeight: 600,
+                          borderRadius: '7px',
+                          border: `1px solid ${tokens.successBorder}`,
+                          backgroundColor: tokens.successBg,
+                          color: tokens.successText,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {lifecycleAction.label}
+                      </button>
+                    )}
+                    {lifecycleAction?.type === 'DEACTIVATE' && (
+                      <button
+                        type="button"
+                        data-testid={`assessment-lifecycle-${a.id}`}
+                        onClick={() => handleOpenCloseModal(a)}
+                        title={lifecycleAction.title}
+                        style={{
+                          padding: '4px 9px',
+                          fontSize: '11.5px',
+                          fontWeight: 600,
+                          borderRadius: '7px',
+                          border: `1px solid ${tokens.dangerBorder}`,
+                          backgroundColor: tokens.dangerBg,
+                          color: tokens.dangerText,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {lifecycleAction.label}
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => handleOpenEdit(a)}
                       className="csl-btn-secondary"
-                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                      style={{ padding: '4px 8px', fontSize: '11.5px' }}
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleOpenDetail(a, 'colleges')}
+                      onClick={() => handleOpenDetail(a, 'questions')}
                       className="csl-btn-secondary"
-                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                      style={{ padding: '4px 8px', fontSize: '11.5px' }}
                     >
-                      Colleges
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleArchive(a)}
-                      className="csl-btn-secondary"
-                      style={{ padding: '5px 10px', fontSize: '12px', color: tokens.textMuted }}
-                    >
-                      Archive
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteAssessment(a)}
-                      className="csl-btn-secondary"
-                      style={{ padding: '5px 10px', fontSize: '12px', color: tokens.danger }}
-                    >
-                      Delete
+                      Pool
                     </button>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                     {a.is_seb_required && (
                       <button
                         type="button"
                         onClick={() => downloadAdminAssessmentSebConfig(a.id, `${a.code}.seb`)}
                         className="csl-btn-secondary"
-                        style={{ padding: '5px 10px', fontSize: '12px' }}
+                        style={{ padding: '4px 7px', fontSize: '11px' }}
                         title="Download Safe Exam Browser (.seb) config"
                       >
                         .seb
@@ -3314,14 +3334,34 @@ export function AdminAssessmentsView({
                       disabled={runningTestSimulation === a.id}
                       className="csl-btn-secondary"
                       style={{
-                        padding: '5px 12px',
-                        fontSize: '12px',
+                        padding: '4px 8px',
+                        fontSize: '11.5px',
                         color: tokens.cslBlue,
                         cursor: runningTestSimulation === a.id ? 'wait' : 'pointer',
                       }}
-                      title="Run an isolated admin simulation attempt without affecting candidate statistics"
+                      title="Run an isolated admin simulation attempt"
                     >
-                      {runningTestSimulation === a.id ? 'Starting...' : '▶ Test Run'}
+                      {runningTestSimulation === a.id ? '...' : '▶ Test Run'}
+                    </button>
+                    {a.status !== 'ARCHIVED' && (
+                      <button
+                        type="button"
+                        onClick={() => handleArchive(a)}
+                        className="csl-btn-secondary"
+                        style={{ padding: '4px 7px', fontSize: '11px', color: tokens.textMuted }}
+                        title="Archive assessment"
+                      >
+                        Archive
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAssessment(a)}
+                      className="csl-btn-secondary"
+                      style={{ padding: '4px 7px', fontSize: '11px', color: tokens.danger }}
+                      title="Delete assessment"
+                    >
+                      Del
                     </button>
                   </div>
                 </footer>
@@ -3348,13 +3388,15 @@ export function AdminAssessmentsView({
                 <th style={{ padding: '12px 16px', width: '40px', textAlign: 'center' }}>
                   <input
                     type="checkbox"
-                    checked={assessments.length > 0 && selectedAssessmentIds.length === assessments.length}
+                    checked={areAllVisibleAssessmentsSelected(displayedAssessments, selectedAssessmentIds)}
                     ref={(el) => {
-                      if (el) el.indeterminate = selectedAssessmentIds.length > 0 && selectedAssessmentIds.length < assessments.length;
+                      if (el) {
+                        el.indeterminate = areSomeVisibleAssessmentsSelected(displayedAssessments, selectedAssessmentIds);
+                      }
                     }}
                     onChange={handleToggleSelectAllAssessments}
                     style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: tokens.cslBlue }}
-                    title="Select / Deselect All Assessments"
+                    title="Select / Deselect All Visible Assessments"
                   />
                 </th>
                 <th style={{ padding: '12px 16px', fontSize: '12px', fontWeight: 500, color: tokens.textSecondary, width: '120px' }}>Code</th>

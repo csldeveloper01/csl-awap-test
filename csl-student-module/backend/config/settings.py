@@ -342,6 +342,24 @@ else:
     }
 
 
+# ---------------------------------------------------------------------------
+# Celery Background Worker Configuration
+# Uses REDIS_URL / CELERY_BROKER_URL when available; defaults safely to eager
+# synchronous execution in local/test dev environments without a broker.
+# ---------------------------------------------------------------------------
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL or "").strip()
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL).strip()
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ALWAYS_EAGER = os.getenv(
+    "CELERY_TASK_ALWAYS_EAGER",
+    "False" if CELERY_BROKER_URL else "True",
+).lower() in ("1", "true", "yes")
+CELERY_TASK_EAGER_PROPAGATES = False
+
+
 # Judge0 Code Execution Engine Configuration (Phase 3.1)
 JUDGE0_API_URL = os.getenv('JUDGE0_API_URL', '')
 JUDGE0_API_KEY = os.getenv('JUDGE0_API_KEY', '')

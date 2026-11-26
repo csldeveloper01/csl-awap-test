@@ -473,3 +473,134 @@ class BrowserFirstCodingWorkflowTestCase(TestCase):
         self.assertEqual(mcq_attempt.aptitude_score, 5)
         self.assertEqual(mcq_attempt.total_score, 5)
         self.assertEqual(mcq_attempt.percentage, 100.0)
+
+    def test_browser_auto_evaluation_stores_results_clamps_score_and_preserves_sequence(self):
+        # Add an additional & hidden test case on prog_q
+        tc_add = ProgrammingTestCase.objects.create(
+            programming_question=self.prog_q,
+            visibility_scope=ProgrammingTestCase.VisibilityScope.ADDITIONAL,
+            is_public=False,
+            input_text="5 7\n",
+            expected_output="12\n",
+            marks_weightage=2.0,
+        )
+        tc_hid = ProgrammingTestCase.objects.create(
+            programming_question=self.prog_q,
+            visibility_scope=ProgrammingTestCase.VisibilityScope.HIDDEN,
+            is_public=False,
+            input_text="100 200\n",
+            expected_output="300\n",
+            marks_weightage=3.0,
+        )
+
+        # Update frozen snapshot to include the sample test case (matching start_assessment_for_candidate)
+        snap = self.attempt.question_snapshots.get(question=self.coding_q)
+        snap.programming_data = {
+            "problem_statement": self.prog_q.problem_statement,
+            "comparison_mode": "TRIMMED",
+            "allowed_languages": ["python", "java"],
+            "boilerplate_code": self.prog_q.boilerplate_code,
+            "test_cases": [
+                {
+                    "id": str(self.prog_q.test_cases.filter(is_public=True).first().id),
+                    "input_text": "2 3\n",
+                    "expected_output": "5\n",
+                    "is_public": True,
+                    "visibility_scope": "SAMPLE",
+                    "marks_weightage": 5.0,
+                }
+            ],
+        }
+        snap.save(update_fields=["programming_data"])
+
+        # Student detail payload includes comparison_mode while keeping sample_test_cases public-only
+        attempt_detail = self.cand1_client.get(f"/api/assessment/attempts/{self.attempt.id}/")
+        self.assertEqual(attempt_detail.status_code, status.HTTP_200_OK)
+        coding_item = next(q for q in attempt_detail.data["questions"] if q["question_id"] == self.coding_q.id)
+        self.assertEqual(coding_item["programming_details"]["comparison_mode"], "TRIMMED")
+        self.assertEqual(len(coding_item["programming_details"]["sample_test_cases"]), 1)
+
+        # On Submit, browser fetches full evaluation test-case suite (SAMPLE + ADDITIONAL + HIDDEN)
+        snap.programming_data["test_cases"].extend([
+            {"id": str(tc_add.id), "input_text": tc_add.input_text, "expected_output": tc_add.expected_output, "is_public": False, "visibility_scope": "ADDITIONAL", "marks_weightage": 2.0},
+            {"id": str(tc_hid.id), "input_text": tc_hid.input_text, "expected_output": tc_hid.expected_output, "is_public": False, "visibility_scope": "HIDDEN", "marks_weightage": 3.0},
+        ])
+        snap.save(update_fields=["programming_data"])
+        eval_cases_res = self.cand1_client.get(
+            "/api/assessment/code/evaluation-cases/",
+            {"attempt_id": str(self.attempt.id), "question_id": self.coding_q.id},
+        )
+        self.assertEqual(eval_cases_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(eval_cases_res.data["test_cases"]), 3)
+
+        # 1. Submission #1 with partial browser evaluation (7.5 / 10)
+        res1 = self.cand1_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(self.attempt.id),
+                "question_id": self.coding_q.id,
+                "language": "python",
+                "source_code": "a, b = map(int, input().split()); print(a + b)",
+                "engine_version": "pyodide-worker-v1",
+                "evaluation_summary": {
+                    "total_test_cases": 3,
+                    "passed_count": 2,
+                    "failed_count": 1,
+                    "score_awarded": 7.5,
+                    "max_marks": 10.0,
+                    "comparison_mode": "TRIMMED",
+                    "verdict": "WRONG_ANSWER",
+                    "execution_time_ms": 18.2,
+                },
+                "test_case_results": [
+                    {"test_case_id": str(self.prog_q.test_cases.filter(is_public=True).first().id), "status": "ACCEPTED", "passed": True, "actual_output": "5", "execution_time_ms": 5.0},
+                    {"test_case_id": str(tc_add.id), "status": "ACCEPTED", "passed": True, "actual_output": "12", "execution_time_ms": 6.0},
+                    {"test_case_id": str(tc_hid.id), "status": "WRONG_ANSWER", "passed": False, "actual_output": "299", "execution_time_ms": 7.2},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED, res1.data)
+        self.assertEqual(res1.data["submission_sequence"], 1)
+        self.assertEqual(res1.data["engine_version"], "pyodide-worker-v1")
+        self.assertEqual(res1.data["review_status"], CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED)
+        self.assertEqual(res1.data["score_awarded"], 7.5)
+        self.assertFalse(res1.data["requires_manual_evaluation"])
+        # Non-public actual outputs must not echo back in response
+        self.assertIsNone(res1.data["results"][2]["actual_output"])
+
+        # 2. Submission #2 attempting to spoof score_awarded=999.0 -> clamped strictly to max_marks=10.0!
+        res2 = self.cand1_client.post(
+            "/api/assessment/code/submit/",
+            {
+                "attempt_id": str(self.attempt.id),
+                "question_id": self.coding_q.id,
+                "language": "java",
+                "source_code": "public class Main { public static void main(String[] a) {} }",
+                "engine_version": "teavm-wasm-0.14.1",
+                "evaluation_summary": {
+                    "total_test_cases": 3,
+                    "passed_count": 3,
+                    "failed_count": 0,
+                    "score_awarded": 999.0,
+                    "max_marks": 999.0,
+                    "comparison_mode": "EXACT",
+                    "verdict": "ACCEPTED",
+                    "execution_time_ms": 12.0,
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res2.data["submission_sequence"], 2)
+        self.assertEqual(res2.data["score_awarded"], 10.0)
+        self.assertTrue(res2.data["evaluation_summary"]["score_clamped"])
+        self.assertTrue(res2.data["evaluation_summary"]["untrusted_browser_evaluation"])
+
+        # Finalize attempt -> uses bounded coding score (10) + MCQ (5) = 15, state SUBMITTED
+        fin_res = self.cand1_client.post(f"/api/assessment/attempts/{self.attempt.id}/finalize/", {}, format="json")
+        self.assertEqual(fin_res.status_code, status.HTTP_200_OK)
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.state, AssessmentAttempt.State.SUBMITTED)
+        self.assertEqual(self.attempt.coding_score, 10)
+        self.assertEqual(self.attempt.total_score, 15)

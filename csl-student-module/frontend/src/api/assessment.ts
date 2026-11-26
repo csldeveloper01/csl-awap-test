@@ -135,6 +135,9 @@ export interface ProgrammingTestCaseSample {
   expected_output: string;
   explanation?: string;
   marks_weightage?: number;
+  is_public?: boolean;
+  visibility_scope?: 'SAMPLE' | 'ADDITIONAL' | 'HIDDEN';
+  comparison_mode?: 'INHERIT' | 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
 }
 
 export interface ProgrammingDetails {
@@ -142,11 +145,13 @@ export interface ProgrammingDetails {
   constraints?: string;
   input_format?: string;
   output_format?: string;
+  comparison_mode?: 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
   allowed_languages: string[];
   boilerplate_code: Record<string, string>;
   time_limit_seconds: number;
   memory_limit_mb: number;
   sample_test_cases: ProgrammingTestCaseSample[];
+  evaluation_test_cases?: ProgrammingTestCaseSample[];
 }
 
 export interface QuestionSnapshot {
@@ -154,6 +159,8 @@ export interface QuestionSnapshot {
   question_id?: number;
   section_type: string;
   category?: string;
+  difficulty?: 'EASY' | 'MEDIUM' | 'HARD' | string;
+  marks?: number;
   prompt: string;
   options: QuestionOption[];
   selected_option: string;
@@ -265,6 +272,11 @@ export interface IntegrityEventResponse {
   is_finalized: boolean;
   state: string;
   flag_reason: string;
+}
+
+export async function fetchPublicAppearanceConfig(): Promise<{ enable_advanced_animations: boolean }> {
+  const res = await assessmentApi.get<{ enable_advanced_animations: boolean }>('/appearance-config/');
+  return res.data;
 }
 
 export const getStudentColleges = async (params?: { search?: string; drive_code?: string; code?: string }): Promise<CollegeOption[]> => {
@@ -581,16 +593,43 @@ export interface BrowserExecutionMetadataPayload {
   is_verified?: boolean;
 }
 
+export interface CodeEvaluationSummaryPayload {
+  total_test_cases: number;
+  passed_count: number;
+  failed_count: number;
+  score_awarded: number;
+  max_marks: number;
+  comparison_mode: 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED' | string;
+  verdict: string;
+  execution_time_ms: number;
+  engine_version: string;
+  compilation_errors?: string;
+}
+
+export interface CodeTestCaseResultPayload {
+  test_case_id: string;
+  status: string;
+  passed: boolean;
+  actual_output: string;
+  error_message?: string;
+  execution_time_ms: number;
+}
+
 export interface CodeSubmitPayload {
   attempt_id: string;
   question_id: number;
   language: string;
   source_code: string;
+  engine_version?: string;
+  evaluation_summary?: CodeEvaluationSummaryPayload;
+  test_case_results?: CodeTestCaseResultPayload[];
   browser_execution_metadata?: BrowserExecutionMetadataPayload;
 }
 
 export interface CodeSubmitResult {
   submission_id: string;
+  submission_sequence?: number;
+  engine_version?: string;
   status?: string;
   review_status?: string;
   verdict: string;
@@ -599,13 +638,21 @@ export interface CodeSubmitResult {
   question_id?: number;
   created_at?: string;
   score_awarded?: number;
+  max_marks?: number;
   is_authoritative_score?: boolean;
+  requires_manual_evaluation?: boolean;
+  evaluation_summary?: CodeEvaluationSummaryPayload & {
+    untrusted_browser_evaluation?: boolean;
+    security_note?: string;
+    score_clamped?: boolean;
+  };
   browser_execution_metadata?: BrowserExecutionMetadataPayload;
   total_test_cases?: number;
   passed_test_cases?: number;
   execution_time_ms?: number;
   compile_output?: string;
   results?: Array<{
+    index?: number;
     test_case_id: string;
     is_public: boolean;
     status: string;
@@ -614,8 +661,26 @@ export interface CodeSubmitResult {
     actual_output?: string | null;
     expected_output?: string | null;
     input_text?: string | null;
+    error_message?: string | null;
   }>;
 }
+
+export interface EvaluationCasesResponse {
+  question_id: number;
+  comparison_mode: 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED';
+  max_marks: number;
+  test_cases: ProgrammingTestCaseSample[];
+}
+
+export const fetchEvaluationCases = async (
+  attemptId: string,
+  questionId: number
+): Promise<EvaluationCasesResponse> => {
+  const res = await assessmentApi.get<EvaluationCasesResponse>('/code/evaluation-cases/', {
+    params: { attempt_id: attemptId, question_id: questionId },
+  });
+  return res.data;
+};
 
 export const submitCode = async (payload: CodeSubmitPayload): Promise<CodeSubmitResult> => {
   const res = await assessmentApi.post<CodeSubmitResult>('/code/submit/', payload);
@@ -716,6 +781,16 @@ export interface ProctoringSessionResponse {
   risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   risk_breakdown: Record<string, any>;
   review_status: 'PENDING' | 'CLEARED' | 'NEEDS_REVIEW' | 'CONFIRMED_VIOLATION';
+  proctoring_policy?: {
+    max_tab_switches_warning: number;
+    auto_submit_on_tab_limit: boolean;
+    proctoring_auto_submit_enabled: boolean;
+    max_camera_violations: number;
+    max_face_absence_seconds: number;
+    multiple_face_threshold: number;
+    max_devtools_incidents: number;
+    screen_share_policy: 'WARN' | 'REQUIRED' | 'AUTO_SUBMIT';
+  };
   calibration?: any;
   recent_events?: any[];
 }
@@ -769,7 +844,17 @@ export const recordProctoringEvent = async (
     event_id?: string;
     metadata?: Record<string, any>;
   }
-): Promise<{ status: string; event_id?: number; event_type?: string; risk_score: number; risk_level: string }> => {
+): Promise<{
+  status: string;
+  event_id?: number;
+  event_type?: string;
+  risk_score: number;
+  risk_level: string;
+  occurrence_count?: number;
+  auto_submitted?: boolean;
+  attempt_state?: string;
+  auto_submitted_reason?: string;
+}> => {
   const res = await assessmentApi.post(`/proctoring/${sessionId}/events/`, payload);
   return res.data;
 };

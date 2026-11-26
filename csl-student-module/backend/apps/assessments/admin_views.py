@@ -139,6 +139,14 @@ class AdminStatsView(APIView):
     permission_classes = [IsCSLAdminUser]
 
     def get(self, request):
+        from django.core.cache import cache
+        bypass_cache = request.query_params.get("fresh") == "true"
+        cache_key = "csl:admin:stats:v2"
+        if not bypass_cache:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response(cached)
+
         colleges_count = College.objects.count()
         drives_count = Drive.objects.count()
         active_drives_count = Drive.objects.filter(status=Drive.Status.ACTIVE).count()
@@ -151,6 +159,7 @@ class AdminStatsView(APIView):
             state__in=[
                 AssessmentAttempt.State.SUBMITTED,
                 AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
+                AssessmentAttempt.State.AUTO_SUBMITTED,
             ],
             is_simulation=False
         ).count()
@@ -209,7 +218,7 @@ class AdminStatsView(APIView):
                 "can_undo": log.is_reversible and log.reversal_status == AssessmentAuditLog.ReversalStatus.REVERSIBLE,
             })
 
-        return Response({
+        payload = {
             "colleges_count": colleges_count,
             "drives_count": drives_count,
             "active_drives_count": active_drives_count,
@@ -250,7 +259,9 @@ class AdminStatsView(APIView):
                 "status": "Action Required!" if unreviewed_integrity_count > 0 or flagged_count > 0 else "OK",
             },
             "recent_activities": recent_activities,
-        })
+        }
+        cache.set(cache_key, payload, timeout=30)
+        return Response(payload)
 
 
 # ==============================================================================
@@ -1385,6 +1396,11 @@ def _upsert_coding_details_for_question(question: QuestionBank, coding_details: 
     if not isinstance(coding_details, dict):
         return None
 
+    valid_comp_modes = set(ProgrammingQuestion.ComparisonMode.values)
+    comp_mode = str(coding_details.get("comparison_mode") or ProgrammingQuestion.ComparisonMode.TRIMMED).strip().upper()
+    if comp_mode not in valid_comp_modes:
+        comp_mode = ProgrammingQuestion.ComparisonMode.TRIMMED
+
     prog, _ = ProgrammingQuestion.objects.update_or_create(
         question=question,
         defaults={
@@ -1392,6 +1408,7 @@ def _upsert_coding_details_for_question(question: QuestionBank, coding_details: 
             "constraints": coding_details.get("constraints", ""),
             "input_format": coding_details.get("input_format", ""),
             "output_format": coding_details.get("output_format", ""),
+            "comparison_mode": comp_mode,
             "allowed_languages": coding_details.get("allowed_languages") or ["python", "java"],
             "boilerplate_code": coding_details.get("boilerplate_code") or {},
             "time_limit_seconds": float(coding_details.get("time_limit_seconds") or 2.0),
@@ -1417,13 +1434,24 @@ def _upsert_coding_details_for_question(question: QuestionBank, coding_details: 
         for tc_idx, tc in enumerate(test_cases):
             if not isinstance(tc, dict):
                 continue
+            raw_scope = str(tc.get("visibility_scope") or "").strip().upper()
+            if raw_scope not in ProgrammingTestCase.VisibilityScope.values:
+                raw_scope = (
+                    ProgrammingTestCase.VisibilityScope.SAMPLE
+                    if bool(tc.get("is_public", False))
+                    else ProgrammingTestCase.VisibilityScope.HIDDEN
+                )
+            tc_is_public = raw_scope == ProgrammingTestCase.VisibilityScope.SAMPLE
+            tc_comp = str(tc.get("comparison_mode") or "INHERIT").strip().upper()
             tc_id = tc.get("id")
             if tc_id and replace_test_cases:
                 existing = prog.test_cases.filter(id=tc_id).first()
                 if existing:
                     existing.input_text = tc.get("input_text", "")
                     existing.expected_output = tc.get("expected_output", "")
-                    existing.is_public = bool(tc.get("is_public", False))
+                    existing.visibility_scope = raw_scope
+                    existing.is_public = tc_is_public
+                    existing.comparison_mode = tc_comp
                     existing.marks_weightage = float(tc.get("marks_weightage") or 1.0)
                     existing.explanation = tc.get("explanation", "")
                     existing.order = int(tc.get("order") or (tc_idx + 1))
@@ -1434,7 +1462,9 @@ def _upsert_coding_details_for_question(question: QuestionBank, coding_details: 
                 programming_question=prog,
                 input_text=tc.get("input_text", ""),
                 expected_output=tc.get("expected_output", ""),
-                is_public=bool(tc.get("is_public", False)),
+                visibility_scope=raw_scope,
+                is_public=tc_is_public,
+                comparison_mode=tc_comp,
                 marks_weightage=float(tc.get("marks_weightage") or 1.0),
                 explanation=tc.get("explanation", ""),
                 order=int(tc.get("order") or (tc_idx + 1)),
@@ -2752,6 +2782,7 @@ class AdminResultsView(APIView):
                 AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
                 AssessmentAttempt.State.TIMED_OUT,
                 AssessmentAttempt.State.FLAGGED_FOR_REVIEW,
+                AssessmentAttempt.State.AUTO_SUBMITTED,
             ],
             is_simulation=False
         ).select_related("candidate__college_ref", "assessment").order_by("-submitted_at", "-created_at")
@@ -4989,6 +5020,8 @@ class AdminProgrammingQuestionDetailView(APIView):
             {
                 "id": str(tc.id),
                 "is_public": tc.is_public,
+                "visibility_scope": getattr(tc, "visibility_scope", "SAMPLE" if tc.is_public else "HIDDEN"),
+                "comparison_mode": getattr(tc, "comparison_mode", "INHERIT") or "INHERIT",
                 "input_text": tc.input_text,
                 "expected_output": tc.expected_output,
                 "marks_weightage": tc.marks_weightage,
@@ -5006,6 +5039,7 @@ class AdminProgrammingQuestionDetailView(APIView):
             "constraints": prog.constraints,
             "input_format": prog.input_format,
             "output_format": prog.output_format,
+            "comparison_mode": getattr(prog, "comparison_mode", "TRIMMED") or "TRIMMED",
             "allowed_languages": prog.allowed_languages,
             "boilerplate_code": prog.boilerplate_code,
             "time_limit_seconds": prog.time_limit_seconds,
@@ -6272,4 +6306,130 @@ class AdminProctoringEvidenceView(APIView):
         response = HttpResponse(raw_bytes, content_type="image/jpeg")
         response["Content-Disposition"] = f'inline; filename="evidence_{evidence.id}.jpg"'
         return response
+
+
+class AdminProctoringIncidentTimelineView(APIView):
+    """
+    Aggregated incident timeline across ProctoringEvents for CSL Sentinel Auditing.
+    Filterable by candidate search/id, assessment_id, attempt_id, event_type,
+    severity, review_status, and auto_submitted_only.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def get(self, request):
+        from .models import ProctoringEvent
+
+        qs = ProctoringEvent.objects.select_related(
+            "proctoring_session",
+            "proctoring_session__student",
+            "proctoring_session__assessment",
+            "proctoring_session__assessment_session",
+            "reviewed_by",
+        ).order_by("-created_at")
+
+        candidate_search = (request.query_params.get("search") or "").strip()
+        assessment_id = (request.query_params.get("assessment_id") or "").strip()
+        attempt_id = (request.query_params.get("attempt_id") or "").strip()
+        event_type = (request.query_params.get("event_type") or "").strip()
+        severity = (request.query_params.get("severity") or "").strip()
+        review_status = (request.query_params.get("review_status") or "").strip()
+        auto_submitted_only = (request.query_params.get("auto_submitted_only") or "").strip().lower() == "true"
+
+        if candidate_search:
+            qs = qs.filter(
+                Q(proctoring_session__student__full_name__icontains=candidate_search)
+                | Q(proctoring_session__student__email__icontains=candidate_search)
+                | Q(proctoring_session__student__register_number__icontains=candidate_search)
+                | Q(proctoring_session__assessment_session__id__icontains=candidate_search)
+            )
+        if assessment_id:
+            qs = qs.filter(proctoring_session__assessment_id=assessment_id)
+        if attempt_id:
+            qs = qs.filter(proctoring_session__assessment_session_id=attempt_id)
+        if event_type:
+            qs = qs.filter(event_type=event_type)
+        if severity:
+            qs = qs.filter(severity=severity)
+        if review_status:
+            qs = qs.filter(review_status=review_status)
+        if auto_submitted_only:
+            qs = qs.filter(
+                Q(auto_action_taken__isnull=False) & ~Q(auto_action_taken="")
+                | Q(proctoring_session__assessment_session__state=AssessmentAttempt.State.AUTO_SUBMITTED)
+            )
+
+        events = list(qs[:250])
+
+        # Compute occurrence counts per (session, event_type) in a single grouped query
+        session_ids = {ev.proctoring_session_id for ev in events}
+        counts_map = {}
+        if session_ids:
+            grouped = (
+                ProctoringEvent.objects.filter(proctoring_session_id__in=session_ids)
+                .values("proctoring_session_id", "event_type")
+                .annotate(total=Count("id"))
+            )
+            for g in grouped:
+                counts_map[(g["proctoring_session_id"], g["event_type"])] = g["total"]
+
+        items = []
+        for ev in events:
+            sess = ev.proctoring_session
+            cand = sess.student
+            ass = sess.assessment
+            att = sess.assessment_session
+            items.append({
+                "id": ev.id,
+                "proctoring_session_id": str(sess.id),
+                "attempt_id": str(att.id) if att else None,
+                "attempt_state": att.state if att else None,
+                "candidate_id": str(cand.id) if cand else None,
+                "candidate_name": cand.full_name if cand else "—",
+                "candidate_email": cand.email if cand else "—",
+                "register_number": cand.register_number if cand else "—",
+                "assessment_id": str(ass.id) if ass else None,
+                "assessment_title": ass.title if ass else "Platform Assessment",
+                "assessment_code": ass.code if ass else "—",
+                "event_type": ev.event_type,
+                "severity": ev.severity,
+                "timestamp": ev.timestamp,
+                "created_at": ev.created_at,
+                "metadata": ev.metadata or {},
+                "occurrence_count": counts_map.get((ev.proctoring_session_id, ev.event_type), 1),
+                "auto_action_taken": ev.auto_action_taken or "",
+                "auto_submitted_reason": (att.auto_submitted_reason or att.flag_reason) if att else "",
+                "review_status": ev.review_status,
+                "reviewed_by_name": getattr(ev.reviewed_by, "username", None),
+                "reviewed_at": ev.reviewed_at,
+            })
+
+        return Response({"incidents": items, "count": len(items)}, status=status.HTTP_200_OK)
+
+
+class AdminProctoringIncidentReviewView(APIView):
+    """
+    Allows admin to mark an individual proctoring incident PENDING / ACKNOWLEDGED / CLEARED / CONFIRMED.
+    """
+    permission_classes = [IsCSLAdminUser]
+
+    def post(self, request, event_id):
+        from .models import ProctoringEvent
+
+        ev = get_object_or_404(ProctoringEvent, id=event_id)
+        next_status = (request.data.get("review_status") or "").strip().upper()
+        valid = {choice[0] for choice in ProctoringEvent.ReviewStatus.choices}
+        if next_status not in valid:
+            return Response({"detail": f"Invalid review_status. Allowed: {sorted(valid)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ev.review_status = next_status
+        ev.reviewed_by = request.user
+        ev.reviewed_at = timezone.now()
+        ev.save(update_fields=["review_status", "reviewed_by", "reviewed_at"])
+        return Response({
+            "success": True,
+            "id": ev.id,
+            "review_status": ev.review_status,
+            "reviewed_by_name": getattr(request.user, "username", None),
+            "reviewed_at": ev.reviewed_at,
+        }, status=status.HTTP_200_OK)
 

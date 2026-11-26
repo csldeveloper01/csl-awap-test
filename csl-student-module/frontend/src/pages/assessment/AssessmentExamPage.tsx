@@ -4,7 +4,10 @@ import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import { SecurePdfViewer } from '../../components/assessment/SecurePdfViewer';
 import { CodingPlaygroundPane } from '../../components/assessment/CodingPlaygroundPane';
 import { ProctoringStatusPanel } from '../../components/assessment/ProctoringStatusPanel';
+import { DeviceCompatibilityGate } from '../../components/assessment/DeviceCompatibilityGate';
 import { clearAttemptCodingDrafts } from '../../utils/codeExecution/draftStorage';
+import { sharedBrowserExecutionAdapter } from '../../utils/codeExecution/BrowserCodeExecutionAdapter';
+import { evaluateDevToolsSignals } from '../../utils/proctoringSignals';
 import {
   getProctoringStreams,
   updateCachedCameraStream,
@@ -25,6 +28,7 @@ import {
   fetchAttemptPdfBlob,
   initProctoringSession,
   endProctoringSession,
+  recordProctoringEvent,
   type AttemptDetailResponse,
   type QuestionSnapshot,
   type ProctoringSessionResponse,
@@ -36,7 +40,7 @@ interface PendingAnswerRecord {
   timestamp: number;
 }
 
-export function AssessmentExamPage() {
+function AssessmentExamPageContent() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -110,6 +114,14 @@ export function AssessmentExamPage() {
       setActiveSectionTab(sectionsList[0].code);
     }
   }, [sectionsList, activeSectionTab]);
+
+  // Keep activeSectionTab synced when navigating across section boundaries via Prev / Next
+  const activeQuestionForSectionSync = attempt?.questions?.[currentIndex];
+  useEffect(() => {
+    if (activeQuestionForSectionSync?.section_type && activeQuestionForSectionSync.section_type !== activeSectionTab) {
+      setActiveSectionTab(activeQuestionForSectionSync.section_type);
+    }
+  }, [activeQuestionForSectionSync?.question_order, activeQuestionForSectionSync?.section_type, activeSectionTab]);
 
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
   const [targetEndTimeMs, setTargetEndTimeMs] = useState<number | null>(null);
@@ -563,6 +575,130 @@ export function AssessmentExamPage() {
     }
   }, [attemptId, submitting, navigate, flushPendingQueue, proctoringSession]);
 
+  const handlePolicyViolationAutoSubmit = useCallback(
+    async (reason: string) => {
+      if (!attemptId || submitting || policyAutoSubmittedRef.current) return;
+      policyAutoSubmittedRef.current = true;
+      sharedBrowserExecutionAdapter.cancelCurrentRun();
+      setSubmitting(true);
+      setTerminalNotice(`Assessment Auto-Submitted: ${reason || 'Proctoring violation threshold exceeded.'}`);
+      try {
+        await flushPendingQueue();
+        await finalizeAssessment(attemptId);
+      } catch {
+        // Attempt may already have been finalized server-side by the violation policy engine
+      } finally {
+        if (proctoringSession) {
+          endProctoringSession(proctoringSession.id).catch(console.warn);
+        }
+        clearProctoringStreams();
+        localStorage.removeItem(`csl_pending_answers_${attemptId}`);
+        clearAttemptCodingDrafts(attemptId);
+        navigate(`/assessment/results/${attemptId}`, { replace: true });
+      }
+    },
+    [attemptId, submitting, flushPendingQueue, proctoringSession, navigate]
+  );
+
+  // Corroborated Multi-Signal DevTools Detection (Two-Strike Policy; bypassed in Admin Simulation)
+  const devToolsStrikeCountRef = useRef<number>(0);
+  const lastDevToolsShortcutAtRef = useRef<number>(0);
+  const lastDevToolsReportAtRef = useRef<number>(0);
+  const consecutiveDevToolsSamplesRef = useRef<number>(0);
+  const policyAutoSubmittedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!attemptId || submitting || isSimulationMode) return;
+    const onShortcutCapture = (e: KeyboardEvent) => {
+      const isF12 = e.key === 'F12';
+      const isInspect = (e.ctrlKey || e.metaKey) && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key);
+      if (isF12 || isInspect) {
+        lastDevToolsShortcutAtRef.current = Date.now();
+      }
+    };
+    window.addEventListener('keydown', onShortcutCapture, true);
+
+    const checkDevTools = () => {
+      if (policyAutoSubmittedRef.current) return;
+      let consoleProbeTriggered = false;
+      try {
+        const probeObj = new Image();
+        Object.defineProperty(probeObj, 'id', {
+          get() {
+            consoleProbeTriggered = true;
+            return 'csl-sentinel-probe';
+          },
+        });
+        console.debug(probeObj);
+      } catch {
+        // Ignore browser getter blocks
+      }
+
+      const evalResult = evaluateDevToolsSignals({
+        outerWidth: window.outerWidth,
+        innerWidth: window.innerWidth,
+        outerHeight: window.outerHeight,
+        innerHeight: window.innerHeight,
+        screenWidth: window.screen?.width || window.innerWidth,
+        screenHeight: window.screen?.height || window.innerHeight,
+        recentShortcutTriggered: Date.now() - lastDevToolsShortcutAtRef.current <= 10000,
+        consoleProbeTriggered,
+      });
+
+      if (evalResult.detected) {
+        consecutiveDevToolsSamplesRef.current += 1;
+      } else {
+        consecutiveDevToolsSamplesRef.current = 0;
+      }
+
+      // Require sustained confirmation across samples or high-confidence multi-signal with cooldown
+      if (evalResult.detected && consecutiveDevToolsSamplesRef.current >= 1) {
+        const now = Date.now();
+        if (now - lastDevToolsReportAtRef.current < 8000) return;
+        lastDevToolsReportAtRef.current = now;
+        devToolsStrikeCountRef.current += 1;
+        const strike = devToolsStrikeCountRef.current;
+        const maxPermitted = Math.max(1, proctoringSession?.proctoring_policy?.max_devtools_incidents ?? 1);
+
+        if (proctoringSession?.id) {
+          recordProctoringEvent(proctoringSession.id, {
+            event_type: 'DEVTOOLS_DETECTED',
+            severity: 'CRITICAL',
+            event_id: `devtools_${attemptId}_${strike}_${now}`,
+            metadata: {
+              signals: evalResult.signals,
+              width_delta: evalResult.widthDelta,
+              height_delta: evalResult.heightDelta,
+              strike,
+            },
+          })
+            .then((res) => {
+              if (res?.auto_submitted) {
+                handlePolicyViolationAutoSubmit(
+                  res.auto_submitted_reason || 'Developer Tools violation limit exceeded.'
+                );
+              }
+            })
+            .catch(() => {});
+        }
+
+        if (strike <= maxPermitted) {
+          setSecurityWarning(
+            `Security Alert (Strike ${strike} of ${maxPermitted + 1}): Developer Tools inspection detected (${evalResult.signals.join(', ')}). Close DevTools immediately — another confirmed detection will auto-submit your test.`
+          );
+        } else if (proctoringSession?.proctoring_policy?.proctoring_auto_submit_enabled ?? true) {
+          handlePolicyViolationAutoSubmit('Developer Tools opened beyond permitted warning limit.');
+        }
+      }
+    };
+
+    const intervalId = window.setInterval(checkDevTools, 2500);
+    return () => {
+      window.removeEventListener('keydown', onShortcutCapture, true);
+      window.clearInterval(intervalId);
+    };
+  }, [attemptId, submitting, isSimulationMode, proctoringSession, handlePolicyViolationAutoSubmit]);
+
   // 2. Countdown Timer derived from authoritative server deadline
   useEffect(() => {
     if (!targetEndTimeMs || submitting) return;
@@ -908,6 +1044,11 @@ export function AssessmentExamPage() {
     ? effectiveSectionQuestions.findIndex((q) => q.question_order === currentQ.question_order) + 1
     : 0;
   const questionNumberInSection = currentSectionIndex > 0 ? currentSectionIndex : (currentQ?.question_order || 0);
+  const totalQuestionsCount = (attempt.questions || []).length;
+  const globalQuestionNumber = totalQuestionsCount > 0 ? Math.min(currentIndex + 1, totalQuestionsCount) : 0;
+  const questionMarks = Math.max(1, Number(currentQ?.marks) || 1);
+  const questionMarksLabel = `${questionMarks} ${questionMarks === 1 ? 'Mark' : 'Marks'}`;
+  const questionDifficulty = (currentQ?.difficulty || '').trim().toUpperCase();
   const isCodingQuestion = Boolean(
     currentQ &&
       (currentQ.programming_details ||
@@ -1615,6 +1756,7 @@ export function AssessmentExamPage() {
             </div>
 
             <span
+              data-testid="coding-progress-summary"
               style={{
                 fontSize: '11.5px',
                 color: '#64748B',
@@ -1623,16 +1765,55 @@ export function AssessmentExamPage() {
               }}
             >
               Progress: <strong style={{ color: '#0B2E6F' }}>{sectionAnsweredCount}/{effectiveSectionQuestions.length}</strong>
+              {sectionsList.length > 1 && (
+                <span>
+                  {' '}• Overall: <strong style={{ color: '#0B2E6F' }}>{answeredCount}/{totalQuestionsCount}</strong>
+                </span>
+              )}
             </span>
           </div>
 
           {/* Right: Question Meta, Save Status, Mark, Overview Popover, Prev / Next */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
+            <span data-testid="coding-question-counter" style={{ fontSize: '12px', fontWeight: 700, color: '#0B2E6F' }}>
               Question {questionNumberInSection} of {effectiveSectionQuestions.length}
+              {sectionsList.length > 1 ? ` (#${globalQuestionNumber}/${totalQuestionsCount})` : ''}
             </span>
 
+            {questionDifficulty && (
+              <span
+                data-testid="coding-header-difficulty"
+                style={{
+                  backgroundColor:
+                    questionDifficulty === 'HARD'
+                      ? '#FEE2E2'
+                      : questionDifficulty === 'MEDIUM'
+                      ? '#FEF3C7'
+                      : '#DCFCE7',
+                  color:
+                    questionDifficulty === 'HARD'
+                      ? '#B91C1C'
+                      : questionDifficulty === 'MEDIUM'
+                      ? '#B45309'
+                      : '#15803D',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '3px 9px',
+                  borderRadius: '9999px',
+                  border:
+                    questionDifficulty === 'HARD'
+                      ? '1px solid #FECACA'
+                      : questionDifficulty === 'MEDIUM'
+                      ? '1px solid #FDE68A'
+                      : '1px solid #BBF7D0',
+                }}
+              >
+                {questionDifficulty}
+              </span>
+            )}
+
             <span
+              data-testid="coding-header-marks"
               style={{
                 backgroundColor: '#FEF3C7',
                 color: '#B45309',
@@ -1643,7 +1824,7 @@ export function AssessmentExamPage() {
                 border: '1px solid #FDE68A',
               }}
             >
-              1 Mark
+              {questionMarksLabel}
             </span>
 
             {saveStatus[currentQ.question_order] === 'saving' && (
@@ -2256,19 +2437,51 @@ export function AssessmentExamPage() {
                 )}
               </div>
 
-              {/* 1 Mark Badge */}
-              <div
-                style={{
-                  backgroundColor: '#FEF3C7',
-                  color: '#B45309',
-                  fontSize: '11px',
-                  fontWeight: 800,
-                  padding: '4px 10px',
-                  borderRadius: '9999px',
-                  border: '1px solid rgba(245, 184, 61, 0.3)',
-                }}
-              >
-                1 Mark
+              {/* Marks & Difficulty Badges */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {questionDifficulty && (
+                  <div
+                    style={{
+                      backgroundColor:
+                        questionDifficulty === 'HARD'
+                          ? '#FEE2E2'
+                          : questionDifficulty === 'MEDIUM'
+                          ? '#FEF3C7'
+                          : '#DCFCE7',
+                      color:
+                        questionDifficulty === 'HARD'
+                          ? '#B91C1C'
+                          : questionDifficulty === 'MEDIUM'
+                          ? '#B45309'
+                          : '#15803D',
+                      fontSize: '11px',
+                      fontWeight: 800,
+                      padding: '4px 10px',
+                      borderRadius: '9999px',
+                      border:
+                        questionDifficulty === 'HARD'
+                          ? '1px solid #FECACA'
+                          : questionDifficulty === 'MEDIUM'
+                          ? '1px solid #FDE68A'
+                          : '1px solid #BBF7D0',
+                    }}
+                  >
+                    {questionDifficulty}
+                  </div>
+                )}
+                <div
+                  style={{
+                    backgroundColor: '#FEF3C7',
+                    color: '#B45309',
+                    fontSize: '11px',
+                    fontWeight: 800,
+                    padding: '4px 10px',
+                    borderRadius: '9999px',
+                    border: '1px solid rgba(245, 184, 61, 0.3)',
+                  }}
+                >
+                  {questionMarksLabel}
+                </div>
               </div>
             </div>
 
@@ -3062,8 +3275,19 @@ export function AssessmentExamPage() {
             setProctoringScStream(newStream);
             updateCachedScreenStream(newStream);
           }}
+          onViolationThresholdExceeded={(reason) => handlePolicyViolationAutoSubmit(reason)}
         />
       )}
     </div>
+  );
+}
+
+export function AssessmentExamPage() {
+  const [searchParams] = useSearchParams();
+  const isSimulationMode = searchParams.get('simulation') === 'true';
+  return (
+    <DeviceCompatibilityGate bypass={isSimulationMode} contextLabel="Live Examination">
+      <AssessmentExamPageContent />
+    </DeviceCompatibilityGate>
   );
 }

@@ -6,8 +6,9 @@ import {
 } from '../../api/assessment';
 import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import backgroundImage from '../../assets/background.png';
+import { DeviceCompatibilityGate } from '../../components/assessment/DeviceCompatibilityGate';
 
-export default function PublicDriveLandingPage() {
+function PublicDriveLandingContent() {
   const { driveCode } = useParams<{ driveCode: string }>();
 
   const [drive, setDrive] = useState<PublicDriveInfo | null>(null);
@@ -46,7 +47,7 @@ export default function PublicDriveLandingPage() {
     <div
       style={{
         minHeight: '100vh',
-        width: '100vw',
+        width: '100%',
         backgroundImage: `url(${backgroundImage})`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
@@ -200,5 +201,13 @@ export default function PublicDriveLandingPage() {
         ) : null}
       </div>
     </div>
+  );
+}
+
+export default function PublicDriveLandingPage() {
+  return (
+    <DeviceCompatibilityGate contextLabel="Recruitment Drive Portal">
+      <PublicDriveLandingContent />
+    </DeviceCompatibilityGate>
   );
 }

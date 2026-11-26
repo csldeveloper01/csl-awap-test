@@ -91,6 +91,8 @@ from .admin_views import (
     AdminProctoringSessionDetailView,
     AdminProctoringSessionReviewView,
     AdminProctoringEvidenceView,
+    AdminProctoringIncidentTimelineView,
+    AdminProctoringIncidentReviewView,
 )
 
 urlpatterns = [
@@ -98,6 +100,8 @@ urlpatterns = [
     path("proctoring/sessions/", AdminProctoringSessionsListView.as_view(), name="admin-proctoring-sessions"),
     path("proctoring/sessions/<uuid:session_id>/", AdminProctoringSessionDetailView.as_view(), name="admin-proctoring-session-detail"),
     path("proctoring/sessions/<uuid:session_id>/review/", AdminProctoringSessionReviewView.as_view(), name="admin-proctoring-session-review"),
+    path("proctoring/incidents/", AdminProctoringIncidentTimelineView.as_view(), name="admin-proctoring-incidents"),
+    path("proctoring/incidents/<int:event_id>/review/", AdminProctoringIncidentReviewView.as_view(), name="admin-proctoring-incident-review"),
     path("proctoring/evidence/<uuid:evidence_id>/view/", AdminProctoringEvidenceView.as_view(), name="admin-proctoring-evidence-view"),
     path("me/", AdminMeView.as_view(), name="admin-me"),
     path("stats/", AdminStatsView.as_view(), name="admin-stats"),

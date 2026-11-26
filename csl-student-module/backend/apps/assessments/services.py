@@ -1125,6 +1125,7 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
                 "output_format": prog.output_format or "",
                 "time_limit_seconds": prog.time_limit_seconds or 2.0,
                 "memory_limit_mb": prog.memory_limit_mb or 256,
+                "comparison_mode": getattr(prog, "comparison_mode", "TRIMMED") or "TRIMMED",
                 "allowed_languages": prog.allowed_languages or ["python", "java"],
                 "boilerplate_code": prog.boilerplate_code or {},
                 "test_cases": [
@@ -1133,6 +1134,8 @@ def start_assessment_for_candidate(candidate: Candidate, assessment: Assessment 
                         "input_text": tc.input_text or "",
                         "expected_output": tc.expected_output or "",
                         "is_public": tc.is_public,
+                        "visibility_scope": getattr(tc, "visibility_scope", "SAMPLE" if tc.is_public else "HIDDEN"),
+                        "comparison_mode": getattr(tc, "comparison_mode", "INHERIT") or "INHERIT",
                         "marks_weightage": tc.marks_weightage,
                         "explanation": tc.explanation or "",
                         "order": tc.order,
@@ -1292,6 +1295,7 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
         AssessmentAttempt.State.SUBMITTED,
         AssessmentAttempt.State.TIMED_OUT,
         AssessmentAttempt.State.FLAGGED_FOR_REVIEW,
+        AssessmentAttempt.State.AUTO_SUBMITTED,
         AssessmentAttempt.State.COMPLETED_PENDING_MANUAL_EVALUATION,
     ]:
         service_ms = (time.perf_counter() - service_start) * 1000.0
@@ -1410,7 +1414,8 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
         from .models import CodeSubmission
         code_subs = list(locked_attempt.code_submissions.order_by("-created_at"))
         latest_by_q = {}
-        reviewed_by_q = {}
+        manual_by_q = {}
+        auto_by_q = {}
         for sub in code_subs:
             pq_id = sub.programming_question_id
             if pq_id not in latest_by_q:
@@ -1420,14 +1425,22 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
                 CodeSubmission.ReviewStatus.MANUALLY_REJECTED,
                 CodeSubmission.ReviewStatus.MANUALLY_SCORED,
             ):
-                if pq_id not in reviewed_by_q:
-                    reviewed_by_q[pq_id] = sub
+                if pq_id not in manual_by_q:
+                    manual_by_q[pq_id] = sub
+            elif sub.review_status == CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED:
+                if pq_id not in auto_by_q:
+                    auto_by_q[pq_id] = sub
+        reviewed_by_q = {
+            pq_id: manual_by_q.get(pq_id) or auto_by_q.get(pq_id)
+            for pq_id in (set(manual_by_q.keys()) | set(auto_by_q.keys()))
+        }
         pending_review_exists = any(
             sub.review_status in (
                 CodeSubmission.ReviewStatus.PENDING_REVIEW,
                 CodeSubmission.ReviewStatus.UNDER_REVIEW,
             )
-            for sub in latest_by_q.values()
+            and pq_id not in reviewed_by_q
+            for pq_id, sub in latest_by_q.items()
         )
         reviewed_coding_float = sum(float(sub.score_awarded or 0.0) for sub in reviewed_by_q.values())
         reviewed_coding_int = int(round(reviewed_coding_float))
@@ -1508,6 +1521,168 @@ def finalize_assessment_attempt(attempt_or_id, final_state=AssessmentAttempt.Sta
     return locked_attempt
 
 
+def get_effective_proctoring_policy(attempt):
+    """
+    Resolves effective proctoring violation & auto-submission thresholds for an attempt,
+    reading assessment-level settings cleanly with platform AssessmentConfig fallback.
+    """
+    assessment = getattr(attempt, "assessment", None)
+    config = getattr(attempt, "config", None) or AssessmentConfig.objects.filter(is_active=True).first()
+
+    def _pick(field, default):
+        if assessment is not None and hasattr(assessment, field):
+            val = getattr(assessment, field)
+            if val is not None:
+                return val
+        if config is not None and hasattr(config, field):
+            val = getattr(config, field)
+            if val is not None:
+                return val
+        return default
+
+    return {
+        "max_tab_switches_warning": int(_pick("max_tab_switches_warning", 2)),
+        "auto_submit_on_tab_limit": bool(_pick("auto_submit_on_tab_limit", True)),
+        "proctoring_auto_submit_enabled": bool(_pick("proctoring_auto_submit_enabled", True)),
+        "max_camera_violations": int(_pick("max_camera_violations", 3)),
+        "max_face_absence_seconds": int(_pick("max_face_absence_seconds", 15)),
+        "multiple_face_threshold": int(_pick("multiple_face_threshold", 2)),
+        "max_devtools_incidents": int(_pick("max_devtools_incidents", 1)),
+        "screen_share_policy": str(_pick("screen_share_policy", "WARN")),
+    }
+
+
+def evaluate_and_enforce_proctoring_policy(session, event, attempt):
+    """
+    Evaluates a newly ingested ProctoringEvent against effective assessment/platform rules.
+    Enforces idempotent auto-submission (AUTO_SUBMITTED or FLAGGED_FOR_REVIEW) only once per attempt,
+    preserving all saved MCQ answers and coding drafts/submissions.
+    """
+    from .models import ProctoringEvent
+
+    policy = get_effective_proctoring_policy(attempt)
+    if attempt.state in AssessmentAttempt.TERMINAL_STATES:
+        return {
+            "auto_submitted": attempt.state == AssessmentAttempt.State.AUTO_SUBMITTED,
+            "already_finalized": True,
+            "attempt_state": attempt.state,
+            "auto_submitted_reason": attempt.auto_submitted_reason or attempt.flag_reason,
+            "policy": policy,
+        }
+
+    ev_type = event.event_type
+    trigger_reason = ""
+    target_state = AssessmentAttempt.State.AUTO_SUBMITTED
+
+    if ev_type == ProctoringEvent.EventType.TAB_SWITCHED:
+        attempt.tab_switch_count += 1
+        allowed = policy["max_tab_switches_warning"]
+        if policy["auto_submit_on_tab_limit"] and attempt.tab_switch_count > allowed:
+            trigger_reason = (
+                f"TAB_SWITCH_LIMIT_EXCEEDED: Exceeded permitted tab switches "
+                f"({attempt.tab_switch_count} switches recorded, limit is {allowed})"
+            )
+            target_state = AssessmentAttempt.State.FLAGGED_FOR_REVIEW
+        else:
+            attempt.save(update_fields=["tab_switch_count", "updated_at"])
+
+    elif ev_type == ProctoringEvent.EventType.FULLSCREEN_EXITED:
+        attempt.fullscreen_exit_count += 1
+        attempt.save(update_fields=["fullscreen_exit_count", "updated_at"])
+
+    elif ev_type == ProctoringEvent.EventType.DEVTOOLS_DETECTED:
+        strike_count = session.events.filter(event_type=ProctoringEvent.EventType.DEVTOOLS_DETECTED).count()
+        allowed_strikes = max(1, policy["max_devtools_incidents"])
+        if policy["proctoring_auto_submit_enabled"] and strike_count > allowed_strikes:
+            trigger_reason = (
+                f"DEVTOOLS_POLICY_EXCEEDED: Developer Tools confirmed {strike_count} times "
+                f"(max permitted warnings: {allowed_strikes})"
+            )
+            target_state = AssessmentAttempt.State.AUTO_SUBMITTED
+
+    elif ev_type in (
+        ProctoringEvent.EventType.CAMERA_DISCONNECTED,
+        ProctoringEvent.EventType.FACE_NOT_DETECTED,
+        ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED,
+    ):
+        camera_violation_count = session.events.filter(
+            event_type__in=[
+                ProctoringEvent.EventType.CAMERA_DISCONNECTED,
+                ProctoringEvent.EventType.FACE_NOT_DETECTED,
+                ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED,
+            ]
+        ).count()
+        multi_face_count = session.events.filter(
+            event_type=ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED
+        ).count()
+
+        if policy["proctoring_auto_submit_enabled"]:
+            if ev_type == ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED and multi_face_count >= max(1, policy["multiple_face_threshold"]):
+                trigger_reason = (
+                    f"MULTIPLE_FACES_THRESHOLD_EXCEEDED: {multi_face_count} multi-face detections "
+                    f"(threshold: {policy['multiple_face_threshold']})"
+                )
+            elif camera_violation_count >= max(1, policy["max_camera_violations"]):
+                trigger_reason = (
+                    f"CAMERA_VIOLATION_THRESHOLD_EXCEEDED: {camera_violation_count} camera/face violations "
+                    f"(threshold: {policy['max_camera_violations']})"
+                )
+
+    elif ev_type == ProctoringEvent.EventType.SCREEN_SHARE_STOPPED:
+        if policy["proctoring_auto_submit_enabled"] and policy["screen_share_policy"] == "AUTO_SUBMIT":
+            trigger_reason = "SCREEN_SHARE_STOPPED_POLICY: Candidate terminated required screen sharing during exam"
+
+    if not trigger_reason:
+        return {
+            "auto_submitted": False,
+            "already_finalized": False,
+            "attempt_state": attempt.state,
+            "auto_submitted_reason": "",
+            "policy": policy,
+        }
+
+    # Execute idempotent violation auto-submission (safe against repeated events)
+    attempt.is_flagged = True
+    attempt.flag_reason = trigger_reason
+    if target_state == AssessmentAttempt.State.AUTO_SUBMITTED:
+        attempt.auto_submitted_reason = trigger_reason[:255]
+        attempt.auto_submitted_trigger_event = ev_type[:64]
+    attempt.save(
+        update_fields=[
+            "tab_switch_count",
+            "is_flagged",
+            "flag_reason",
+            "auto_submitted_reason",
+            "auto_submitted_trigger_event",
+            "updated_at",
+        ]
+    )
+    event.auto_action_taken = target_state
+    event.save(update_fields=["auto_action_taken"])
+
+    ProctoringEvent.objects.create(
+        proctoring_session=session,
+        event_type=ProctoringEvent.EventType.PROCTORING_AUTO_SUBMITTED,
+        severity=ProctoringEvent.Severity.CRITICAL,
+        auto_action_taken=target_state,
+        metadata={
+            "trigger_event_id": event.id,
+            "trigger_event_type": ev_type,
+            "reason": trigger_reason,
+            "target_state": target_state,
+        },
+    )
+
+    finalized = finalize_assessment_attempt(attempt, final_state=target_state)
+    return {
+        "auto_submitted": True,
+        "already_finalized": False,
+        "attempt_state": finalized.state,
+        "auto_submitted_reason": trigger_reason,
+        "policy": policy,
+    }
+
+
 @transaction.atomic
 def recalculate_attempt_coding_scores(attempt_or_id):
     """
@@ -1565,7 +1740,8 @@ def recalculate_attempt_coding_scores(attempt_or_id):
 
     subs = list(locked_attempt.code_submissions.order_by("-created_at"))
     latest_by_question = {}
-    reviewed_by_question = {}
+    manual_by_question = {}
+    auto_by_question = {}
     for sub in subs:
         pq_id = sub.programming_question_id
         if pq_id not in latest_by_question:
@@ -1575,15 +1751,24 @@ def recalculate_attempt_coding_scores(attempt_or_id):
             CodeSubmission.ReviewStatus.MANUALLY_REJECTED,
             CodeSubmission.ReviewStatus.MANUALLY_SCORED,
         ):
-            if pq_id not in reviewed_by_question:
-                reviewed_by_question[pq_id] = sub
+            if pq_id not in manual_by_question:
+                manual_by_question[pq_id] = sub
+        elif sub.review_status == CodeSubmission.ReviewStatus.AUTO_BROWSER_EVALUATED:
+            if pq_id not in auto_by_question:
+                auto_by_question[pq_id] = sub
+
+    reviewed_by_question = {
+        pq_id: manual_by_question.get(pq_id) or auto_by_question.get(pq_id)
+        for pq_id in (set(manual_by_question.keys()) | set(auto_by_question.keys()))
+    }
 
     pending_exists = any(
         sub.review_status in (
             CodeSubmission.ReviewStatus.PENDING_REVIEW,
             CodeSubmission.ReviewStatus.UNDER_REVIEW,
         )
-        for sub in latest_by_question.values()
+        and pq_id not in reviewed_by_question
+        for pq_id, sub in latest_by_question.items()
     )
 
     coding_score = int(round(sum(float(sub.score_awarded or 0.0) for sub in reviewed_by_question.values())))

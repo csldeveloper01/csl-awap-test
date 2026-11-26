@@ -112,7 +112,14 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
       setCameraActive(false);
       setShowCameraRecovery(true);
       setActiveAlert('Camera stream was disconnected! Please restore immediately.');
-      updateProctoringCameraStatus(session.id, 'DISCONNECTED').catch(console.error);
+      updateProctoringCameraStatus(session.id, 'DISCONNECTED')
+        .then((res: any) => {
+          if (typeof res?.risk_score === 'number') setRiskScore(res.risk_score);
+          if (res?.auto_submitted && onViolationThresholdExceeded) {
+            onViolationThresholdExceeded(res.auto_submitted_reason || 'Camera violation threshold exceeded.');
+          }
+        })
+        .catch(console.error);
     };
 
     const handleAudioEnded = () => {
@@ -199,10 +206,18 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
               setFaceCount(detection.faceCount);
 
               // 1. Face Absence Evaluation (>3000ms, 15s cooldown)
+              // 1. No Face Evaluation (policy-aware absence threshold, 15s cooldown)
+              const faceAbsenceThresholdMs = Math.max(
+                3000,
+                (session.proctoring_policy?.max_face_absence_seconds || 3) * 1000
+              );
               if (detection.faceCount === 0) {
                 noFaceDurationRef.current += 750;
-                if (noFaceDurationRef.current >= 3000) {
+                if (noFaceDurationRef.current >= Math.min(faceAbsenceThresholdMs, 3500)) {
                   setActiveAlert('Face not visible! Please look at the camera.');
+                }
+                if (noFaceDurationRef.current >= faceAbsenceThresholdMs) {
+                  setActiveAlert('Face absence threshold exceeded! Please stay visible in front of the camera.');
                   const now = Date.now();
                   if (now - lastFaceNotDetectedSentRef.current >= ANOMALY_COOLDOWN_MS) {
                     lastFaceNotDetectedSentRef.current = now;
@@ -210,9 +225,16 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
                       event_type: 'FACE_NOT_DETECTED',
                       severity: 'WARNING',
                       metadata: { duration_ms: noFaceDurationRef.current },
-                    }).then((res) => {
-                      setRiskScore(res.risk_score);
-                    }).catch(console.error);
+                    })
+                      .then((res) => {
+                        setRiskScore(res.risk_score);
+                        if (res.auto_submitted && onViolationThresholdExceeded) {
+                          onViolationThresholdExceeded(
+                            res.auto_submitted_reason || 'Face absence violation limit exceeded.'
+                          );
+                        }
+                      })
+                      .catch(console.error);
                   }
                 }
               } else {
@@ -238,11 +260,18 @@ export const ProctoringStatusPanel: React.FC<ProctoringStatusPanelProps> = ({
                       event_type: 'MULTIPLE_FACES_DETECTED',
                       severity: 'CRITICAL',
                       metadata: { count: detection.faceCount },
-                    }).then((res) => {
-                      setRiskScore(res.risk_score);
-                      // Immediate snapshot evidence capture on multiple faces
-                      captureAndUploadSnapshot('multiple_faces_detected', res.event_id);
-                    }).catch(console.error);
+                    })
+                      .then((res) => {
+                        setRiskScore(res.risk_score);
+                        // Immediate snapshot evidence capture on multiple faces
+                        captureAndUploadSnapshot('multiple_faces_detected', res.event_id);
+                        if (res.auto_submitted && onViolationThresholdExceeded) {
+                          onViolationThresholdExceeded(
+                            res.auto_submitted_reason || 'Multiple faces violation threshold exceeded.'
+                          );
+                        }
+                      })
+                      .catch(console.error);
                   }
                 }
               } else {

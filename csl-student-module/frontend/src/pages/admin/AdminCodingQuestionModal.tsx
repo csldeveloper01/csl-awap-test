@@ -91,6 +91,7 @@ export function AdminCodingQuestionModal({
   // Section 3 & 5: Language & Execution Configuration
   const [timeLimit, setTimeLimit] = useState<number>(2.0);
   const [memoryLimit, setMemoryLimit] = useState<number>(256);
+  const [comparisonMode, setComparisonMode] = useState<'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED'>('TRIMMED');
   const [allowedLanguages, setAllowedLanguages] = useState<string[]>(['python', 'java']);
   const [activeBoilerplateLang, setActiveBoilerplateLang] = useState<string>('python');
   const [boilerplateCode, setBoilerplateCode] = useState<Record<string, string>>({ ...DEFAULT_BOILERPLATES });
@@ -105,6 +106,7 @@ export function AdminCodingQuestionModal({
   const [newSampleExplanation, setNewSampleExplanation] = useState('');
   const [newSampleWeight, setNewSampleWeight] = useState<number>(1.0);
 
+  const [newHiddenScope, setNewHiddenScope] = useState<'ADDITIONAL' | 'HIDDEN'>('HIDDEN');
   const [newHiddenInput, setNewHiddenInput] = useState('');
   const [newHiddenOutput, setNewHiddenOutput] = useState('');
   const [newHiddenWeight, setNewHiddenWeight] = useState<number>(1.0);
@@ -141,6 +143,7 @@ export function AdminCodingQuestionModal({
     setOutputFormat(details.output_format || '');
     setTimeLimit(Number(details.time_limit_seconds) || 2.0);
     setMemoryLimit(Number(details.memory_limit_mb) || 256);
+    setComparisonMode((details.comparison_mode as 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED') || 'TRIMMED');
     setAllowedLanguages(isEditMode ? rawLangs : safeLangs);
     setActiveBoilerplateLang(rawLangs[0] || 'python');
     setPreviewLang(safeLangs[0] || 'python');
@@ -386,6 +389,8 @@ export function AdminCodingQuestionModal({
     setErrorMsg('');
     const nextCase: AdminProgrammingTestCase = {
       is_public: true,
+      visibility_scope: 'SAMPLE',
+      comparison_mode: 'INHERIT',
       input_text: newSampleInput,
       expected_output: newSampleOutput,
       explanation: newSampleExplanation.trim(),
@@ -401,12 +406,14 @@ export function AdminCodingQuestionModal({
 
   const handleAddHiddenCase = () => {
     if (!newHiddenOutput.trim()) {
-      setErrorMsg('Hidden test case expected output is required.');
+      setErrorMsg('Evaluation test case expected output is required.');
       return;
     }
     setErrorMsg('');
     const nextCase: AdminProgrammingTestCase = {
       is_public: false,
+      visibility_scope: newHiddenScope,
+      comparison_mode: 'INHERIT',
       input_text: newHiddenInput,
       expected_output: newHiddenOutput,
       explanation: '',
@@ -504,15 +511,20 @@ export function AdminCodingQuestionModal({
       filteredBoilerplates[lang] = boilerplateCode[lang] ?? DEFAULT_BOILERPLATES[lang] ?? '';
     });
 
-    const normalizedCases = testCases.map((tc, idx) => ({
-      ...(tc.id ? { id: tc.id } : {}),
-      is_public: Boolean(tc.is_public),
-      input_text: tc.input_text ?? '',
-      expected_output: tc.expected_output ?? '',
-      marks_weightage: Math.max(0.1, Number(tc.marks_weightage) || 1.0),
-      explanation: tc.explanation || '',
-      order: idx + 1,
-    }));
+    const normalizedCases = testCases.map((tc, idx) => {
+      const scope = tc.visibility_scope || (tc.is_public ? 'SAMPLE' : 'HIDDEN');
+      return {
+        ...(tc.id ? { id: tc.id } : {}),
+        is_public: scope === 'SAMPLE',
+        visibility_scope: scope,
+        comparison_mode: tc.comparison_mode || 'INHERIT',
+        input_text: tc.input_text ?? '',
+        expected_output: tc.expected_output ?? '',
+        marks_weightage: Math.max(0.1, Number(tc.marks_weightage) || 1.0),
+        explanation: tc.explanation || '',
+        order: idx + 1,
+      };
+    });
 
     const payload: Partial<AdminQuestion> & {
       assessment_id?: string;
@@ -542,6 +554,7 @@ export function AdminCodingQuestionModal({
         constraints: constraints.trim(),
         input_format: inputFormat.trim(),
         output_format: outputFormat.trim(),
+        comparison_mode: comparisonMode,
         time_limit_seconds: Number(timeLimit),
         memory_limit_mb: Number(memoryLimit),
         allowed_languages: allowedLanguages,
@@ -1145,8 +1158,27 @@ export function AdminCodingQuestionModal({
                 </div>
 
                 <div>
+                  <label
+                    htmlFor="coding-comparison-mode"
+                    style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '4px' }}
+                  >
+                    Output Comparison Policy (Default: Trimmed Output)
+                  </label>
+                  <select
+                    id="coding-comparison-mode"
+                    value={comparisonMode}
+                    onChange={(e) => setComparisonMode(e.target.value as 'EXACT' | 'TRIMMED' | 'WHITESPACE_NORMALIZED')}
+                    style={inputStyle}
+                  >
+                    <option value="TRIMMED">Trimmed Output (Normalizes line endings &amp; strips trailing whitespace per line)</option>
+                    <option value="EXACT">Exact Match (Strict character-by-character match after LF normalization)</option>
+                    <option value="WHITESPACE_NORMALIZED">Whitespace-Normalized (Collapses spaces/tabs inside lines)</option>
+                  </select>
+                </div>
+
+                <div>
                   <div style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary, marginBottom: '6px' }}>
-                    Permitted Judge0 Languages *
+                    Permitted Browser WASM Languages *
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                     {SUPPORTED_CODING_LANGUAGES.map((lang) => {
@@ -1466,7 +1498,7 @@ export function AdminCodingQuestionModal({
                 </div>
               </div>
 
-              {/* Section 4B — Hidden Evaluation Test Cases */}
+              {/* Section 4B — Additional & Hidden Evaluation Test Cases */}
               <div
                 style={{
                   ...cardStyle,
@@ -1475,10 +1507,10 @@ export function AdminCodingQuestionModal({
               >
                 <div>
                   <h3 style={{ ...sectionHeadingStyle, color: tokens.cslYellowSoftText }}>
-                    4B. Hidden Grading Test Cases ({hiddenCasesWithIndex.length})
+                    4B. Additional &amp; Hidden Evaluation Test Cases ({hiddenCasesWithIndex.length})
                   </h3>
                   <div style={{ fontSize: '11.5px', color: tokens.textSecondary, marginTop: '2px' }}>
-                    Withheld from candidate endpoints; used strictly for automated evaluation.
+                    Distinguish Additional vs Hidden cases. Executed locally in candidate browsers; never treat client evaluation scores as cryptographically tamper-proof.
                   </div>
                 </div>
 
@@ -1497,9 +1529,25 @@ export function AdminCodingQuestionModal({
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                       <span style={{ fontSize: '12px', fontWeight: 700, color: tokens.cslYellowSoftText }}>
-                        🔒 Hidden Case #{hIdx + 1}
+                        {tc.visibility_scope === 'ADDITIONAL' ? `📋 Additional Case #${hIdx + 1}` : `🔒 Hidden Case #${hIdx + 1}`}
                       </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <select
+                          aria-label="Test case visibility scope"
+                          value={tc.visibility_scope || 'HIDDEN'}
+                          onChange={(e) => handleUpdateTestCaseField(idx, 'visibility_scope', e.target.value)}
+                          style={{
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: `1px solid ${tokens.borderStrong}`,
+                            backgroundColor: tokens.inputBg,
+                            color: tokens.textPrimary,
+                            fontSize: '11px',
+                          }}
+                        >
+                          <option value="HIDDEN">Hidden</option>
+                          <option value="ADDITIONAL">Additional</option>
+                        </select>
                         <button
                           type="button"
                           onClick={() => handleMoveTestCase(idx, -1)}
@@ -1618,7 +1666,17 @@ export function AdminCodingQuestionModal({
                       style={{ ...inputStyle, fontFamily: tokens.monoFamily, fontSize: '12px' }}
                     />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select
+                      aria-label="New evaluation case scope"
+                      value={newHiddenScope}
+                      onChange={(e) => setNewHiddenScope(e.target.value as 'ADDITIONAL' | 'HIDDEN')}
+                      style={{ ...inputStyle, width: '160px', fontSize: '12px' }}
+                    >
+                      <option value="HIDDEN">Visibility: Hidden</option>
+                      <option value="ADDITIONAL">Visibility: Additional</option>
+                    </select>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <label style={{ fontSize: '11.5px', fontWeight: 700, color: tokens.textSecondary }}>
                       Weight:
                       <input
@@ -1645,8 +1703,9 @@ export function AdminCodingQuestionModal({
                         cursor: 'pointer',
                       }}
                     >
-                      + Add Hidden Case
+                      + Add {newHiddenScope === 'ADDITIONAL' ? 'Additional' : 'Hidden'} Case
                     </button>
+                    </div>
                   </div>
                 </div>
               </div>

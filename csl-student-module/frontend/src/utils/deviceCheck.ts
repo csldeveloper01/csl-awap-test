@@ -15,52 +15,112 @@ export interface DeviceEligibilityResult {
   currentHeight: number;
   minWidth: number;
   minHeight: number;
+  detectedPlatformLabel?: string;
+}
+
+export interface DeviceCheckEnvironment {
+  userAgent: string;
+  innerWidth: number;
+  innerHeight: number;
+  screenWidth: number;
+  screenHeight: number;
+  maxTouchPoints: number;
+  hasTouch: boolean;
+  platform?: string;
+}
+
+/**
+ * Pure device/viewport eligibility evaluator (testable cleanly without DOM).
+ * Note: Client-side UA/viewport inspection is a compatibility & usability safeguard;
+ * it cannot prevent deliberate browser spoofing on unmanaged client devices.
+ */
+export function evaluateDeviceEligibility(
+  env: DeviceCheckEnvironment,
+  minWidth: number = MIN_SUPPORTED_WIDTH,
+  minHeight: number = MIN_SUPPORTED_HEIGHT
+): DeviceEligibilityResult {
+  const ua = (env.userAgent || '').toLowerCase();
+  const platform = (env.platform || '').toLowerCase();
+
+  // Explicit mobile & tablet OS patterns
+  const isMobileOrTabletUA =
+    /android|iphone|ipad|ipod|blackberry|windows phone|iemobile|opera mini|tablet|playbook|silk|kindle/i.test(
+      ua
+    );
+
+  // iPadOS Safari frequently masks UA as Macintosh while exposing multi-touch capability
+  const isIPadDesktopMasquerade =
+    (ua.includes('macintosh') || platform.includes('macintel')) && env.maxTouchPoints > 1;
+
+  // Touch-primary small physical display (phones / compact tablets)
+  const isSmallScreenTouch =
+    (env.hasTouch || env.maxTouchPoints > 1) &&
+    (env.screenWidth < 1024 || env.screenHeight < 600);
+
+  if (isMobileOrTabletUA || isIPadDesktopMasquerade || isSmallScreenTouch) {
+    return {
+      eligible: false,
+      reason: 'mobile',
+      currentWidth: env.innerWidth,
+      currentHeight: env.innerHeight,
+      minWidth,
+      minHeight,
+      detectedPlatformLabel: isIPadDesktopMasquerade
+        ? 'Tablet / iPad Touch Device'
+        : isMobileOrTabletUA
+        ? 'Mobile / Tablet Browser'
+        : 'Small Touch Screen',
+    };
+  }
+
+  if (env.innerWidth < minWidth || env.innerHeight < minHeight) {
+    return {
+      eligible: false,
+      reason: 'viewport_small',
+      currentWidth: env.innerWidth,
+      currentHeight: env.innerHeight,
+      minWidth,
+      minHeight,
+      detectedPlatformLabel: 'Undersized Desktop Browser Window',
+    };
+  }
+
+  return {
+    eligible: true,
+    currentWidth: env.innerWidth,
+    currentHeight: env.innerHeight,
+    minWidth,
+    minHeight,
+    detectedPlatformLabel: 'Laptop / Desktop Display',
+  };
 }
 
 export function checkDeviceEligibility(
   minWidth: number = MIN_SUPPORTED_WIDTH,
   minHeight: number = MIN_SUPPORTED_HEIGHT
 ): DeviceEligibilityResult {
-  const currentWidth = window.innerWidth;
-  const currentHeight = window.innerHeight;
-  const ua = (navigator.userAgent || '').toLowerCase();
-
-  // Explicit Mobile OS / device patterns
-  const isMobileOS = /android|iphone|ipod|blackberry|windows phone|iemobile|opera mini/i.test(ua);
-  
-  // Touch-primary small physical screen (mobile phones & small tablets)
-  const isSmallScreenTouch =
-    ('ontouchstart' in window || navigator.maxTouchPoints > 1) &&
-    (window.screen.width < 1024 || window.screen.height < 600);
-
-  if (isMobileOS || isSmallScreenTouch) {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
     return {
-      eligible: false,
-      reason: 'mobile',
-      currentWidth,
-      currentHeight,
+      eligible: true,
+      currentWidth: minWidth,
+      currentHeight: minHeight,
       minWidth,
       minHeight,
     };
   }
 
-  // Viewport dimensions (e.g. unmaximized browser window on a laptop)
-  if (currentWidth < minWidth || currentHeight < minHeight) {
-    return {
-      eligible: false,
-      reason: 'viewport_small',
-      currentWidth,
-      currentHeight,
-      minWidth,
-      minHeight,
-    };
-  }
-
-  return {
-    eligible: true,
-    currentWidth,
-    currentHeight,
+  return evaluateDeviceEligibility(
+    {
+      userAgent: navigator.userAgent || '',
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      screenWidth: window.screen?.width ?? window.innerWidth,
+      screenHeight: window.screen?.height ?? window.innerHeight,
+      maxTouchPoints: navigator.maxTouchPoints ?? 0,
+      hasTouch: 'ontouchstart' in window,
+      platform: navigator.platform || '',
+    },
     minWidth,
-    minHeight,
-  };
+    minHeight
+  );
 }

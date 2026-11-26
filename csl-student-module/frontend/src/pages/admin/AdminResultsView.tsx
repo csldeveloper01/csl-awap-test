@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAdminTheme } from '../../utils/adminTheme';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState, ProgressBar } from '../../components/ui';
@@ -16,10 +17,16 @@ interface AdminResultsViewProps {
 
 export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
   const { tokens } = useAdminTheme();
-  const [results, setResults] = useState<AdminResult[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [submittedSearch, setSubmittedSearch] = useState('');
   const [exportingFormat, setExportingFormat] = useState<'xlsx' | 'csv' | null>(null);
+
+  const { data: results = [], isLoading: loading, refetch } = useQuery<AdminResult[]>({
+    queryKey: ['admin', 'results', submittedSearch],
+    queryFn: () => getAdminResults(submittedSearch ? { search: submittedSearch } : undefined),
+    staleTime: 25_000,
+  });
 
   const handleExportResults = async (format: 'xlsx' | 'csv') => {
     try {
@@ -41,14 +48,9 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const loadResults = async (query = '') => {
-    try {
-      setLoading(true);
-      const data = await getAdminResults(query ? { search: query } : undefined);
-      setResults(data);
-    } catch {
-      alert('Failed to load assessment results.');
-    } finally {
-      setLoading(false);
+    setSubmittedSearch(query);
+    if (query === submittedSearch) {
+      await refetch();
     }
   };
 
@@ -74,8 +76,8 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
 
     try {
       await deleteAdminAttempt(res.id);
-      setResults((prev) => prev.filter((item) => item.id !== res.id));
       setSelectedAttemptIds((prev) => prev.filter((id) => id !== res.id));
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'results'] });
     } catch {
       alert('Failed to delete scorecard and attempt record.');
     }
@@ -93,17 +95,13 @@ export function AdminResultsView({ onReviewAttempt }: AdminResultsViewProps) {
       const resp = await bulkDeleteAdminAttempts(selectedAttemptIds);
       alert(resp.message);
       setSelectedAttemptIds([]);
-      loadResults(search);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'results'] });
     } catch {
       alert('Failed to bulk delete selected attempts.');
     } finally {
       setBulkDeleting(false);
     }
   };
-
-  useEffect(() => {
-    loadResults();
-  }, []);
 
   // Metrics & Score Distribution
   const evaluatedResults = results.filter((r) => r.delivery_mode !== 'PDF_CODING' && !r.is_manual_evaluation_pending);

@@ -726,9 +726,19 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
                     <span style={{ fontWeight: 700, fontSize: '14px' }}>
                       {sub.question_title || `Programming Question #${sIdx + 1}`}
                     </span>
+                    {sub.submission_sequence && (
+                      <span style={{ marginLeft: '10px', fontSize: '11px', color: '#FACC15', fontWeight: 700 }}>
+                        Sub #{sub.submission_sequence}
+                      </span>
+                    )}
                     <span style={{ marginLeft: '12px', fontSize: '12px', color: '#CBD5E1' }}>
                       Language: <strong>{sub.language.toUpperCase()}</strong>
                     </span>
+                    {sub.engine_version && (
+                      <span style={{ marginLeft: '10px', fontSize: '11px', color: '#94A3B8' }}>
+                        Engine: <code>{sub.engine_version}</code>
+                      </span>
+                    )}
                     {sub.created_at && (
                       <span style={{ marginLeft: '12px', fontSize: '11px', color: '#94A3B8' }}>
                         Submitted: {new Date(sub.created_at).toLocaleString()}
@@ -744,7 +754,25 @@ export function AdminAttemptReviewView({ attemptId, onBack }: AdminAttemptReview
                 </div>
 
                 <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  {/* Non-Authoritative Browser Telemetry Notice */}
+                  {/* Non-Authoritative Browser Evaluation / Telemetry Notice */}
+                  {(sub.evaluation_summary && Object.keys(sub.evaluation_summary).length > 0) && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        backgroundColor: tokens.warningBg,
+                        border: `1px solid ${tokens.warningBorder}`,
+                        color: tokens.warningText,
+                        fontSize: '12px',
+                      }}
+                    >
+                      <strong>Browser Automatic Evaluation (Unverified — Client-Controlled Browser):</strong>{' '}
+                      Passed <strong>{sub.evaluation_summary.passed_count ?? sub.passed_test_cases}/{sub.evaluation_summary.total_test_cases ?? sub.total_test_cases}</strong> cases
+                      {' · '}Verdict: <strong>{sub.verdict}</strong>
+                      {' · '}Mode: <strong>{sub.evaluation_summary.comparison_mode || 'TRIMMED'}</strong>
+                      {sub.evaluation_summary.score_clamped ? ' · ⚠ Score clamped to max marks server-side' : ''}
+                    </div>
+                  )}
                   {browserMeta && Object.keys(browserMeta).length > 0 && (
                     <div
                       style={{

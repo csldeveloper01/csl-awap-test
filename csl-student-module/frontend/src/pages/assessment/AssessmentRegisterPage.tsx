@@ -17,6 +17,7 @@ import {
 } from '../../api/assessment';
 import cslTypographyLogo from '../../assets/CSL-TYPOGRAPHY.png';
 import backgroundImage from '../../assets/background.png';
+import { DeviceCompatibilityGate } from '../../components/assessment/DeviceCompatibilityGate';
 
 function validateFullName(raw: string): string {
   const trimmed = raw.trim();
@@ -100,7 +101,7 @@ function validatePhone(raw: string): string {
   return '';
 }
 
-export function AssessmentRegisterPage() {
+function AssessmentRegisterPageContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -2814,5 +2815,13 @@ export function AssessmentRegisterPage() {
           </div>
         )}
       </div>
+  );
+}
+
+export function AssessmentRegisterPage() {
+  return (
+    <DeviceCompatibilityGate contextLabel="Candidate Registration">
+      <AssessmentRegisterPageContent />
+    </DeviceCompatibilityGate>
   );
 }

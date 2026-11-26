@@ -27,6 +27,7 @@ import { AdminIntegrityEventsView } from './AdminIntegrityEventsView';
 import { AdminSentinelView } from './AdminSentinelView';
 import { AdminUsersView } from './AdminUsersView';
 import { AdminDrivesView } from './AdminDrivesView';
+import { AdminDeveloperToolsView } from './AdminDeveloperToolsView';
 import { AccessibleModal } from '../../components/admin/AccessibleModal';
 import { StatusBadge } from '../../components/ui';
 import { useAdminTheme } from '../../utils/adminTheme';
@@ -50,6 +51,7 @@ import {
   HomeIcon,
   UndoIcon,
   SearchIcon,
+  TerminalIcon,
 } from '../../components/common/Icons';
 import {
   ReassessStudentAccessModal,
@@ -338,6 +340,7 @@ export function CSLAdminPortalPage() {
       {
         title: 'System',
         items: [
+          { key: 'devtools', label: 'Developer Tools', icon: <TerminalIcon size={17} /> },
           { key: 'config', label: 'Settings', icon: <SettingsIcon size={17} /> },
           { key: 'users', label: 'Admin Users', icon: <CandidatesIcon size={17} /> },
         ],
@@ -877,31 +880,6 @@ export function CSLAdminPortalPage() {
               </button>
             )}
 
-            <button
-              type="button"
-              data-testid="admin-theme-toggle"
-              onClick={toggleTheme}
-              title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                height: '32px',
-                padding: '0 10px',
-                borderRadius: '8px',
-                border: `1px solid ${tokens.border}`,
-                backgroundColor: tokens.surfaceCard,
-                color: tokens.textPrimary,
-                fontSize: '12px',
-                fontWeight: 500,
-                cursor: 'pointer',
-              }}
-            >
-              <span>{isDark ? '☀' : '☾'}</span>
-              {!isCompactPadding && <span>{isDark ? 'Light' : 'Dark'}</span>}
-            </button>
-
             {!isMobileDrawerMode && (
               <button
                 type="button"
@@ -941,6 +919,64 @@ export function CSLAdminPortalPage() {
             >
               {adminInitials}
             </div>
+
+            <button
+              type="button"
+              data-testid="admin-theme-toggle"
+              onClick={toggleTheme}
+              title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '36px',
+                height: '36px',
+                padding: 0,
+                borderRadius: '9999px',
+                border: `1px solid ${tokens.borderStrong}`,
+                backgroundColor: tokens.surfaceCard,
+                color: isDark ? '#FACC15' : tokens.cslNavy,
+                cursor: 'pointer',
+                flexShrink: 0,
+                boxShadow: tokens.cardShadow,
+              }}
+            >
+              {isDark ? (
+                <svg
+                  key="sun"
+                  className="csl-theme-icon-pop"
+                  width="17"
+                  height="17"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg
+                  key="moon"
+                  className="csl-theme-icon-pop"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
           </div>
         </header>
 
@@ -990,6 +1026,13 @@ export function CSLAdminPortalPage() {
 
             {activeTab === 'config' && <AdminConfigView />}
             {activeTab === 'users' && <AdminUsersView />}
+            {activeTab === 'devtools' && (
+              <AdminDeveloperToolsView
+                isAuthorizedAdmin={Boolean(
+                  adminUser && (adminUser.is_staff || adminUser.is_superuser || adminUser.role === 'ADMIN')
+                )}
+              />
+            )}
             {activeTab === 'live' && <AdminLiveAttemptsView onReviewAttempt={handleOpenReview} />}
 
             {activeTab === 'review' &&
@@ -1050,25 +1093,30 @@ export function CSLAdminPortalPage() {
             />
           )}
 
-          {/* Contextual Right Panel */}
+          {/* Contextual Right Panel: Fixed Quick Actions + Independently Scrollable Recent Activity */}
           {!rightPanelCollapsed && !isMobileDrawerMode && (
             <aside
+              data-testid="admin-access-panel"
               style={{
                 width: `${rightPanelWidth}px`,
                 minWidth: `${rightPanelWidth}px`,
                 maxWidth: `${rightPanelWidth}px`,
+                height: '100%',
                 backgroundColor: tokens.surfaceCard,
                 borderLeft: `1px solid ${tokens.border}`,
                 padding: '20px 16px',
                 boxSizing: 'border-box',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '24px',
-                overflowY: 'auto',
+                gap: '18px',
+                overflow: 'hidden',
               }}
             >
-              {/* Quick Actions */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {/* Quick Actions (Pinned / Fixed) */}
+              <div
+                data-testid="admin-quick-actions-section"
+                style={{ display: 'flex', flexDirection: 'column', gap: '10px', flexShrink: 0 }}
+              >
                 <div style={{ fontSize: '13.5px', fontWeight: 600, color: tokens.textPrimary }}>
                   Quick Actions
                 </div>
@@ -1163,9 +1211,20 @@ export function CSLAdminPortalPage() {
                 </div>
               </div>
 
-              {/* Previous Activities */}
-              <div style={{ borderTop: `1px solid ${tokens.border}`, paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              {/* Previous Activities (Independently Scrollable) */}
+              <div
+                style={{
+                  borderTop: `1px solid ${tokens.border}`,
+                  paddingTop: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
                   <span style={{ fontSize: '13.5px', fontWeight: 600, color: tokens.textPrimary }}>
                     Recent Activity
                   </span>
@@ -1175,7 +1234,18 @@ export function CSLAdminPortalPage() {
                 </div>
 
                 {stats?.recent_activities && stats.recent_activities.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div
+                    data-testid="admin-recent-activity-list"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      flex: 1,
+                      minHeight: 0,
+                      overflowY: 'auto',
+                      paddingRight: '4px',
+                    }}
+                  >
                     {stats.recent_activities.map((act) => (
                       <div
                         key={act.id}

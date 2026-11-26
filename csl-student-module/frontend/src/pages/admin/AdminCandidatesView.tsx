@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAdminTheme } from '../../utils/adminTheme';
 import { OdometerCard } from '../../components/admin/OdometerCard';
 import { PageContainer, SectionHeader, StatusBadge, SearchToolbar, EmptyState } from '../../components/ui';
@@ -23,14 +24,29 @@ interface AdminCandidatesViewProps {
 
 export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProps) {
   const { tokens } = useAdminTheme();
-  const [candidates, setCandidates] = useState<AdminCandidate[]>([]);
-  const [colleges, setColleges] = useState<AdminCollege[]>([]);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [submittedSearch, setSubmittedSearch] = useState('');
   const [selectedCollegeId, setSelectedCollegeId] = useState<string>('');
-  const [loading, setLoading] = useState(true);
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null);
   const [exportingCSV, setExportingCSV] = useState(false);
   const [exportingXLSX, setExportingXLSX] = useState(false);
+
+  const { data: colleges = [] } = useQuery<AdminCollege[]>({
+    queryKey: ['admin', 'colleges'],
+    queryFn: () => getAdminColleges(),
+    staleTime: 60_000,
+  });
+
+  const { data: candidates = [], isLoading: loading, refetch } = useQuery<AdminCandidate[]>({
+    queryKey: ['admin', 'candidates', submittedSearch, selectedCollegeId],
+    queryFn: () =>
+      getAdminCandidates({
+        search: submittedSearch.trim() || undefined,
+        college_id: selectedCollegeId || undefined,
+      }),
+    staleTime: 25_000,
+  });
 
   const handleExportXLSX = async () => {
     try {
@@ -160,43 +176,19 @@ export function AdminCandidatesView({ onReviewAttempt }: AdminCandidatesViewProp
   };
 
   const loadCandidates = async () => {
-    try {
-      setLoading(true);
-      const data = await getAdminCandidates({
-        search: search.trim() || undefined,
-        college_id: selectedCollegeId || undefined,
-      });
-      setCandidates(data);
-    } catch {
-      alert('Failed to load candidate list.');
-    } finally {
-      setLoading(false);
+    const trimmed = search.trim();
+    if (trimmed !== submittedSearch) {
+      setSubmittedSearch(trimmed);
+    } else {
+      await refetch();
     }
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'candidates'] });
   };
-
-  const loadColleges = async () => {
-    try {
-      const data = await getAdminColleges();
-      setColleges(data);
-    } catch {
-      // ignore
-    }
-  };
-
-  useEffect(() => {
-    loadColleges();
-  }, []);
-
-  useEffect(() => {
-    loadCandidates();
-  }, [selectedCollegeId]);
 
   const handleToggleCandidate = async (candId: string) => {
     try {
-      const res = await toggleAdminCandidateStatus(candId);
-      setCandidates((prev) =>
-        prev.map((c) => (c.id === candId ? { ...c, is_active: res.is_active } : c))
-      );
+      await toggleAdminCandidateStatus(candId);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'candidates'] });
     } catch {
       alert('Failed to toggle candidate status.');
     }

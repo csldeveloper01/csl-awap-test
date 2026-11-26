@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   submitCode,
+  fetchEvaluationCases,
   recordProctoringEvent,
   type QuestionSnapshot,
+  type CodeSubmitPayload,
   type CodeSubmitResult,
 } from '../../api/assessment';
 import {
@@ -178,6 +180,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   const [customRunResult, setCustomRunResult] = useState<BrowserExecutionResult | null>(null);
   const [sampleSuiteResult, setSampleSuiteResult] = useState<SampleSuiteExecutionResult | null>(null);
   const [lastRunKind, setLastRunKind] = useState<'custom' | 'sample' | null>(null);
+  const inFlightSubmitRef = useRef<boolean>(false);
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submitResult, setSubmitResult] = useState<CodeSubmitResult | null>(null);
@@ -186,7 +189,10 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const rightPaneRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<{ layout: () => void } | null>(null);
+  const editorRef = useRef<{
+    layout: () => void;
+    getAction?: (id: string) => { run?: () => Promise<void> | void } | null;
+  } | null>(null);
   const runShortcutRef = useRef<() => void>(() => {});
   const submitShortcutRef = useRef<() => void>(() => {});
 
@@ -438,8 +444,9 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
     setIsRunning(false);
   };
 
-  // ── AUTHORITATIVE PERSISTENCE SUBMIT SOLUTION (BROWSER-FIRST WORKFLOW) ──
+  // ── BROWSER-FIRST EVALUATION + DJANGO SUBMISSION PERSISTENCE ──
   const handleSubmit = async () => {
+    if (inFlightSubmitRef.current || isSubmitting) return;
     if (!authoritativeQuestionId) {
       setSubmitError('Authoritative database question ID is missing on this snapshot. Refresh attempt state before submitting.');
       setConsoleOpen(true);
@@ -453,41 +460,133 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
       return;
     }
 
+    // Step 2: Save current draft immediately before locking UI
+    saveCodingDraft(attemptId, draftQuestionKey, language, sourceCode);
+
+    // Step 3: Lock UI against duplicate / racing submissions
+    inFlightSubmitRef.current = true;
     setIsSubmitting(true);
     setConsoleOpen(true);
     setActiveConsoleTab('submission');
     setSubmitError('');
 
     const canonical = normalizeCanonicalLanguage(language);
-    const totalRunMs =
+    const timeoutMs =
+      canonical === 'java'
+        ? Math.max(5000, Math.round(((details?.time_limit_seconds || 2.0) + 4.0) * 1000))
+        : Math.max(2500, Math.round(((details?.time_limit_seconds || 2.0) + 2.0) * 1000));
+    let questionMaxMarks = Math.max(1, Number(question.marks) || 10);
+    let questionComparisonMode = details?.comparison_mode || 'TRIMMED';
+    let configuredCases = details?.sample_test_cases || [];
+
+    // Step 4: Load full assessment test-case configuration (Sample + Additional + Hidden) on Submit
+    try {
+      const evalConfig = await fetchEvaluationCases(attemptId, authoritativeQuestionId);
+      if (evalConfig && Array.isArray(evalConfig.test_cases) && evalConfig.test_cases.length > 0) {
+        configuredCases = evalConfig.test_cases;
+      }
+      if (evalConfig?.comparison_mode) {
+        questionComparisonMode = evalConfig.comparison_mode;
+      }
+      if (evalConfig?.max_marks) {
+        questionMaxMarks = Math.max(1, Number(evalConfig.max_marks));
+      }
+    } catch {
+      // Fallback cleanly to snapshot sample cases if evaluation-cases fetch fails
+    }
+
+    let evalPayload: CodeSubmitPayload['evaluation_summary'] | undefined;
+    let testCaseResultsPayload: CodeSubmitPayload['test_case_results'] | undefined;
+    let engineVersion = sharedBrowserExecutionAdapter.getEngineVersion(language);
+    let evalStatusForMeta =
+      lastRunKind === 'sample' && sampleSuiteResult
+        ? sampleSuiteResult.overallStatus
+        : lastRunKind === 'custom' && customRunResult
+        ? customRunResult.status
+        : 'NOT_RUN_LOCALLY';
+    let evalDurationMs =
       lastRunKind === 'sample' && sampleSuiteResult
         ? sampleSuiteResult.results.reduce((acc, r) => acc + (r.executionTimeMs || 0), 0)
         : lastRunKind === 'custom' && customRunResult
         ? customRunResult.executionTimeMs || 0
         : 0;
 
-    const browserMeta = {
-      runtime_name: canonical === 'java' ? 'TeaVM Wasm (javac OpenJDK 25)' : canonical === 'python' ? 'Pyodide WebAssembly' : canonical,
-      runtime_version: canonical === 'java' ? 'teavm-wasm-0.14.1' : 'pyodide',
-      browser_status:
-        lastRunKind === 'sample' && sampleSuiteResult
-          ? sampleSuiteResult.overallStatus
-          : lastRunKind === 'custom' && customRunResult
-          ? customRunResult.status
-          : 'NOT_RUN_LOCALLY',
-      public_samples_attempted: sampleSuiteResult ? sampleSuiteResult.totalCount : 0,
-      public_samples_passed: sampleSuiteResult ? sampleSuiteResult.passedCount : 0,
-      execution_time_ms: Math.round(totalRunMs * 10) / 10,
-      is_authoritative: false,
-      is_verified: false,
-    };
-
     try {
+      // Steps 4–9: Execute configured test-case suite in browser worker & calculate bounded score
+      if (configuredCases.length > 0 && sharedBrowserExecutionAdapter.isBrowserExecutionSupported(language)) {
+        const pipelineRes = await sharedBrowserExecutionAdapter.evaluateTestCases(
+          {
+            sourceCode,
+            language,
+            timeoutMs,
+            onRuntimeStateChange: (st, detail) => {
+              setRuntimeState(st);
+              setRuntimeDetail(detail || '');
+            },
+          },
+          configuredCases.map((tc, idx) => ({
+            id: tc.id || String(idx + 1),
+            input_text: tc.input_text || '',
+            expected_output: tc.expected_output || '',
+            explanation: tc.explanation,
+            marks_weightage: tc.marks_weightage ?? 1.0,
+            is_public: tc.is_public,
+            visibility_scope: tc.visibility_scope,
+            comparison_mode: tc.comparison_mode,
+          })),
+          questionComparisonMode,
+          questionMaxMarks
+        );
+
+        engineVersion = pipelineRes.engineVersion;
+        evalStatusForMeta = pipelineRes.overallStatus;
+        evalDurationMs = pipelineRes.totalExecutionTimeMs;
+        evalPayload = {
+          total_test_cases: pipelineRes.totalCount,
+          passed_count: pipelineRes.passedCount,
+          failed_count: pipelineRes.failedCount,
+          score_awarded: pipelineRes.scoreAwarded,
+          max_marks: questionMaxMarks,
+          comparison_mode: pipelineRes.comparisonMode,
+          verdict: pipelineRes.overallStatus,
+          execution_time_ms: pipelineRes.totalExecutionTimeMs,
+          engine_version: pipelineRes.engineVersion,
+          compilation_errors: pipelineRes.compilationErrors || '',
+        };
+        testCaseResultsPayload = pipelineRes.results.map((r) => ({
+          test_case_id: r.testCaseId,
+          status: r.status,
+          passed: r.passed,
+          actual_output: r.actualOutput,
+          error_message: r.compilationErrors || r.runtimeErrors || r.stderr || '',
+          execution_time_ms: r.executionTimeMs,
+        }));
+      }
+
+      const browserMeta = {
+        runtime_name: canonical === 'java' ? 'TeaVM Wasm (javac OpenJDK 25)' : canonical === 'python' ? 'Pyodide WebAssembly' : canonical,
+        runtime_version: engineVersion,
+        browser_status: evalStatusForMeta,
+        public_samples_attempted: sampleSuiteResult ? sampleSuiteResult.totalCount : configuredCases.filter((c) => c.is_public || c.visibility_scope === 'SAMPLE').length,
+        public_samples_passed: sampleSuiteResult
+          ? sampleSuiteResult.passedCount
+          : testCaseResultsPayload
+          ? testCaseResultsPayload.filter((r, i) => (configuredCases[i]?.is_public || configuredCases[i]?.visibility_scope === 'SAMPLE') && r.passed).length
+          : 0,
+        execution_time_ms: Math.round(evalDurationMs * 10) / 10,
+        is_authoritative: false,
+        is_verified: false,
+      };
+
+      // Steps 10–13: Store validated source code, evaluation summary, and scores in Django
       const res = await submitCode({
         attempt_id: attemptId,
         question_id: authoritativeQuestionId,
         language: canonical,
         source_code: sourceCode,
+        engine_version: engineVersion,
+        evaluation_summary: evalPayload,
+        test_case_results: testCaseResultsPayload,
         browser_execution_metadata: browserMeta,
       });
       setSubmitResult(res);
@@ -499,6 +598,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
           'Failed to submit solution. Your code draft remains safely saved locally.'
       );
     } finally {
+      inFlightSubmitRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -525,6 +625,25 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
   const t = getIdeTokens(ideDark);
   const sampleCases = details?.sample_test_cases || [];
   const activeSampleIdx = Math.min(selectedSampleIdx, Math.max(0, sampleCases.length - 1));
+  const questionMarks = Math.max(1, Number(question.marks) || 1);
+  const difficultyLabel = (question.difficulty || '').trim().toUpperCase();
+  const difficultyPalette =
+    difficultyLabel === 'HARD'
+      ? { bg: t.dangerBg, text: t.dangerText, border: t.dangerBorder }
+      : difficultyLabel === 'MEDIUM'
+      ? { bg: t.warnBg, text: t.warnText, border: t.warnBorder }
+      : { bg: t.successBg, text: t.successText, border: t.successBorder };
+
+  const handleFormatCode = () => {
+    try {
+      const action = editorRef.current?.getAction?.('editor.action.formatDocument');
+      if (action && typeof action.run === 'function') {
+        void action.run();
+      }
+    } catch {
+      // Formatting unavailable for language/worker; keep code untouched
+    }
+  };
 
   const showProblemPane = maximizedPane !== 'editor';
   const showEditorPane = maximizedPane !== 'problem';
@@ -580,6 +699,55 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
             }}
           >
             <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                {question.category && (
+                  <span
+                    style={{
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      backgroundColor: t.accentBlueSoft,
+                      color: t.accentBlueText,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    {question.category}
+                  </span>
+                )}
+                {difficultyLabel && (
+                  <span
+                    data-testid="coding-difficulty-badge"
+                    style={{
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      backgroundColor: difficultyPalette.bg,
+                      color: difficultyPalette.text,
+                      border: `1px solid ${difficultyPalette.border}`,
+                      letterSpacing: '0.03em',
+                    }}
+                  >
+                    {difficultyLabel}
+                  </span>
+                )}
+                <span
+                  data-testid="coding-marks-badge"
+                  style={{
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '9999px',
+                    backgroundColor: t.warnBg,
+                    color: t.warnText,
+                    border: `1px solid ${t.warnBorder}`,
+                  }}
+                >
+                  {questionMarks} {questionMarks === 1 ? 'Mark' : 'Marks'}
+                </span>
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h2
                   style={{
@@ -1049,6 +1217,25 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
 
               <button
                 type="button"
+                data-testid="coding-format-btn"
+                onClick={handleFormatCode}
+                title="Format code"
+                style={{
+                  backgroundColor: t.bgSurface,
+                  border: `1px solid ${t.border}`,
+                  color: t.textSecondary,
+                  borderRadius: '7px',
+                  padding: '5px 10px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ✨ Format
+              </button>
+
+              <button
+                type="button"
                 onClick={handleResetBoilerplate}
                 title="Reset code to initial template"
                 style={{
@@ -1336,6 +1523,35 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {!consoleOpen && (
+                  <span
+                    data-testid="coding-console-collapsed-summary"
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color:
+                        submitResult
+                          ? t.successText
+                          : sampleSuiteResult
+                          ? sampleSuiteResult.overallStatus === 'ACCEPTED'
+                            ? t.successText
+                            : t.dangerText
+                          : t.textMuted,
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      backgroundColor: t.bgSurface,
+                      border: `1px solid ${t.border}`,
+                    }}
+                  >
+                    {submitResult
+                      ? `Submitted (${submitResult.review_status || submitResult.status})`
+                      : sampleSuiteResult
+                      ? `Sample Tests: ${sampleSuiteResult.passedCount}/${sampleSuiteResult.totalCount}`
+                      : customRunResult
+                      ? `Output: ${customRunResult.status}`
+                      : 'Terminal Collapsed'}
+                  </span>
+                )}
                 <span style={{ fontSize: '11px', color: t.textMuted }}>
                   Ctrl+Enter to Run
                 </span>
@@ -1354,7 +1570,7 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                     cursor: 'pointer',
                   }}
                 >
-                  {consoleOpen ? '▾ Hide' : '▴ Console'}
+                  {consoleOpen ? '▾ Collapse' : '▴ Expand'}
                 </button>
               </div>
             </div>
@@ -1840,11 +2056,44 @@ export const CodingPlaygroundPane: React.FC<CodingPlaygroundPaneProps> = ({
                           </div>
                           <div style={{ fontSize: '12px', marginTop: '6px', color: t.textSecondary }}>
                             Submission ID: <code style={{ fontWeight: 700 }}>{submitResult.submission_id}</code>
+                            {submitResult.submission_sequence ? ` • Attempt #${submitResult.submission_sequence}` : ''}
                             {submitResult.language ? ` • Language: ${formatLanguageLabel(submitResult.language)}` : ''}
+                            {submitResult.engine_version ? ` • Engine: ${submitResult.engine_version}` : ''}
                           </div>
+                          {submitResult.evaluation_summary && typeof submitResult.evaluation_summary.total_test_cases === 'number' && (
+                            <div
+                              data-testid="submission-eval-summary"
+                              style={{
+                                marginTop: '8px',
+                                padding: '8px 10px',
+                                borderRadius: '6px',
+                                backgroundColor: t.bgSurface,
+                                border: `1px solid ${t.border}`,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                                gap: '8px',
+                                fontSize: '12px',
+                                fontFamily: "'Inter', sans-serif",
+                              }}
+                            >
+                              <span>
+                                Test Cases Passed:{' '}
+                                <strong>
+                                  {submitResult.passed_test_cases ?? submitResult.evaluation_summary.passed_count}/
+                                  {submitResult.total_test_cases ?? submitResult.evaluation_summary.total_test_cases}
+                                </strong>{' '}
+                                • Verdict: <strong>{submitResult.verdict}</strong>
+                              </span>
+                              <span style={{ fontWeight: 700, color: t.accentBlueText }}>
+                                Score Recorded: {submitResult.score_awarded ?? 0} / {submitResult.max_marks ?? 10}
+                              </span>
+                            </div>
+                          )}
                           <div style={{ fontSize: '11.5px', marginTop: '4px', color: t.textMuted }}>
                             {submitResult.message ||
-                              'Your source code has been persisted and queued for official administrator evaluation. Preliminary browser runs do not assign an official score.'}
+                              'Your source code and browser evaluation summary have been persisted safely in Django.'}
                           </div>
                         </div>
 

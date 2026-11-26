@@ -7,8 +7,11 @@ import {
   getAdminProctoringSessionDetail,
   reviewAdminProctoringSession,
   fetchAdminProctoringEvidenceBlob,
+  getAdminProctoringIncidents,
+  reviewAdminProctoringIncident,
   type AdminProctoringSessionSummary,
   type AdminProctoringSessionDetail,
+  type AdminProctoringIncidentItem,
   type AdminAssessment,
 } from '../../api/admin';
 
@@ -152,6 +155,14 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [flaggedOnly, setFlaggedOnly] = useState<boolean>(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
+  const [sentinelTab, setSentinelTab] = useState<'sessions' | 'incidents'>('sessions');
+
+  // Incident Timeline State
+  const [incidents, setIncidents] = useState<AdminProctoringIncidentItem[]>([]);
+  const [incidentsLoading, setIncidentsLoading] = useState<boolean>(false);
+  const [incidentEventTypeFilter, setIncidentEventTypeFilter] = useState<string>('');
+  const [incidentSeverityFilter, setIncidentSeverityFilter] = useState<string>('');
+  const [incidentAutoSubmittedOnly, setIncidentAutoSubmittedOnly] = useState<boolean>(false);
 
   // Active Dossier Modal
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -193,6 +204,46 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  const loadIncidents = useCallback(async () => {
+    try {
+      setIncidentsLoading(true);
+      const data = await getAdminProctoringIncidents({
+        search: searchQuery || undefined,
+        assessment_id: selectedAssessment || undefined,
+        event_type: incidentEventTypeFilter || undefined,
+        severity: incidentSeverityFilter || undefined,
+        auto_submitted_only: incidentAutoSubmittedOnly || undefined,
+      });
+      setIncidents(data.incidents || []);
+    } catch (err) {
+      console.error('Failed to load proctoring incidents timeline:', err);
+    } finally {
+      setIncidentsLoading(false);
+    }
+  }, [searchQuery, selectedAssessment, incidentEventTypeFilter, incidentSeverityFilter, incidentAutoSubmittedOnly]);
+
+  useEffect(() => {
+    if (sentinelTab === 'incidents') {
+      loadIncidents();
+    }
+  }, [sentinelTab, loadIncidents]);
+
+  const handleReviewIncident = async (
+    eventId: number,
+    reviewStatus: 'ACKNOWLEDGED' | 'CLEARED' | 'CONFIRMED'
+  ) => {
+    try {
+      const res = await reviewAdminProctoringIncident(eventId, reviewStatus);
+      setIncidents((prev) =>
+        prev.map((item) =>
+          item.id === eventId ? { ...item, review_status: res.review_status as any } : item
+        )
+      );
+    } catch {
+      alert('Failed to update incident review status.');
+    }
+  };
 
   // Periodic Auto-refresh
   useEffect(() => {
@@ -354,6 +405,28 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
         <OdometerCard label="Review Required" value={metrics.flagged} subtitle="Awaiting auditor action" accent="amber" />
       </div>
 
+      {/* ─── VIEW SWITCHER: SESSIONS ROSTER vs INCIDENT TIMELINE ─── */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          type="button"
+          data-testid="sentinel-tab-sessions"
+          onClick={() => setSentinelTab('sessions')}
+          className={sentinelTab === 'sessions' ? 'csl-btn-primary' : 'csl-btn-secondary'}
+          style={{ padding: '7px 14px', fontSize: '12.5px' }}
+        >
+          Monitoring Sessions ({sessions.length})
+        </button>
+        <button
+          type="button"
+          data-testid="sentinel-tab-incidents"
+          onClick={() => setSentinelTab('incidents')}
+          className={sentinelTab === 'incidents' ? 'csl-btn-primary' : 'csl-btn-secondary'}
+          style={{ padding: '7px 14px', fontSize: '12.5px' }}
+        >
+          Incident Timeline {incidents.length > 0 ? `(${incidents.length})` : ''}
+        </button>
+      </div>
+
       {/* ─── 2. FILTERS & SEARCH BAR ─────────────────────────────────────── */}
       <div
         className="csl-card"
@@ -510,6 +583,7 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
       </div>
 
       {/* ─── 3. SESSIONS TABLE ───────────────────────────────────────────── */}
+      {sentinelTab === 'sessions' && (
       <div className="csl-card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading && (
           <div style={{ padding: '40px', textAlign: 'center', color: tokens.textMuted }}>
@@ -707,6 +781,146 @@ export const AdminSentinelView: React.FC<AdminSentinelViewProps> = ({
           </div>
         )}
       </div>
+      )}
+      {sentinelTab === 'incidents' && (
+        <div className="csl-card" data-testid="sentinel-incident-timeline" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: tokens.textPrimary }}>
+                Unified Proctoring & DevTools Incident Timeline
+              </h3>
+              <p style={{ margin: '2px 0 0', fontSize: '12px', color: tokens.textMuted }}>
+                Chronological stream of camera disconnects, face/multi-face alerts, DevTools strikes, tab switches, and automatic submissions.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <select
+                value={incidentEventTypeFilter}
+                onChange={(e) => setIncidentEventTypeFilter(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '12px' }}
+              >
+                <option value="">All Incident Types</option>
+                <option value="DEVTOOLS_DETECTED">DevTools Detected</option>
+                <option value="CAMERA_DISCONNECTED">Camera Disconnected</option>
+                <option value="FACE_NOT_DETECTED">Face Not Detected</option>
+                <option value="MULTIPLE_FACES_DETECTED">Multiple Faces</option>
+                <option value="SCREEN_SHARE_STOPPED">Screen Share Stopped</option>
+                <option value="TAB_SWITCHED">Tab Switched</option>
+                <option value="PROCTORING_AUTO_SUBMITTED">Auto-Submitted</option>
+              </select>
+              <select
+                value={incidentSeverityFilter}
+                onChange={(e) => setIncidentSeverityFilter(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: '8px', border: `1px solid ${tokens.border}`, backgroundColor: tokens.inputBg, color: tokens.textPrimary, fontSize: '12px' }}
+              >
+                <option value="">All Severities</option>
+                <option value="CRITICAL">CRITICAL</option>
+                <option value="WARNING">WARNING</option>
+                <option value="INFO">INFO</option>
+              </select>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: tokens.textSecondary, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={incidentAutoSubmittedOnly}
+                  onChange={(e) => setIncidentAutoSubmittedOnly(e.target.checked)}
+                />
+                Auto-Submitted Only
+              </label>
+              <button type="button" onClick={loadIncidents} className="csl-btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                Refresh Timeline
+              </button>
+            </div>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            {incidentsLoading ? (
+              <div style={{ padding: '24px', textAlign: 'center', color: tokens.textMuted, fontSize: '13px' }}>
+                Loading incident timeline...
+              </div>
+            ) : incidents.length === 0 ? (
+              <EmptyState title="No incidents match filters" description="Adjust filters or refresh timeline." />
+            ) : (
+              <table style={{ width: '100%', minWidth: '940px', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ backgroundColor: tokens.surfaceElevated, borderBottom: `1px solid ${tokens.border}`, color: tokens.textMuted, fontSize: '11px', textTransform: 'uppercase' }}>
+                    <th style={{ padding: '10px 12px' }}>Timestamp</th>
+                    <th style={{ padding: '10px 12px' }}>Candidate</th>
+                    <th style={{ padding: '10px 12px' }}>Assessment / Attempt</th>
+                    <th style={{ padding: '10px 12px' }}>Event & Count</th>
+                    <th style={{ padding: '10px 12px' }}>Severity</th>
+                    <th style={{ padding: '10px 12px' }}>Auto Action</th>
+                    <th style={{ padding: '10px 12px' }}>Review</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {incidents.map((inc) => (
+                    <tr key={inc.id} style={{ borderBottom: `1px solid ${tokens.borderLight}` }}>
+                      <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: tokens.textSecondary, fontFamily: tokens.monoFamily }}>
+                        {new Date(inc.created_at).toLocaleString()}
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{inc.candidate_name}</div>
+                        <div style={{ fontSize: '11px', color: tokens.textMuted }}>
+                          {inc.register_number} • {inc.candidate_email}
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 600, color: tokens.textPrimary }}>{inc.assessment_title}</div>
+                        <div style={{ fontSize: '11px', color: tokens.textMuted, fontFamily: tokens.monoFamily }}>
+                          Attempt: {inc.attempt_id?.slice(0, 8)}... ({inc.attempt_state})
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <span style={{ fontWeight: 700, color: tokens.textPrimary }}>{inc.event_type}</span>{' '}
+                        <StatusBadge status={`×${inc.occurrence_count}`} variant="neutral" size="sm" />
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <StatusBadge
+                          status={inc.severity}
+                          variant={inc.severity === 'CRITICAL' ? 'danger' : inc.severity === 'WARNING' ? 'warning' : 'neutral'}
+                          size="sm"
+                        />
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        {inc.auto_action_taken ? (
+                          <StatusBadge status={inc.auto_action_taken} variant="danger" size="sm" />
+                        ) : (
+                          <span style={{ color: tokens.textMuted }}>None</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <StatusBadge
+                            status={inc.review_status}
+                            variant={inc.review_status === 'CONFIRMED' ? 'danger' : inc.review_status === 'CLEARED' ? 'success' : 'neutral'}
+                            size="sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleReviewIncident(inc.id, 'CONFIRMED')}
+                            className="csl-btn-secondary"
+                            style={{ padding: '2px 7px', fontSize: '10.5px', color: tokens.dangerText }}
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleReviewIncident(inc.id, 'CLEARED')}
+                            className="csl-btn-secondary"
+                            style={{ padding: '2px 7px', fontSize: '10.5px', color: tokens.successText }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ─── 4. DETAILED DOSSIER INSPECTION MODAL ────────────────────────── */}
       {activeSessionId && (

@@ -1,5 +1,6 @@
 import uuid
 from datetime import timedelta
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
@@ -236,6 +237,31 @@ class AssessmentConfig(models.Model):
         default=True,
         help_text="Automatically submit and flag attempt when tab switch limit is exceeded",
     )
+    proctoring_auto_submit_enabled = models.BooleanField(
+        default=True,
+        help_text="Enable policy-based auto-submission when proctoring or DevTools limits are exceeded",
+    )
+    max_camera_violations = models.PositiveIntegerField(
+        default=3,
+        help_text="Permitted camera/face anomalies before auto-submission",
+    )
+    max_face_absence_seconds = models.PositiveIntegerField(
+        default=15,
+        help_text="Continuous face absence duration (seconds) treated as a camera violation",
+    )
+    multiple_face_threshold = models.PositiveIntegerField(
+        default=2,
+        help_text="Permitted multiple-face detections before auto-submission",
+    )
+    max_devtools_incidents = models.PositiveIntegerField(
+        default=1,
+        help_text="Permitted confirmed DevTools detections before auto-submission (1 = two-strike policy)",
+    )
+    screen_share_policy = models.CharField(
+        max_length=20,
+        choices=[("WARN", "Warn Only"), ("REQUIRED", "Require Screen Share"), ("AUTO_SUBMIT", "Auto-Submit on Stop")],
+        default="WARN",
+    )
 
     # Global XLSX Export Formatting Appearance Settings
     export_header_bg_color = models.CharField(
@@ -256,6 +282,10 @@ class AssessmentConfig(models.Model):
     enable_alt_row_styling = models.BooleanField(
         default=True,
         help_text="Apply alternating row shading in generated XLSX exports",
+    )
+    enable_advanced_animations = models.BooleanField(
+        default=True,
+        help_text="Enable circular theme ripple transitions, shimmer skeletons, and UI micro-animations",
     )
     export_score_thresholds = models.JSONField(
         default=default_export_score_thresholds,
@@ -441,6 +471,16 @@ class Assessment(models.Model):
     # Proctoring thresholds
     max_tab_switches_warning = models.PositiveIntegerField(default=2, help_text="Permitted tab switch warnings (3rd switch auto-submits)")
     auto_submit_on_tab_limit = models.BooleanField(default=True, help_text="Auto-submit attempt when tab limit is breached")
+    proctoring_auto_submit_enabled = models.BooleanField(default=True, help_text="Auto-submit attempt when camera/DevTools thresholds are exceeded")
+    max_camera_violations = models.PositiveIntegerField(default=3, help_text="Permitted camera/face anomalies before auto-submission")
+    max_face_absence_seconds = models.PositiveIntegerField(default=15, help_text="Continuous face absence duration in seconds treated as a violation")
+    multiple_face_threshold = models.PositiveIntegerField(default=2, help_text="Permitted multiple-face detections before auto-submission")
+    max_devtools_incidents = models.PositiveIntegerField(default=1, help_text="Permitted confirmed DevTools warnings before auto-submission (default 1 = 2nd strike auto-submits)")
+    screen_share_policy = models.CharField(
+        max_length=20,
+        choices=[("WARN", "Warn Only"), ("REQUIRED", "Require Screen Share"), ("AUTO_SUBMIT", "Auto-Submit on Stop")],
+        default="WARN",
+    )
 
     # Candidate eligibility (independent of colleges)
     eligible_candidates = models.ManyToManyField(
@@ -955,6 +995,7 @@ class AssessmentAttempt(models.Model):
         SUBMITTED = "SUBMITTED", "Submitted"
         TIMED_OUT = "TIMED_OUT", "Timed Out"
         FLAGGED_FOR_REVIEW = "FLAGGED_FOR_REVIEW", "Flagged for Review"
+        AUTO_SUBMITTED = "AUTO_SUBMITTED", "Auto-Submitted (Violation)"
         COMPLETED_PENDING_MANUAL_EVALUATION = "COMPLETED_PENDING_MANUAL_EVALUATION", "Completed (Pending Manual Evaluation)"
         ABANDONED = "ABANDONED", "Abandoned"
         REVOKED = "REVOKED", "Revoked"
@@ -963,6 +1004,7 @@ class AssessmentAttempt(models.Model):
         State.SUBMITTED,
         State.TIMED_OUT,
         State.FLAGGED_FOR_REVIEW,
+        State.AUTO_SUBMITTED,
         State.COMPLETED_PENDING_MANUAL_EVALUATION,
     ]
 
@@ -970,6 +1012,7 @@ class AssessmentAttempt(models.Model):
         State.SUBMITTED,
         State.TIMED_OUT,
         State.FLAGGED_FOR_REVIEW,
+        State.AUTO_SUBMITTED,
         State.COMPLETED_PENDING_MANUAL_EVALUATION,
         State.ABANDONED,
         State.REVOKED,
@@ -1011,6 +1054,8 @@ class AssessmentAttempt(models.Model):
     fullscreen_exit_count = models.PositiveIntegerField(default=0)
     is_flagged = models.BooleanField(default=False)
     flag_reason = models.TextField(blank=True, default="")
+    auto_submitted_reason = models.CharField(max_length=255, blank=True, default="")
+    auto_submitted_trigger_event = models.CharField(max_length=64, blank=True, default="")
     
     # Connection Health & Disconnection Grace Policy
     last_heartbeat = models.DateTimeField(null=True, blank=True)
@@ -1115,6 +1160,7 @@ class AssessmentAttempt(models.Model):
             State.SUBMITTED,
             State.TIMED_OUT,
             State.FLAGGED_FOR_REVIEW,
+            State.AUTO_SUBMITTED,
             State.COMPLETED_PENDING_MANUAL_EVALUATION,
             State.ABANDONED,
             State.REVOKED,
@@ -1122,6 +1168,7 @@ class AssessmentAttempt(models.Model):
         State.SUBMITTED: {State.REVOKED},
         State.TIMED_OUT: {State.REVOKED},
         State.FLAGGED_FOR_REVIEW: {State.SUBMITTED, State.REVOKED},
+        State.AUTO_SUBMITTED: {State.SUBMITTED, State.REVOKED},
         State.COMPLETED_PENDING_MANUAL_EVALUATION: {State.SUBMITTED, State.REVOKED},
         State.ABANDONED: set(),
         State.REVOKED: set(),
@@ -1562,8 +1609,13 @@ class AssessmentRegistration(models.Model):
 class ProgrammingQuestion(models.Model):
     """
     Extends a QuestionBank coding item with structured execution parameters,
-    boilerplate code, and execution constraints.
+    boilerplate code, comparison policy, and execution constraints.
     """
+    class ComparisonMode(models.TextChoices):
+        EXACT = "EXACT", "Exact Match"
+        TRIMMED = "TRIMMED", "Trimmed Output (Default)"
+        WHITESPACE_NORMALIZED = "WHITESPACE_NORMALIZED", "Whitespace-Normalized"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     question = models.OneToOneField(
         QuestionBank,
@@ -1578,6 +1630,12 @@ class ProgrammingQuestion(models.Model):
     boilerplate_code = models.JSONField(default=dict, blank=True, help_text="Boilerplate code dictionary keyed by language")
     time_limit_seconds = models.FloatField(default=2.0, help_text="Execution time limit per test case in seconds")
     memory_limit_mb = models.PositiveIntegerField(default=256, help_text="Memory limit in megabytes")
+    comparison_mode = models.CharField(
+        max_length=32,
+        choices=ComparisonMode.choices,
+        default=ComparisonMode.TRIMMED,
+        help_text="Default output comparison policy (TRIMMED normalizes line endings and strips trailing line whitespace)",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1590,16 +1648,35 @@ class ProgrammingQuestion(models.Model):
 
 class ProgrammingTestCase(models.Model):
     """
-    Test cases for automated grading of programming questions.
-    Public test cases are exposed to students as samples. Hidden test cases are confidential.
+    Test cases for browser-side coding execution & grading of programming questions.
+    Distinguishes SAMPLE (shown as examples), ADDITIONAL (extra visible/configured), and HIDDEN cases.
+    Note: Because execution runs in the candidate browser, test cases delivered to the browser are not
+    cryptographically hidden from inspection in client DevTools/network traces.
     """
+    class VisibilityScope(models.TextChoices):
+        SAMPLE = "SAMPLE", "Sample / Public"
+        ADDITIONAL = "ADDITIONAL", "Additional Test Case"
+        HIDDEN = "HIDDEN", "Hidden Grading"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     programming_question = models.ForeignKey(
         ProgrammingQuestion,
         on_delete=models.CASCADE,
         related_name="test_cases",
     )
-    is_public = models.BooleanField(default=False, db_index=True, help_text="Public sample test case visible to student vs hidden evaluation case")
+    is_public = models.BooleanField(default=False, db_index=True, help_text="Public sample test case visible to student vs non-sample case")
+    visibility_scope = models.CharField(
+        max_length=20,
+        choices=VisibilityScope.choices,
+        default=VisibilityScope.HIDDEN,
+        db_index=True,
+        help_text="Distinguishes SAMPLE, ADDITIONAL, and HIDDEN evaluation cases",
+    )
+    comparison_mode = models.CharField(
+        max_length=32,
+        default="INHERIT",
+        help_text="Output comparison mode override: INHERIT, EXACT, TRIMMED, or WHITESPACE_NORMALIZED",
+    )
     input_text = models.TextField(blank=True, default="", help_text="Standard input provided to student program")
     expected_output = models.TextField(help_text="Expected standard output to match")
     marks_weightage = models.FloatField(default=1.0, help_text="Score weightage for passing this test case")
@@ -1607,6 +1684,13 @@ class ProgrammingTestCase(models.Model):
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True, db_index=True, help_text="Active test case vs retired/archived case preserving evaluation history")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.visibility_scope == self.VisibilityScope.SAMPLE:
+            self.is_public = True
+        elif self.is_public and self.visibility_scope == self.VisibilityScope.HIDDEN:
+            self.visibility_scope = self.VisibilityScope.SAMPLE
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["order", "created_at"]
@@ -1635,6 +1719,7 @@ class CodeSubmission(models.Model):
     class ReviewStatus(models.TextChoices):
         PENDING_REVIEW = "PENDING_REVIEW", "Pending Review"
         UNDER_REVIEW = "UNDER_REVIEW", "Under Review"
+        AUTO_BROWSER_EVALUATED = "AUTO_BROWSER_EVALUATED", "Browser Evaluated (Unverified)"
         MANUALLY_ACCEPTED = "MANUALLY_ACCEPTED", "Manually Accepted"
         MANUALLY_REJECTED = "MANUALLY_REJECTED", "Manually Rejected"
         MANUALLY_SCORED = "MANUALLY_SCORED", "Manually Scored"
@@ -1657,6 +1742,16 @@ class CodeSubmission(models.Model):
     )
     language = models.CharField(max_length=50, help_text="e.g. python, java")
     source_code = models.TextField()
+    submission_sequence = models.PositiveIntegerField(
+        default=1,
+        help_text="Monotonic sequence number for this attempt and question",
+    )
+    engine_version = models.CharField(
+        max_length=80,
+        blank=True,
+        default="",
+        help_text="Browser WASM execution/evaluation engine version identifier",
+    )
     verdict = models.CharField(max_length=30, choices=Verdict.choices, default=Verdict.PENDING, db_index=True)
     review_status = models.CharField(
         max_length=30,
@@ -1671,6 +1766,11 @@ class CodeSubmission(models.Model):
     execution_time_ms = models.FloatField(default=0.0)
     memory_used_kb = models.PositiveIntegerField(default=0)
     compile_output = models.TextField(blank=True, default="")
+    evaluation_summary = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Structured browser test evaluation summary (non-authoritative; client-side browsers can be manipulated)",
+    )
     browser_execution_metadata = models.JSONField(
         default=dict,
         blank=True,
@@ -1903,6 +2003,7 @@ class ProctoringSession(models.Model):
             ProctoringEvent.EventType.FULLSCREEN_EXITED: 10,
             ProctoringEvent.EventType.CLIPBOARD_PASTE_ATTEMPT: 15,
             ProctoringEvent.EventType.PAGE_UNLOAD_ATTEMPT: 25,
+            ProctoringEvent.EventType.DEVTOOLS_DETECTED: 35,
         }
         breakdown = {}
         total = 0
@@ -1995,14 +2096,22 @@ class ProctoringEvent(models.Model):
         PAGE_UNLOAD_ATTEMPT = "PAGE_UNLOAD_ATTEMPT", "Page Unload Attempt"
         # Coding Playground
         CLIPBOARD_PASTE_ATTEMPT = "CLIPBOARD_PASTE_ATTEMPT", "Clipboard Paste Blocked"
+        DEVTOOLS_DETECTED = "DEVTOOLS_DETECTED", "DevTools / Inspection Detected"
         # Lifecycle
         SESSION_INITIALIZED = "SESSION_INITIALIZED", "Session Initialized"
         SESSION_TERMINATED = "SESSION_TERMINATED", "Session Terminated"
+        PROCTORING_AUTO_SUBMITTED = "PROCTORING_AUTO_SUBMITTED", "Assessment Auto-Submitted"
 
     class Severity(models.TextChoices):
         INFO = "INFO", "Informational"
         WARNING = "WARNING", "Warning"
         CRITICAL = "CRITICAL", "Critical / High Risk"
+
+    class ReviewStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending Review"
+        ACKNOWLEDGED = "ACKNOWLEDGED", "Acknowledged"
+        CLEARED = "CLEARED", "Cleared"
+        CONFIRMED = "CONFIRMED", "Confirmed Violation"
 
     id = models.BigAutoField(primary_key=True)
     proctoring_session = models.ForeignKey(
@@ -2030,6 +2139,21 @@ class ProctoringEvent(models.Model):
         help_text="Client deduplication ID",
     )
     metadata = models.JSONField(default=dict, blank=True)
+    auto_action_taken = models.CharField(max_length=40, blank=True, default="")
+    review_status = models.CharField(
+        max_length=24,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+        db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_proctoring_events",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

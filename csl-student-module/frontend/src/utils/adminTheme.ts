@@ -1,14 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
+import { flushSync } from 'react-dom';
 
 export type AdminThemeMode = 'light' | 'dark';
 
 const STORAGE_KEY = 'csl_admin_theme';
 const THEME_EVENT = 'csl-admin-theme-change';
+const ANIMATIONS_STORAGE_KEY = 'csl_advanced_animations';
+const ANIMATIONS_EVENT = 'csl-advanced-animations-change';
+export const THEME_RIPPLE_DURATION_MS = 600;
+
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+export function computeRippleMaxRadius(
+  originX: number,
+  originY: number,
+  viewportWidth: number,
+  viewportHeight: number
+): number {
+  const maxX = Math.max(originX, Math.max(0, viewportWidth - originX));
+  const maxY = Math.max(originY, Math.max(0, viewportHeight - originY));
+  return Math.ceil(Math.hypot(maxX, maxY));
+}
 
 function applyThemeToRoot(mode: AdminThemeMode): void {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.cslTheme = mode;
   document.documentElement.classList.toggle('dark', mode === 'dark');
+}
+
+function applyAnimationsToRoot(enabled: boolean): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.cslAnimations = enabled ? 'enabled' : 'disabled';
 }
 
 export function getStoredAdminTheme(): AdminThemeMode {
@@ -23,8 +50,77 @@ export function setStoredAdminTheme(mode: AdminThemeMode): void {
   window.dispatchEvent(new CustomEvent<AdminThemeMode>(THEME_EVENT, { detail: mode }));
 }
 
+export function getStoredAdvancedAnimations(): boolean {
+  if (typeof window === 'undefined') return true;
+  const raw = localStorage.getItem(ANIMATIONS_STORAGE_KEY);
+  return raw === null ? true : raw === 'true';
+}
+
+export function setStoredAdvancedAnimations(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(ANIMATIONS_STORAGE_KEY, enabled ? 'true' : 'false');
+  applyAnimationsToRoot(enabled);
+  window.dispatchEvent(new CustomEvent<boolean>(ANIMATIONS_EVENT, { detail: enabled }));
+}
+
+function playFallbackClipRipple(originX: number, originY: number, radius: number, nextBg: string): void {
+  if (typeof document === 'undefined' || !document.body) return;
+  const overlay = document.createElement('div');
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.style.position = 'fixed';
+  overlay.style.inset = '0';
+  overlay.style.pointerEvents = 'none';
+  overlay.style.zIndex = '99999';
+  overlay.style.background = `radial-gradient(circle at ${originX}px ${originY}px, ${nextBg}38 0%, ${nextBg}18 48%, transparent 72%)`;
+  overlay.style.clipPath = `circle(0px at ${originX}px ${originY}px)`;
+  overlay.style.transition = `clip-path ${THEME_RIPPLE_DURATION_MS}ms cubic-bezier(0.22, 1, 0.36, 1), opacity ${THEME_RIPPLE_DURATION_MS}ms ease-out`;
+  overlay.style.opacity = '0.9';
+  document.body.appendChild(overlay);
+  window.requestAnimationFrame(() => {
+    overlay.style.clipPath = `circle(${radius}px at ${originX}px ${originY}px)`;
+    overlay.style.opacity = '0';
+  });
+  window.setTimeout(() => {
+    overlay.remove();
+  }, THEME_RIPPLE_DURATION_MS + 60);
+}
+
+export function useAdvancedAnimations() {
+  const [enabled, setEnabled] = useState<boolean>(() => getStoredAdvancedAnimations());
+
+  useEffect(() => {
+    applyAnimationsToRoot(enabled);
+  }, [enabled]);
+
+  useEffect(() => {
+    const onAnimChange = (e: Event) => {
+      const custom = e as CustomEvent<boolean>;
+      if (typeof custom.detail === 'boolean') {
+        setEnabled(custom.detail);
+      }
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ANIMATIONS_STORAGE_KEY) {
+        setEnabled(e.newValue === null ? true : e.newValue === 'true');
+      }
+    };
+    window.addEventListener(ANIMATIONS_EVENT, onAnimChange);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(ANIMATIONS_EVENT, onAnimChange);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  return {
+    advancedAnimationsEnabled: enabled,
+    setAdvancedAnimations: setStoredAdvancedAnimations,
+  };
+}
+
 export function useAdminTheme() {
   const [theme, setTheme] = useState<AdminThemeMode>(() => getStoredAdminTheme());
+  const { advancedAnimationsEnabled, setAdvancedAnimations } = useAdvancedAnimations();
 
   useEffect(() => {
     applyThemeToRoot(theme);
@@ -50,14 +146,53 @@ export function useAdminTheme() {
     };
   }, []);
 
-  const toggleTheme = () => {
+  const toggleTheme = (event?: MouseEvent<HTMLElement>) => {
     const next: AdminThemeMode = theme === 'dark' ? 'light' : 'dark';
+    const shouldAnimate = advancedAnimationsEnabled && !prefersReducedMotion();
+
+    if (!shouldAnimate || typeof window === 'undefined' || typeof document === 'undefined') {
+      setStoredAdminTheme(next);
+      return;
+    }
+
+    const rect = event?.currentTarget?.getBoundingClientRect?.();
+    const originX = rect ? Math.round(rect.left + rect.width / 2) : Math.max(0, window.innerWidth - 28);
+    const originY = rect ? Math.round(rect.top + rect.height / 2) : 28;
+    const width = Math.max(window.innerWidth, document.documentElement?.clientWidth || 0);
+    const height = Math.max(window.innerHeight, document.documentElement?.clientHeight || 0);
+    const radius = computeRippleMaxRadius(originX, originY, width, height);
+
+    document.documentElement.style.setProperty('--csl-ripple-x', `${originX}px`);
+    document.documentElement.style.setProperty('--csl-ripple-y', `${originY}px`);
+    document.documentElement.style.setProperty('--csl-ripple-r', `${radius}px`);
+
+    const docWithTransition = document as Document & {
+      startViewTransition?: (cb: () => void) => { finished?: Promise<void> };
+    };
+
+    if (typeof docWithTransition.startViewTransition === 'function') {
+      try {
+        docWithTransition.startViewTransition(() => {
+          flushSync(() => {
+            setStoredAdminTheme(next);
+          });
+        });
+        return;
+      } catch {
+        // Fallback to manual ripple below if ViewTransition throws
+      }
+    }
+
+    const nextBg = next === 'dark' ? '#101318' : '#F5F7FA';
     setStoredAdminTheme(next);
+    playFallbackClipRipple(originX, originY, radius, nextBg);
   };
 
   return {
     theme,
     isDark: theme === 'dark',
+    advancedAnimationsEnabled,
+    setAdvancedAnimations,
     setTheme: setStoredAdminTheme,
     toggleTheme,
     tokens: getAdminThemeTokens(theme === 'dark'),
